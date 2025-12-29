@@ -1,8 +1,20 @@
 # Clip Finder
 
-🔍 AI-powered YouTube video search. Index any channel, playlist, or video and search through transcripts with natural language queries. Find the exact moment you're looking for.
+Index your favorite YouTube channels, playlists, or individual videos and instantly find the exact quote or conversation you're looking for.
 
-## ✨ Features
+Ever forget where your favorite podcaster dropped that quote you wanted to share with a friend? Can't remember which episode had that perfect explanation? Trying to find a specific scene in a movie that's on YouTube?
+
+Clip Finder solves this.
+
+🎙️ Podcasts — Index entire shows and search for topics, quotes, or guests
+🎓 Educational Content — Index coding tutorials and find exact clips on the topics you need help with
+🎬 Entertainment — Find that scene, that line, that moment
+📺 Any YouTube Content — Channels, playlists, or single videos
+
+
+
+
+## Features
 
 - **Semantic Search** — Search video content using natural language, not just keywords
 - **Index Anything** — Channels, playlists, or individual videos
@@ -15,7 +27,7 @@
 - **Local Storage** — All data stored locally in ChromaDB
 - **BYOK** — Bring your own Gemini API key
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Python 3.12+
