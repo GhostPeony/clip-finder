@@ -1,4 +1,4 @@
-# Clip Finder
+## Clip Finder
 
 Index your favorite YouTube channels, playlists, or individual videos and instantly find the exact quote or conversation you're looking for.
 
@@ -12,6 +12,7 @@ Clip Finder solves this.
 📺 Any YouTube Content — Channels, playlists, or single videos
 
 
+https://github.com/user-attachments/assets/a6e21dd1-af9a-433c-9ee8-d6dabdccf92c
 
 
 ## Features
