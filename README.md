@@ -1,5 +1,8 @@
 ## Clip Finder
 
+![clipfinder1](https://github.com/user-attachments/assets/fbdfd867-8975-46b4-af52-c2da019870db)
+
+
 Index your favorite YouTube channels, playlists, or individual videos and instantly find the exact quote or conversation you're looking for.
 
 Ever forget where your favorite podcaster dropped that quote you wanted to share with a friend? Can't remember which episode had that perfect explanation? Trying to find a specific scene in a movie that's on YouTube?
