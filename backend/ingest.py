@@ -1,0 +1,667 @@
+"""
+ingest.py - Smart YouTube Channel Indexer
+
+Uses scrapetube to discover videos and LangChain to create searchable embeddings.
+Yields progress messages for SSE streaming to the frontend.
+
+Key Features:
+- No YouTube API key required (uses scrapetube)
+- 60-second chunks with timestamps for pinpoint accuracy
+- Smart skip: Only indexes new videos on re-runs
+- Uses text-embedding-004 (recommended, older models deprecated Oct 2025)
+
+Updated: 2025-12-28
+LangChain Google Package: langchain-google-genai>=4.0.0 (consolidated SDK)
+"""
+
+import os
+import time
+from typing import Generator, Optional
+from dotenv import load_dotenv
+
+import scrapetube
+from youtube_transcript_api import YouTubeTranscriptApi
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_chroma import Chroma
+from langchain_core.documents import Document
+
+# Load environment variables from parent directory (where .env.local lives)
+env_path = os.path.join(os.path.dirname(__file__), '..', '.env.local')
+load_dotenv(env_path)
+
+# Configuration
+DB_PATH = "./channel_chroma_db"
+CHUNK_SIZE_SECONDS = 60  # 60s chunks for pinpoint accuracy
+EMBEDDING_MODEL = "models/text-embedding-004"  # Recommended (others deprecated Oct 2025)
+
+# Cache for singleton instances (avoid recreating API clients)
+_embeddings_instance = None
+_vectorstore_instance = None
+_current_api_key = None  # Track which API key is being used
+
+
+def get_embeddings(api_key: str = None) -> GoogleGenerativeAIEmbeddings:
+    """Get embeddings instance with API key from parameter or environment."""
+    global _embeddings_instance, _current_api_key
+
+    # Determine which API key to use
+    key_to_use = api_key or os.getenv("GEMINI_API_KEY")
+    if not key_to_use or key_to_use == "PLACEHOLDER_API_KEY":
+        raise ValueError("No API key provided. Set GEMINI_API_KEY in .env.local or provide via header.")
+
+    # If we have a cached instance with the same key, return it
+    if _embeddings_instance is not None and _current_api_key == key_to_use:
+        return _embeddings_instance
+
+    # Create new instance with the provided key
+    _current_api_key = key_to_use
+    _embeddings_instance = GoogleGenerativeAIEmbeddings(
+        model=EMBEDDING_MODEL,
+        google_api_key=key_to_use
+    )
+    return _embeddings_instance
+
+
+def get_vectorstore() -> Chroma:
+    """Get cached ChromaDB vector store."""
+    global _vectorstore_instance
+
+    if _vectorstore_instance is not None:
+        return _vectorstore_instance
+
+    _vectorstore_instance = Chroma(
+        persist_directory=DB_PATH,
+        embedding_function=get_embeddings(),
+        collection_name="video_knowledge"
+    )
+    return _vectorstore_instance
+
+
+def get_indexed_video_ids() -> set:
+    """Get set of video IDs already in the database."""
+    try:
+        vectorstore = get_vectorstore()
+        existing = vectorstore.get()
+        indexed_ids = set()
+        if existing and existing.get('metadatas'):
+            for meta in existing['metadatas']:
+                if meta and 'video_id' in meta:
+                    indexed_ids.add(meta['video_id'])
+        return indexed_ids
+    except Exception:
+        return set()
+
+
+def get_library() -> dict:
+    """
+    Get all indexed videos organized by channel.
+
+    Returns:
+        Dict with channels list, total videos, and total clips
+    """
+    try:
+        vectorstore = get_vectorstore()
+        existing = vectorstore.get()
+
+        if not existing or not existing.get('metadatas'):
+            return {"channels": [], "totalVideos": 0, "totalClips": 0}
+
+        # Group clips by channel and video
+        channels_data: dict = {}
+
+        for meta in existing['metadatas']:
+            if not meta:
+                continue
+
+            channel_name = meta.get('channel_name', 'Unknown Channel')
+            video_id = meta.get('video_id', '')
+
+            if not video_id:
+                continue
+
+            # Initialize channel if needed
+            if channel_name not in channels_data:
+                channels_data[channel_name] = {'videos': {}}
+
+            # Initialize video if needed
+            if video_id not in channels_data[channel_name]['videos']:
+                channels_data[channel_name]['videos'][video_id] = {
+                    'videoId': video_id,
+                    'title': meta.get('title', f'Video {video_id}'),
+                    'thumbnailUrl': meta.get('thumbnail_url', f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg'),
+                    'clipCount': 0
+                }
+
+            # Increment clip count
+            channels_data[channel_name]['videos'][video_id]['clipCount'] += 1
+
+        # Convert to list format
+        channels_list = []
+        total_videos = 0
+        total_clips = len(existing['metadatas'])
+
+        for channel_name, data in sorted(channels_data.items()):
+            videos = list(data['videos'].values())
+            total_videos += len(videos)
+            channels_list.append({
+                'name': channel_name,
+                'videoCount': len(videos),
+                'videos': videos
+            })
+
+        return {
+            "channels": channels_list,
+            "totalVideos": total_videos,
+            "totalClips": total_clips
+        }
+
+    except Exception as e:
+        print(f"Error getting library: {e}")
+        return {"channels": [], "totalVideos": 0, "totalClips": 0}
+
+
+def delete_video(video_id: str) -> dict:
+    """
+    Delete a video and all its clips from the database.
+
+    Args:
+        video_id: YouTube video ID to delete
+
+    Returns:
+        Dict with success status and deleted clip count
+    """
+    global _vectorstore_instance
+
+    try:
+        vectorstore = get_vectorstore()
+        existing = vectorstore.get()
+
+        if not existing or not existing.get('ids'):
+            return {"success": False, "error": "Database is empty", "deletedClips": 0}
+
+        # Find all document IDs that belong to this video
+        ids_to_delete = []
+        for i, meta in enumerate(existing['metadatas']):
+            if meta and meta.get('video_id') == video_id:
+                ids_to_delete.append(existing['ids'][i])
+
+        if not ids_to_delete:
+            return {"success": False, "error": "Video not found", "deletedClips": 0}
+
+        # Delete from ChromaDB
+        vectorstore.delete(ids=ids_to_delete)
+
+        # Clear the cached vectorstore to force refresh
+        _vectorstore_instance = None
+
+        return {"success": True, "deletedClips": len(ids_to_delete)}
+
+    except Exception as e:
+        return {"success": False, "error": str(e), "deletedClips": 0}
+
+
+def extract_video_title(video: dict) -> str:
+    """Safely extract video title from scrapetube response."""
+    try:
+        # scrapetube returns nested structure for title
+        title_obj = video.get('title', {})
+        if isinstance(title_obj, dict):
+            runs = title_obj.get('runs', [])
+            if runs and len(runs) > 0:
+                return runs[0].get('text', 'Unknown Title')
+        return str(title_obj) if title_obj else 'Unknown Title'
+    except Exception:
+        return 'Unknown Title'
+
+
+def extract_channel_name(video: dict) -> str:
+    """Safely extract channel name from scrapetube response."""
+    try:
+        # Try ownerText (channel/playlist responses)
+        owner = video.get('ownerText', {})
+        if isinstance(owner, dict):
+            runs = owner.get('runs', [])
+            if runs and len(runs) > 0:
+                return runs[0].get('text', 'Unknown Channel')
+
+        # Try longBylineText (some video responses)
+        byline = video.get('longBylineText', {})
+        if isinstance(byline, dict):
+            runs = byline.get('runs', [])
+            if runs and len(runs) > 0:
+                return runs[0].get('text', 'Unknown Channel')
+
+        # Try shortBylineText
+        short_byline = video.get('shortBylineText', {})
+        if isinstance(short_byline, dict):
+            runs = short_byline.get('runs', [])
+            if runs and len(runs) > 0:
+                return runs[0].get('text', 'Unknown Channel')
+
+        return 'Unknown Channel'
+    except Exception:
+        return 'Unknown Channel'
+
+
+def fetch_video_metadata(video_id: str) -> tuple[str, str]:
+    """
+    Fetch video title and channel name using YouTube oEmbed API.
+    This is more reliable for single videos than scrapetube.get_video().
+
+    Returns:
+        Tuple of (title, channel_name)
+    """
+    import urllib.request
+    import json
+
+    try:
+        url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            title = data.get('title', f'Video {video_id}')
+            channel = data.get('author_name', 'Unknown Channel')
+            return (title, channel)
+    except Exception:
+        return (f'Video {video_id}', 'Unknown Channel')
+
+
+def get_transcript_chunks(video_id: str) -> list[dict]:
+    """
+    Get transcript and split into ~60 second chunks with timestamps.
+
+    Returns list of dicts with: text, start_seconds, end_seconds
+    """
+    chunks = []
+
+    try:
+        # Get transcript using youtube-transcript-api v1.x
+        # API changed: now requires instantiation and uses .fetch()
+        api = YouTubeTranscriptApi()
+        fetched = api.fetch(video_id)
+
+        # Convert FetchedTranscript to list of dicts
+        transcript = [
+            {'text': snippet.text, 'start': snippet.start, 'duration': snippet.duration}
+            for snippet in fetched
+        ]
+
+        if not transcript:
+            return []
+
+        # Group transcript entries into ~60 second chunks
+        current_chunk_text = ""
+        current_chunk_start = 0
+        current_duration = 0
+
+        for entry in transcript:
+            text = entry.get('text', '')
+            start = entry.get('start', 0)
+            duration = entry.get('duration', 0)
+
+            # Start new chunk if this is the first entry
+            if not current_chunk_text:
+                current_chunk_start = start
+
+            current_chunk_text += " " + text
+            current_duration += duration
+
+            # If chunk is ~60 seconds, save it and start new one
+            if current_duration >= CHUNK_SIZE_SECONDS:
+                chunks.append({
+                    'text': current_chunk_text.strip(),
+                    'start_seconds': int(current_chunk_start),
+                    'end_seconds': int(start + duration)
+                })
+
+                # Reset for next chunk (with small overlap for context)
+                current_chunk_text = ""
+                current_duration = 0
+
+        # Don't forget the last chunk
+        if current_chunk_text.strip():
+            chunks.append({
+                'text': current_chunk_text.strip(),
+                'start_seconds': int(current_chunk_start),
+                'end_seconds': int(transcript[-1].get('start', 0) + transcript[-1].get('duration', 0))
+            })
+
+    except Exception as e:
+        # Common: No transcript available, video is live, or region locked
+        pass
+
+    return chunks
+
+
+def detect_url_type(url: str) -> tuple[str, Optional[str]]:
+    """
+    Detect the type of YouTube URL and extract relevant ID.
+
+    Returns:
+        Tuple of (url_type, id) where url_type is 'channel', 'playlist', 'video', or 'unknown'
+    """
+    import re
+
+    # Playlist URL patterns
+    playlist_patterns = [
+        r'[?&]list=([a-zA-Z0-9_-]+)',
+        r'youtube\.com/playlist\?list=([a-zA-Z0-9_-]+)',
+    ]
+
+    # Video URL patterns (check these BEFORE playlist since playlist URLs contain video IDs too)
+    video_patterns = [
+        r'[?&]v=([a-zA-Z0-9_-]{11})',  # Standard watch URL: ?v= or &v=
+        r'youtu\.be/([a-zA-Z0-9_-]{11})',  # Short URL
+        r'youtube\.com/embed/([a-zA-Z0-9_-]{11})',  # Embed URL
+        r'youtube\.com/v/([a-zA-Z0-9_-]{11})',  # Old embed URL
+        r'youtube\.com/shorts/([a-zA-Z0-9_-]{11})',  # Shorts URL
+    ]
+
+    # Channel URL patterns
+    channel_patterns = [
+        r'youtube\.com/@([a-zA-Z0-9_-]+)',
+        r'youtube\.com/channel/([a-zA-Z0-9_-]+)',
+        r'youtube\.com/c/([a-zA-Z0-9_-]+)',
+        r'youtube\.com/user/([a-zA-Z0-9_-]+)',
+    ]
+
+    # Check for playlist first (since a video URL might also contain a playlist param)
+    for pattern in playlist_patterns:
+        match = re.search(pattern, url)
+        if match:
+            return ('playlist', match.group(1))
+
+    # Check for video
+    for pattern in video_patterns:
+        match = re.search(pattern, url)
+        if match:
+            return ('video', match.group(1))
+
+    # Check for channel
+    for pattern in channel_patterns:
+        match = re.search(pattern, url)
+        if match:
+            return ('channel', url)  # Return full URL for channel
+
+    return ('unknown', None)
+
+
+def ingest_single_video(video_id: str) -> Generator[str, None, None]:
+    """
+    Index a single YouTube video.
+
+    Args:
+        video_id: YouTube video ID
+
+    Yields:
+        Progress messages as strings
+    """
+    yield f"🎬 Processing single video: {video_id}"
+
+    # Check if already indexed
+    indexed_ids = get_indexed_video_ids()
+    if video_id in indexed_ids:
+        yield "✅ This video is already indexed!"
+        return
+
+    # Fetch video metadata using oEmbed API (more reliable for single videos)
+    yield "📡 Fetching video info..."
+    video_title, channel_name = fetch_video_metadata(video_id)
+    yield f"📺 {video_title} by {channel_name}"
+
+    # Get transcript chunks
+    yield "📜 Fetching transcript..."
+    chunks = get_transcript_chunks(video_id)
+
+    if not chunks:
+        yield "❌ No transcript available for this video"
+        return
+
+    yield f"📊 Found {len(chunks)} transcript chunks"
+
+    vectorstore = get_vectorstore()
+
+    documents = []
+    for chunk in chunks:
+        doc = Document(
+            page_content=chunk['text'],
+            metadata={
+                'video_id': video_id,
+                'title': video_title,
+                'channel_name': channel_name,
+                'start_seconds': chunk['start_seconds'],
+                'end_seconds': chunk['end_seconds'],
+                'source_url': f"https://www.youtube.com/watch?v={video_id}",
+                'thumbnail_url': f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
+            }
+        )
+        documents.append(doc)
+
+    try:
+        vectorstore.add_documents(documents)
+        yield f"✅ Indexed {len(chunks)} clips from video"
+    except Exception as e:
+        yield f"❌ Error indexing: {str(e)}"
+
+    yield "🎉 Complete!"
+
+
+def ingest_playlist(playlist_id: str) -> Generator[str, None, None]:
+    """
+    Index all videos from a YouTube playlist.
+
+    Args:
+        playlist_id: YouTube playlist ID
+
+    Yields:
+        Progress messages as strings
+    """
+    yield f"📋 Scanning playlist: {playlist_id}"
+
+    try:
+        videos = list(scrapetube.get_playlist(playlist_id))
+    except Exception as e:
+        yield f"❌ Error scanning playlist: {str(e)}"
+        return
+
+    total_videos = len(videos)
+    yield f"📊 Found {total_videos} videos in playlist"
+
+    # Get already indexed video IDs to skip
+    indexed_ids = get_indexed_video_ids()
+    yield f"📚 Database contains {len(indexed_ids)} previously indexed videos"
+
+    # Filter to only new videos
+    new_videos = [v for v in videos if v.get('videoId') not in indexed_ids]
+
+    if not new_videos:
+        yield "✅ All playlist videos already indexed!"
+        return
+
+    yield f"🆕 {len(new_videos)} new videos to index"
+
+    vectorstore = get_vectorstore()
+    indexed_count = 0
+    skipped_count = 0
+
+    for i, video in enumerate(new_videos, 1):
+        video_id = video.get('videoId')
+        title = extract_video_title(video)
+        channel_name = extract_channel_name(video)
+
+        yield f"📥 [{i}/{len(new_videos)}] Processing: {title[:50]}..."
+
+        chunks = get_transcript_chunks(video_id)
+
+        if not chunks:
+            yield f"   ⏭️ Skipped (no transcript available)"
+            skipped_count += 1
+            continue
+
+        documents = []
+        for chunk in chunks:
+            doc = Document(
+                page_content=chunk['text'],
+                metadata={
+                    'video_id': video_id,
+                    'title': title,
+                    'channel_name': channel_name,
+                    'start_seconds': chunk['start_seconds'],
+                    'end_seconds': chunk['end_seconds'],
+                    'source_url': f"https://www.youtube.com/watch?v={video_id}",
+                    'thumbnail_url': f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
+                }
+            )
+            documents.append(doc)
+
+        try:
+            vectorstore.add_documents(documents)
+            indexed_count += 1
+            yield f"   ✅ Indexed {len(chunks)} clips"
+        except Exception as e:
+            yield f"   ❌ Error indexing: {str(e)}"
+            skipped_count += 1
+
+        time.sleep(0.5)
+
+    yield f"🎉 Complete! Indexed {indexed_count} videos ({skipped_count} skipped)"
+
+
+def ingest_channel(channel_url: str) -> Generator[str, None, None]:
+    """
+    Index all videos from a YouTube channel.
+
+    Yields progress messages for SSE streaming.
+    Uses smart skip to avoid re-indexing existing videos.
+
+    Args:
+        channel_url: YouTube channel URL (e.g., https://www.youtube.com/@ChannelName)
+
+    Yields:
+        Progress messages as strings
+    """
+    yield "🔍 Scanning channel for videos..."
+
+    try:
+        # Get all videos from channel using scrapetube (no API key needed)
+        videos = list(scrapetube.get_channel(channel_url=channel_url))
+    except Exception as e:
+        yield f"❌ Error scanning channel: {str(e)}"
+        return
+
+    total_videos = len(videos)
+    yield f"📊 Found {total_videos} videos in channel"
+
+    # Get already indexed video IDs to skip
+    indexed_ids = get_indexed_video_ids()
+    yield f"📚 Database contains {len(indexed_ids)} previously indexed videos"
+
+    # Filter to only new videos
+    new_videos = [v for v in videos if v.get('videoId') not in indexed_ids]
+
+    if not new_videos:
+        yield "✅ All videos already indexed! Nothing new to process."
+        return
+
+    yield f"🆕 {len(new_videos)} new videos to index"
+
+    # Get vectorstore for adding documents
+    vectorstore = get_vectorstore()
+
+    indexed_count = 0
+    skipped_count = 0
+
+    for i, video in enumerate(new_videos, 1):
+        video_id = video.get('videoId')
+        title = extract_video_title(video)
+        channel_name = extract_channel_name(video)
+
+        yield f"📥 [{i}/{len(new_videos)}] Processing: {title[:50]}..."
+
+        # Get transcript chunks
+        chunks = get_transcript_chunks(video_id)
+
+        if not chunks:
+            yield f"   ⏭️ Skipped (no transcript available)"
+            skipped_count += 1
+            continue
+
+        # Create LangChain documents from chunks
+        documents = []
+        for chunk in chunks:
+            # Create document with rich metadata for search results
+            doc = Document(
+                page_content=chunk['text'],
+                metadata={
+                    'video_id': video_id,
+                    'title': title,
+                    'channel_name': channel_name,
+                    'start_seconds': chunk['start_seconds'],
+                    'end_seconds': chunk['end_seconds'],
+                    'source_url': f"https://www.youtube.com/watch?v={video_id}",
+                    'thumbnail_url': f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
+                }
+            )
+            documents.append(doc)
+
+        # Add to vector store
+        try:
+            vectorstore.add_documents(documents)
+            indexed_count += 1
+            yield f"   ✅ Indexed {len(chunks)} clips"
+        except Exception as e:
+            yield f"   ❌ Error indexing: {str(e)}"
+            skipped_count += 1
+
+        # Brief pause to be a good citizen
+        time.sleep(0.5)
+
+    yield f"🎉 Complete! Indexed {indexed_count} videos ({skipped_count} skipped)"
+
+
+def ingest_url(url: str) -> Generator[str, None, None]:
+    """
+    Smart ingestion that auto-detects URL type and handles appropriately.
+
+    Supports:
+    - Channel URLs (https://www.youtube.com/@ChannelName)
+    - Playlist URLs (https://www.youtube.com/playlist?list=...)
+    - Video URLs (https://www.youtube.com/watch?v=... or https://youtu.be/...)
+
+    Args:
+        url: Any YouTube URL
+
+    Yields:
+        Progress messages as strings
+    """
+    url_type, extracted_id = detect_url_type(url)
+
+    yield f"🔗 Detected URL type: {url_type.upper()}"
+
+    if url_type == 'channel':
+        yield from ingest_channel(url)
+    elif url_type == 'playlist':
+        yield from ingest_playlist(extracted_id)
+    elif url_type == 'video':
+        yield from ingest_single_video(extracted_id)
+    else:
+        yield f"❌ Could not detect URL type. Please provide a valid YouTube channel, playlist, or video URL."
+        yield "   Examples:"
+        yield "   - Channel: https://www.youtube.com/@ChannelName"
+        yield "   - Playlist: https://www.youtube.com/playlist?list=PLxxxxx"
+        yield "   - Video: https://www.youtube.com/watch?v=xxxxx"
+
+
+# For testing/standalone usage
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python ingest.py <channel_url>")
+        print("Example: python ingest.py https://www.youtube.com/@ThePrimeTimeagen")
+        sys.exit(1)
+
+    channel_url = sys.argv[1]
+    print(f"\n🚀 Starting ingestion for: {channel_url}\n")
+
+    for message in ingest_channel(channel_url):
+        print(message)

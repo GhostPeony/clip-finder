@@ -1,0 +1,20 @@
+# Clip Finder (SearchTube) Dependencies
+# Updated: 2025-12-28
+
+# Web Framework
+fastapi>=0.115.0
+uvicorn>=0.32.0
+pydantic>=2.0.0
+sse-starlette>=2.0.0  # For Server-Sent Events
+
+# YouTube Data
+scrapetube>=2.5.0  # Channel video discovery (no API key needed)
+youtube-transcript-api>=1.0.0  # Transcript extraction
+
+# LangChain + Google AI (Latest versions as of Dec 2025)
+# See: https://github.com/langchain-ai/langchain-google/discussions/1422
+langchain-google-genai>=4.1.2  # Uses google-genai SDK, supports Gemini 2.0+
+langchain-chroma>=1.1.0  # Vector store
+
+# Environment
+python-dotenv>=1.0.0
