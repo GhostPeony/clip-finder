@@ -1,10 +1,24 @@
-# Clip Finder
+## Clip Finder
 
-**AI-powered semantic search for YouTube videos.** Index any channel, playlist, or video and search through transcripts with natural language. Find the exact moment you're looking for.
+![clipfinder1](https://github.com/user-attachments/assets/fbdfd867-8975-46b4-af52-c2da019870db)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-green.svg)](https://python.org)
-[![Node 18+](https://img.shields.io/badge/Node-18+-green.svg)](https://nodejs.org)
+
+Index your favorite YouTube channels, playlists, or individual videos and instantly find the exact quote or conversation you're looking for.
+
+Ever forget where your favorite podcaster dropped that quote you wanted to share with a friend? Can't remember which episode had that perfect explanation? Trying to find a specific scene in a movie that's on YouTube?
+
+Clip Finder solves this.
+
+🎙️ Podcasts — Index entire shows and search for topics, quotes, or guests
+🎓 Educational Content — Index coding tutorials and find exact clips on the topics you need help with
+🎬 Entertainment — Find that scene, that line, that moment
+📺 Any YouTube Content — Channels, playlists, or single videos
+
+
+https://github.com/user-attachments/assets/a6e21dd1-af9a-433c-9ee8-d6dabdccf92c
+
+
+## Features
 
 <!-- Add screenshot here -->
 
