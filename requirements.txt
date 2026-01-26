@@ -1,5 +1,10 @@
 # Clip Finder (SearchTube) Dependencies
-# Updated: 2025-12-28
+# Updated: 2026-01-24
+#
+# Recommended: Use a virtual environment to avoid conflicts
+#   python -m venv venv
+#   venv\Scripts\activate  (Windows) or source venv/bin/activate (Mac/Linux)
+#   pip install -r requirements.txt
 
 # Web Framework
 fastapi>=0.115.0

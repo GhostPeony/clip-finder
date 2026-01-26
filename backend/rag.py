@@ -35,8 +35,8 @@ if api_key:
 else:
     print(f"[RAG] WARNING: No API key found in environment!")
 
-# Configuration
-DB_PATH = "./channel_chroma_db"
+# Configuration - use absolute path to avoid issues with working directory
+DB_PATH = os.path.join(os.path.dirname(__file__), "channel_chroma_db")
 EMBEDDING_MODEL = "models/text-embedding-004"
 LLM_MODEL = "gemini-2.0-flash"  # Fast, smart, cost-effective
 TOP_K_RESULTS = 5  # Number of relevant clips to retrieve

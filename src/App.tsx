@@ -2,16 +2,29 @@ import React, { useState, useEffect } from 'react';
 import { SearchState, VideoClip, AppMode } from './types';
 import { searchVideoClips, checkBackendHealth } from './services/api';
 import { VideoPlayer } from './components/VideoPlayer';
-import { IngestionView } from './components/IngestionView';
+import { UnifiedSearchView } from './components/UnifiedSearchView';
 import { LibraryView } from './components/LibraryView';
 import { SettingsModal, getStoredApiKey } from './components/SettingsModal';
+import { Toast, useToast } from './components/Toast';
 
 const App: React.FC = () => {
-  const [mode, setMode] = useState<AppMode>('ingest');
+  const [mode, setMode] = useState<AppMode>('unified');
   const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(!!getStoredApiKey());
   const [hasServerKey, setHasServerKey] = useState(false);  // Server has .env key
+  const { toast, showToast, hideToast } = useToast();
+
+  // Copy shareable link to clipboard
+  const copyClipLink = async (clip: VideoClip) => {
+    const url = `https://youtu.be/${clip.videoId}?t=${Math.floor(clip.startSeconds)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('Link copied!');
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
 
   // Search State
   const [query, setQuery] = useState('');
@@ -72,7 +85,7 @@ const App: React.FC = () => {
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
           <div
             className="flex items-center gap-3 cursor-pointer"
-            onClick={() => setMode('ingest')}
+            onClick={() => setMode('unified')}
           >
             {/* Google-style logo */}
             <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none">
@@ -86,11 +99,11 @@ const App: React.FC = () => {
             {/* Navigation Tabs */}
             <div className="flex gap-1">
               <button
-                onClick={() => setMode('search')}
-                className={`text-sm px-3 py-2 rounded-md transition-colors font-medium ${mode === 'search' ? 'bg-[#e8f0fe] text-[#1a73e8]' : 'text-[#5f6368] hover:bg-[#f1f3f4]'
+                onClick={() => setMode('unified')}
+                className={`text-sm px-3 py-2 rounded-md transition-colors font-medium ${mode === 'unified' || mode === 'search' ? 'bg-[#e8f0fe] text-[#1a73e8]' : 'text-[#5f6368] hover:bg-[#f1f3f4]'
                   }`}
               >
-                Search
+                Home
               </button>
               <button
                 onClick={() => setMode('library')}
@@ -99,28 +112,6 @@ const App: React.FC = () => {
               >
                 Library
               </button>
-              <button
-                onClick={() => setMode('ingest')}
-                className={`text-sm px-3 py-2 rounded-md transition-colors font-medium ${mode === 'ingest' ? 'bg-[#e8f0fe] text-[#1a73e8]' : 'text-[#5f6368] hover:bg-[#f1f3f4]'
-                  }`}
-              >
-                + Add
-              </button>
-            </div>
-
-            <div className={`text-xs px-3 py-1 rounded-full ${isBackendConnected
-              ? 'bg-[#e6f4ea] text-[#137333]'
-              : 'bg-[#fce8e6] text-[#c5221f]'
-              }`}>
-              {isBackendConnected ? 'Connected' : 'Offline'}
-            </div>
-
-            {/* API Key Status */}
-            <div className={`text-xs px-3 py-1 rounded-full ${hasApiKey
-              ? 'bg-[#e8f0fe] text-[#1a73e8]'
-              : 'bg-[#fef7e0] text-[#b06000]'
-              }`}>
-              {hasApiKey ? '🔑 Key Set' : '⚠️ No API Key'}
             </div>
 
             {/* Settings Button */}
@@ -147,112 +138,174 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className="flex-1 w-full max-w-6xl mx-auto px-4 py-8">
 
-        {mode === 'ingest' ? (
+        {mode === 'unified' ? (
           <div className="py-8">
-            <IngestionView onComplete={() => {
-              // Clear old search state when transitioning to search
-              setSearchState({ status: 'idle', query: '', answer: '', relevantClips: [] });
-              setActiveClip(null);
-              setQuery('');
-              setMode('search');
-            }} isBackendConnected={isBackendConnected} />
+            <UnifiedSearchView
+              onSearchComplete={(clips, answer, active) => {
+                setSearchState({
+                  status: 'complete',
+                  query: '',
+                  answer,
+                  relevantClips: clips
+                });
+                // Only set activeClip if it has a valid videoId
+                setActiveClip(active?.videoId ? active : null);
+                setMode('search'); // Switch to show results
+              }}
+              onIndexComplete={() => {
+                // Navigate to library after indexing completes
+                setMode('library');
+              }}
+              isBackendConnected={isBackendConnected}
+              hasApiKey={hasApiKey}
+              hasServerKey={hasServerKey}
+              onOpenSettings={() => setSettingsOpen(true)}
+            />
           </div>
         ) : mode === 'library' ? (
           <div className="py-8">
-            <LibraryView onIndexMore={() => setMode('ingest')} />
+            <LibraryView onIndexMore={() => setMode('unified')} />
+          </div>
+        ) : mode === 'about' ? (
+          <div className="py-8 max-w-2xl mx-auto">
+            <button
+              onClick={() => setMode('unified')}
+              className="text-sm text-[#1a73e8] hover:text-[#1557b0] flex items-center gap-1 mb-6"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              Back
+            </button>
+            <div className="bg-white rounded-lg border border-[#dadce0] p-8">
+              <div className="flex items-center justify-between mb-6">
+                <h1 className="text-2xl font-normal text-[#202124]">About Clip Finder</h1>
+                <div className="flex items-center gap-4">
+                  <a
+                    href="https://linkedin.com/in/cadecrussell"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#5f6368] hover:text-[#0A66C2] transition-colors"
+                    title="LinkedIn"
+                  >
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+                    </svg>
+                  </a>
+                  <a
+                    href="https://github.com/ghostpeony"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#5f6368] hover:text-[#24292f] transition-colors"
+                    title="GitHub"
+                  >
+                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
+                    </svg>
+                  </a>
+                  <a
+                    href="https://www.ghostpeony.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[#5f6368] hover:text-[#1a73e8] transition-colors"
+                    title="Ghost Peony"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
+                    </svg>
+                  </a>
+                </div>
+              </div>
+              <div className="text-[#5f6368] space-y-4 text-sm leading-relaxed">
+                <p>
+                  You remember saying something great — but where? Clip Finder indexes your YouTube
+                  channels, making every word searchable. Just describe what you're looking for in
+                  plain English, and we'll find the exact moment.
+                </p>
+                <p>
+                  Built for creators with hours of talk-heavy content: podcasters finding quotable
+                  moments, commentary channels, educational creators, and anyone who needs to mine
+                  their videos for clips without scrubbing through endless footage.
+                </p>
+                <h2 className="text-lg font-medium text-[#202124] pt-4">Why Clip Finder?</h2>
+                <ul className="list-disc list-inside space-y-2">
+                  <li><strong>Semantic search</strong> — Find by meaning, not just keywords</li>
+                  <li><strong>You control the search</strong> — Find what you're looking for, not AI-guessed "viral moments"</li>
+                  <li><strong>Works with talk-heavy content</strong> — Podcasts, commentary, reviews, educational videos</li>
+                  <li><strong>Full channel support</strong> — Index entire channels, playlists, or individual videos</li>
+                </ul>
+                <h2 className="text-lg font-medium text-[#202124] pt-4">How It Works</h2>
+                <ol className="list-decimal list-inside space-y-2">
+                  <li>Paste any YouTube URL (video, playlist, or channel)</li>
+                  <li>We extract and chunk the transcript into searchable segments</li>
+                  <li>Segments are embedded using Google's text-embedding-004 model</li>
+                  <li>Your questions are matched against the embeddings to find relevant clips</li>
+                  <li>An AI summarizes the findings with clickable timestamp citations</li>
+                </ol>
+              </div>
+            </div>
+          </div>
+        ) : mode === 'contact' ? (
+          <div className="py-8 max-w-2xl mx-auto">
+            <button
+              onClick={() => setMode('unified')}
+              className="text-sm text-[#1a73e8] hover:text-[#1557b0] flex items-center gap-1 mb-6"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              Back
+            </button>
+            <div className="bg-white rounded-lg border border-[#dadce0] p-8">
+              <h1 className="text-2xl font-normal text-[#202124] mb-4">Contact</h1>
+              <div className="text-[#5f6368] space-y-4 text-sm leading-relaxed">
+                <p>
+                  Have questions, feedback, or found a bug? We'd love to hear from you.
+                </p>
+                <div className="bg-[#f8f9fa] rounded-lg p-4 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <svg className="w-5 h-5 text-[#5f6368]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                    <a href="mailto:cade@ghostpeony.com" className="text-[#1a73e8] hover:underline">
+                      cade@ghostpeony.com
+                    </a>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <svg className="w-5 h-5 text-[#5f6368]" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                    </svg>
+                    <a href="https://github.com/ghostpeony" target="_blank" rel="noopener noreferrer" className="text-[#1a73e8] hover:underline">
+                      github.com/ghostpeony
+                    </a>
+                  </div>
+                </div>
+                <p className="pt-2">
+                  Clip Finder is an open-source project. Contributions, issues, and feature requests
+                  are welcome on GitHub.
+                </p>
+              </div>
+            </div>
           </div>
         ) : (
-          /* Search View */
+          /* Search Results View */
           <div>
-            {/* API Key Warning - only show if neither client nor server has a key */}
-            {!hasApiKey && !hasServerKey && (
-              <div className="max-w-2xl mx-auto mb-6 bg-[#fef7e0] border border-[#fdd663] text-[#5f4000] p-4 rounded-lg flex items-center gap-3">
-                <svg className="w-6 h-6 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
+            {/* Back to search button */}
+            <div className="mb-6">
+              <button
+                onClick={() => {
+                  setSearchState({ status: 'idle', query: '', answer: '', relevantClips: [] });
+                  setActiveClip(null);
+                  setMode('unified');
+                }}
+                className="text-sm text-[#1a73e8] hover:text-[#1557b0] flex items-center gap-1"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
-                <div className="flex-1">
-                  <p className="font-medium">API Key Required for Search</p>
-                  <p className="text-sm">To search your indexed videos, you need a free Gemini API key.</p>
-                </div>
-                <button
-                  onClick={() => setSettingsOpen(true)}
-                  className="bg-[#5f4000] hover:bg-[#3f2a00] text-white px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap"
-                >
-                  Add API Key
-                </button>
-              </div>
-            )}
-
-            {/* Search Input - Google Style */}
-            <div className="max-w-2xl mx-auto mb-10">
-              <form onSubmit={handleSearch} className="relative">
-                <div className="flex items-center bg-white border border-[#dfe1e5] rounded-full hover:shadow-md focus-within:shadow-md transition-shadow">
-                  <svg className="w-5 h-5 text-[#9aa0a6] ml-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
-                  <input
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder={isBackendConnected ? "Ask about your videos..." : "Backend offline..."}
-                    disabled={!isBackendConnected}
-                    className="flex-1 px-4 py-3 bg-transparent border-none focus:outline-none text-base disabled:opacity-50"
-                  />
-                  {query && (
-                    <button
-                      type="button"
-                      onClick={() => setQuery('')}
-                      className="p-2 text-[#70757a] hover:text-[#202124]"
-                    >
-                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-                      </svg>
-                    </button>
-                  )}
-                </div>
-                <div className="flex justify-center items-center gap-3 mt-6">
-                  <button
-                    type="submit"
-                    disabled={searchState.status === 'searching' || !isBackendConnected}
-                    className="bg-[#f8f9fa] hover:bg-[#f1f3f4] border border-[#f8f9fa] hover:border-[#dadce0] text-[#3c4043] px-4 py-2 rounded text-sm font-medium disabled:opacity-50 transition-all"
-                  >
-                    {searchState.status === 'searching' ? 'Searching...' : 'Clip Finder Search'}
-                  </button>
-                  <div className="flex items-center gap-2 bg-[#f8f9fa] border border-[#f8f9fa] hover:border-[#dadce0] rounded px-3 py-2">
-                    <label className="text-xs text-[#5f6368]">Results:</label>
-                    <select
-                      value={resultLimit}
-                      onChange={(e) => setResultLimit(Number(e.target.value))}
-                      className="text-sm bg-transparent text-[#3c4043] focus:outline-none cursor-pointer"
-                    >
-                      <option value={1}>1</option>
-                      <option value={3}>3</option>
-                      <option value={5}>5</option>
-                      <option value={10}>10</option>
-                    </select>
-                  </div>
-                  <button
-                    type="button"
-                    className="bg-[#f8f9fa] hover:bg-[#f1f3f4] border border-[#f8f9fa] hover:border-[#dadce0] text-[#3c4043] px-4 py-2 rounded text-sm font-medium"
-                    onClick={() => setMode('ingest')}
-                  >
-                    Index Channel
-                  </button>
-                </div>
-              </form>
-              {!isBackendConnected && (
-                <p className="text-center text-[#d93025] mt-4 text-sm bg-[#fce8e6] p-3 rounded-lg">
-                  Python server not detected. Run <code className="bg-[#f1f3f4] px-1 rounded">python server.py</code>
-                </p>
-              )}
+                New Search
+              </button>
             </div>
-
-            {/* Error Message */}
-            {searchState.error && (
-              <div className="max-w-2xl mx-auto mb-8 bg-[#fce8e6] border border-[#f5c6cb] text-[#c5221f] p-4 rounded-lg text-center text-sm">
-                {searchState.error}
-              </div>
-            )}
 
             {/* Results Area - YouTube-style layout */}
             {searchState.status !== 'idle' && !searchState.error && (
@@ -268,17 +321,28 @@ const App: React.FC = () => {
                         {searchState.relevantClips.map((clip) => (
                           <div
                             key={clip.id}
-                            onClick={() => handleCitationClick(clip)}
-                            className={`cursor-pointer transition-colors rounded-lg p-1.5 ${activeClip?.id === clip.id
+                            className={`group/clip relative cursor-pointer transition-colors rounded-lg p-1.5 ${activeClip?.id === clip.id
                               ? 'bg-[#e8f0fe]'
                               : 'hover:bg-[#f1f3f4]'
                               }`}
                           >
-                            {clip.thumbnailUrl && (
-                              <img src={clip.thumbnailUrl} className="w-full h-auto rounded" alt="" />
-                            )}
-                            <p className="text-xs text-[#202124] font-medium line-clamp-2 mt-1">{clip.title}</p>
-                            <p className="text-xs text-[#1a73e8]">{formatTime(clip.startSeconds)}</p>
+                            <div onClick={() => handleCitationClick(clip)}>
+                              {clip.thumbnailUrl && (
+                                <img src={clip.thumbnailUrl} className="w-full h-auto rounded" alt="" />
+                              )}
+                              <p className="text-xs text-[#202124] font-medium line-clamp-2 mt-1">{clip.title}</p>
+                              <p className="text-xs text-[#1a73e8]">{formatTime(clip.startSeconds)}</p>
+                            </div>
+                            {/* Copy button */}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); copyClipLink(clip); }}
+                              className="absolute top-2 right-2 p-1 bg-black/60 hover:bg-black/80 text-white rounded opacity-0 group-hover/clip:opacity-100 transition-opacity"
+                              title="Copy link"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                              </svg>
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -304,6 +368,26 @@ const App: React.FC = () => {
                             <span className="text-[#606368] text-sm">{activeClip.channelName}</span>
                             <span className="text-[#9aa0a6]">•</span>
                             <span className="text-[#1a73e8] text-sm font-medium">{formatTime(activeClip.startSeconds)}</span>
+                            <span className="text-[#9aa0a6]">•</span>
+                            <a
+                              href={`https://youtube.com/watch?v=${activeClip.videoId}&t=${activeClip.startSeconds}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[#5f6368] text-sm hover:text-[#1a73e8]"
+                            >
+                              Watch on YouTube ↗
+                            </a>
+                            <span className="text-[#9aa0a6]">•</span>
+                            <button
+                              onClick={() => copyClipLink(activeClip)}
+                              className="text-[#5f6368] text-sm hover:text-[#1a73e8] flex items-center gap-1"
+                              title="Copy shareable link"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                              </svg>
+                              Copy Link
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -345,8 +429,26 @@ const App: React.FC = () => {
       </main>
 
       <footer className="py-4 text-center text-[#70757a] text-xs border-t border-[#dadce0] bg-[#f8f9fa]">
-        <p>Powered by Ghost Peony</p>
+        <div className="flex items-center justify-center gap-4">
+          <span>Powered by Ghost Peony</span>
+          <span className="text-[#dadce0]">|</span>
+          <button
+            onClick={() => setMode('about')}
+            className="hover:text-[#1a73e8] transition-colors"
+          >
+            About
+          </button>
+          <button
+            onClick={() => setMode('contact')}
+            className="hover:text-[#1a73e8] transition-colors"
+          >
+            Contact
+          </button>
+        </div>
       </footer>
+
+      {/* Toast notification */}
+      <Toast message={toast.message} isVisible={toast.isVisible} onClose={hideToast} />
     </div>
   );
 };

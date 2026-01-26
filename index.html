@@ -31,6 +31,21 @@
     ::-webkit-scrollbar-thumb:hover {
       background: #bdc1c6;
     }
+
+    /* Toast animation */
+    @keyframes fade-in-up {
+      from {
+        opacity: 0;
+        transform: translate(-50%, 10px);
+      }
+      to {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+    }
+    .animate-fade-in-up {
+      animation: fade-in-up 0.2s ease-out;
+    }
   </style>
   <script type="importmap">
 {

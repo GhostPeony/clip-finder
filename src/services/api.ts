@@ -1,7 +1,7 @@
-import { VideoClip, LibraryData } from '../types';
+import { VideoClip, LibraryData, SearchHistoryEntry, SearchHistoryClip } from '../types';
 
 // Use environment variable for production, fallback to localhost for dev
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 const API_URL = `${API_BASE}/api`;
 
 export const checkBackendHealth = async (): Promise<{ connected: boolean; hasServerKey: boolean }> => {
@@ -111,6 +111,84 @@ export const searchVideoClips = async (query: string, limit: number = 5): Promis
     return await response.json();
   } catch (error) {
     console.warn("Backend unreachable, returning error:", error);
+    throw error;
+  }
+};
+
+// Search History (localStorage)
+const SEARCH_HISTORY_KEY = 'clipfinder_search_history';
+const MAX_HISTORY_ENTRIES = 20;
+
+export const saveSearchToHistory = (query: string, clips: VideoClip[]): void => {
+  const history = getSearchHistory();
+
+  const entry: SearchHistoryEntry = {
+    id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    query: query.trim(),
+    timestamp: Date.now(),
+    clips: clips.map(clip => ({
+      videoId: clip.videoId,
+      title: clip.title,
+      thumbnailUrl: clip.thumbnailUrl,
+      startSeconds: clip.startSeconds,
+      channelName: clip.channelName,
+    })),
+  };
+
+  // Add to beginning, remove duplicates of same query
+  const filtered = history.filter(h => h.query.toLowerCase() !== query.toLowerCase().trim());
+  const updated = [entry, ...filtered].slice(0, MAX_HISTORY_ENTRIES);
+
+  localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(updated));
+};
+
+export const getSearchHistory = (): SearchHistoryEntry[] => {
+  try {
+    const stored = localStorage.getItem(SEARCH_HISTORY_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+};
+
+export const clearSearchHistory = (): void => {
+  localStorage.removeItem(SEARCH_HISTORY_KEY);
+};
+
+export const deleteSearchHistoryEntry = (id: string): void => {
+  const history = getSearchHistory();
+  const updated = history.filter(h => h.id !== id);
+  localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(updated));
+};
+
+// Download transcript as SRT file
+export const downloadTranscript = async (videoId: string): Promise<void> => {
+  try {
+    const response = await fetch(`${API_URL}/transcript/${videoId}?format=srt`);
+    if (!response.ok) {
+      throw new Error(`Failed to download transcript: ${response.statusText}`);
+    }
+
+    // Get filename from Content-Disposition header or use default
+    const contentDisposition = response.headers.get('Content-Disposition');
+    let filename = `${videoId}.srt`;
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="(.+)"/);
+      if (match) filename = match[1];
+    }
+
+    // Create blob and trigger download
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error("Error downloading transcript:", error);
     throw error;
   }
 };

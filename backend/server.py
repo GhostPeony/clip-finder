@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 # Import our modules
-from ingest import ingest_url, get_library, delete_video
+from ingest import ingest_url, get_library, delete_video, get_video_transcript, rename_channel
 from rag import search, SearchResult
 
 
@@ -37,13 +37,18 @@ class SearchRequest(BaseModel):
     limit: int = 5  # Default to 5 results, frontend can override
 
 
+class RenameChannelRequest(BaseModel):
+    old_name: str
+    new_name: str
+
+
 # Lifespan handler (replaces deprecated on_startup/on_shutdown)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     print("[ClipSeek] Backend Starting...")
-    print("   API Docs: http://localhost:8000/docs")
-    print("   Health:   http://localhost:8000/")
+    print("   API Docs: http://localhost:8080/docs")
+    print("   Health:   http://localhost:8080/")
     yield
     # Shutdown
     print("[ClipSeek] Backend Shutting Down...")
@@ -110,6 +115,80 @@ async def delete_video_endpoint(video_id: str):
         {"success": true/false, "deletedClips": N}
     """
     return delete_video(video_id)
+
+
+@app.post("/api/channel/rename")
+async def rename_channel_endpoint(request: RenameChannelRequest):
+    """
+    Rename a channel in the database.
+
+    Updates the channel_name metadata on all clips belonging to the channel.
+    Useful for fixing "Unknown Channel" entries after indexing.
+
+    Args:
+        old_name: Current channel name to find
+        new_name: New channel name to set
+
+    Returns:
+        {"success": true/false, "updatedClips": N, "oldName": "...", "newName": "..."}
+    """
+    return rename_channel(request.old_name, request.new_name)
+
+
+def format_srt_timestamp(seconds: int) -> str:
+    """Convert seconds to SRT timestamp format (HH:MM:SS,mmm)."""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},000"
+
+
+@app.get("/api/transcript/{video_id}")
+async def transcript_endpoint(video_id: str, format: str = "srt"):
+    """
+    Download transcript for a video as SRT file.
+
+    Args:
+        video_id: YouTube video ID
+        format: Output format (currently only 'srt' supported)
+
+    Returns:
+        SRT file download
+    """
+    result = get_video_transcript(video_id)
+
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error", "Video not found"))
+
+    chunks = result.get("chunks", [])
+    title = result.get("title", video_id)
+
+    # Build SRT content
+    srt_lines = []
+    for i, chunk in enumerate(chunks, 1):
+        start_ts = format_srt_timestamp(chunk['start_seconds'])
+        end_ts = format_srt_timestamp(chunk['end_seconds'])
+        text = chunk['text'].strip()
+
+        srt_lines.append(f"{i}")
+        srt_lines.append(f"{start_ts} --> {end_ts}")
+        srt_lines.append(text)
+        srt_lines.append("")  # Blank line between entries
+
+    srt_content = "\n".join(srt_lines)
+
+    # Sanitize filename
+    safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()[:50]
+    filename = f"{safe_title}_{video_id}.srt"
+
+    from fastapi.responses import Response
+    return Response(
+        content=srt_content,
+        media_type="text/plain",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
 
 
 @app.post("/api/ingest")
@@ -215,7 +294,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "server:app",
         host="0.0.0.0",
-        port=8000,
+        port=8080,
         reload=False,  # Disable to preserve singleton state (restart manually when needed)
         log_level="warning"  # Suppress routine request logs
     )
