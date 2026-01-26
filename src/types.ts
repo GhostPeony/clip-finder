@@ -31,7 +31,12 @@ export interface LibraryVideo {
   title: string;
   thumbnailUrl: string;
   clipCount: number;
+  indexedAt?: number;  // Unix timestamp, optional for backward compat
 }
+
+export type DensityMode = 'compact' | 'comfortable';
+export type SortMode = 'default' | 'dateAdded';
+export type ViewMode = 'grouped' | 'flat';
 
 export interface LibraryChannel {
   name: string;
@@ -45,4 +50,20 @@ export interface LibraryData {
   totalClips: number;
 }
 
-export type AppMode = 'ingest' | 'search' | 'library';
+export type AppMode = 'unified' | 'ingest' | 'search' | 'library' | 'about' | 'contact';
+
+// Search history types
+export interface SearchHistoryClip {
+  videoId: string;
+  title: string;
+  thumbnailUrl: string;
+  startSeconds: number;
+  channelName: string;
+}
+
+export interface SearchHistoryEntry {
+  id: string;
+  query: string;
+  timestamp: number;
+  clips: SearchHistoryClip[];
+}

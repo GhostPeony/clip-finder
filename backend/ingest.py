@@ -29,8 +29,8 @@ from langchain_core.documents import Document
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env.local')
 load_dotenv(env_path)
 
-# Configuration
-DB_PATH = "./channel_chroma_db"
+# Configuration - use absolute path to avoid issues with working directory
+DB_PATH = os.path.join(os.path.dirname(__file__), "channel_chroma_db")
 CHUNK_SIZE_SECONDS = 60  # 60s chunks for pinpoint accuracy
 EMBEDDING_MODEL = "models/text-embedding-004"  # Recommended (others deprecated Oct 2025)
 
@@ -129,7 +129,8 @@ def get_library() -> dict:
                     'videoId': video_id,
                     'title': meta.get('title', f'Video {video_id}'),
                     'thumbnailUrl': meta.get('thumbnail_url', f'https://img.youtube.com/vi/{video_id}/mqdefault.jpg'),
-                    'clipCount': 0
+                    'clipCount': 0,
+                    'indexedAt': meta.get('indexed_at')  # Unix timestamp, None for old entries
                 }
 
             # Increment clip count
@@ -158,6 +159,109 @@ def get_library() -> dict:
     except Exception as e:
         print(f"Error getting library: {e}")
         return {"channels": [], "totalVideos": 0, "totalClips": 0}
+
+
+def rename_channel(old_name: str, new_name: str) -> dict:
+    """
+    Rename a channel in the database by updating metadata on all its clips.
+
+    Args:
+        old_name: Current channel name to find
+        new_name: New channel name to set
+
+    Returns:
+        Dict with success status and count of updated documents
+    """
+    global _vectorstore_instance
+
+    try:
+        vectorstore = get_vectorstore()
+        existing = vectorstore.get()
+
+        if not existing or not existing.get('ids'):
+            return {"success": False, "error": "Database is empty", "updatedClips": 0}
+
+        # Find all document IDs that belong to this channel
+        ids_to_update = []
+        metadatas_to_update = []
+
+        for i, meta in enumerate(existing['metadatas']):
+            if meta and meta.get('channel_name') == old_name:
+                ids_to_update.append(existing['ids'][i])
+                # Copy metadata and update channel_name
+                updated_meta = dict(meta)
+                updated_meta['channel_name'] = new_name
+                metadatas_to_update.append(updated_meta)
+
+        if not ids_to_update:
+            return {"success": False, "error": f"Channel '{old_name}' not found", "updatedClips": 0}
+
+        # Use the underlying ChromaDB collection to update metadata
+        collection = vectorstore._collection
+        collection.update(
+            ids=ids_to_update,
+            metadatas=metadatas_to_update
+        )
+
+        # Clear the cached vectorstore to force refresh
+        _vectorstore_instance = None
+
+        return {"success": True, "updatedClips": len(ids_to_update), "oldName": old_name, "newName": new_name}
+
+    except Exception as e:
+        return {"success": False, "error": str(e), "updatedClips": 0}
+
+
+def get_video_transcript(video_id: str) -> dict:
+    """
+    Get all transcript chunks for a specific video, ordered by timestamp.
+
+    Args:
+        video_id: YouTube video ID
+
+    Returns:
+        Dict with video info and ordered transcript chunks
+    """
+    try:
+        vectorstore = get_vectorstore()
+        existing = vectorstore.get()
+
+        if not existing or not existing.get('metadatas'):
+            return {"success": False, "error": "Database is empty", "chunks": []}
+
+        # Find all chunks for this video
+        chunks = []
+        video_title = None
+        channel_name = None
+
+        for i, meta in enumerate(existing['metadatas']):
+            if meta and meta.get('video_id') == video_id:
+                if video_title is None:
+                    video_title = meta.get('title', f'Video {video_id}')
+                    channel_name = meta.get('channel_name', 'Unknown Channel')
+
+                chunks.append({
+                    'text': existing['documents'][i] if existing.get('documents') else '',
+                    'start_seconds': meta.get('start_seconds', 0),
+                    'end_seconds': meta.get('end_seconds', 0),
+                })
+
+        if not chunks:
+            return {"success": False, "error": "Video not found", "chunks": []}
+
+        # Sort by start time
+        chunks.sort(key=lambda c: c['start_seconds'])
+
+        return {
+            "success": True,
+            "videoId": video_id,
+            "title": video_title,
+            "channelName": channel_name,
+            "chunks": chunks
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e), "chunks": []}
 
 
 def delete_video(video_id: str) -> dict:
@@ -419,6 +523,7 @@ def ingest_single_video(video_id: str) -> Generator[str, None, None]:
     yield f"📊 Found {len(chunks)} transcript chunks"
 
     vectorstore = get_vectorstore()
+    indexed_at = int(time.time())
 
     documents = []
     for chunk in chunks:
@@ -431,7 +536,8 @@ def ingest_single_video(video_id: str) -> Generator[str, None, None]:
                 'start_seconds': chunk['start_seconds'],
                 'end_seconds': chunk['end_seconds'],
                 'source_url': f"https://www.youtube.com/watch?v={video_id}",
-                'thumbnail_url': f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
+                'thumbnail_url': f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
+                'indexed_at': indexed_at
             }
         )
         documents.append(doc)
@@ -497,6 +603,7 @@ def ingest_playlist(playlist_id: str) -> Generator[str, None, None]:
             skipped_count += 1
             continue
 
+        indexed_at = int(time.time())
         documents = []
         for chunk in chunks:
             doc = Document(
@@ -508,7 +615,8 @@ def ingest_playlist(playlist_id: str) -> Generator[str, None, None]:
                     'start_seconds': chunk['start_seconds'],
                     'end_seconds': chunk['end_seconds'],
                     'source_url': f"https://www.youtube.com/watch?v={video_id}",
-                    'thumbnail_url': f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
+                    'thumbnail_url': f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
+                    'indexed_at': indexed_at
                 }
             )
             documents.append(doc)
@@ -543,13 +651,28 @@ def ingest_channel(channel_url: str) -> Generator[str, None, None]:
 
     try:
         # Get all videos from channel using scrapetube (no API key needed)
-        videos = list(scrapetube.get_channel(channel_url=channel_url))
+        # Use sort_by='oldest' to ensure full pagination through all videos
+        # Increase sleep to 1.5s to avoid rate limiting on larger channels
+        videos = list(scrapetube.get_channel(
+            channel_url=channel_url,
+            sort_by='oldest',
+            sleep=1.5,
+        ))
     except Exception as e:
         yield f"❌ Error scanning channel: {str(e)}"
         return
 
     total_videos = len(videos)
     yield f"📊 Found {total_videos} videos in channel"
+
+    # Fetch channel name from first video using reliable oEmbed API
+    # (scrapetube metadata is inconsistent and often returns "Unknown Channel")
+    channel_name = "Unknown Channel"
+    if videos:
+        first_video_id = videos[0].get('videoId')
+        if first_video_id:
+            _, channel_name = fetch_video_metadata(first_video_id)
+    yield f"📺 Channel: {channel_name}"
 
     # Get already indexed video IDs to skip
     indexed_ids = get_indexed_video_ids()
@@ -573,7 +696,7 @@ def ingest_channel(channel_url: str) -> Generator[str, None, None]:
     for i, video in enumerate(new_videos, 1):
         video_id = video.get('videoId')
         title = extract_video_title(video)
-        channel_name = extract_channel_name(video)
+        # channel_name is already set above via oEmbed API (more reliable than scrapetube metadata)
 
         yield f"📥 [{i}/{len(new_videos)}] Processing: {title[:50]}..."
 
@@ -586,6 +709,7 @@ def ingest_channel(channel_url: str) -> Generator[str, None, None]:
             continue
 
         # Create LangChain documents from chunks
+        indexed_at = int(time.time())
         documents = []
         for chunk in chunks:
             # Create document with rich metadata for search results
@@ -598,7 +722,8 @@ def ingest_channel(channel_url: str) -> Generator[str, None, None]:
                     'start_seconds': chunk['start_seconds'],
                     'end_seconds': chunk['end_seconds'],
                     'source_url': f"https://www.youtube.com/watch?v={video_id}",
-                    'thumbnail_url': f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
+                    'thumbnail_url': f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
+                    'indexed_at': indexed_at
                 }
             )
             documents.append(doc)
