@@ -6,14 +6,30 @@ import { UnifiedSearchView } from './components/UnifiedSearchView';
 import { LibraryView } from './components/LibraryView';
 import { SettingsModal, getStoredApiKey } from './components/SettingsModal';
 import { Toast, useToast } from './components/Toast';
+import { LoginPage } from './components/LoginPage';
+import { useAuth } from './contexts/AuthContext';
 
 const App: React.FC = () => {
+  const { user, loading: authLoading, signOut } = useAuth();
   const [mode, setMode] = useState<AppMode>('unified');
   const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(!!getStoredApiKey());
   const [hasServerKey, setHasServerKey] = useState(false);  // Server has .env key
   const { toast, showToast, hideToast } = useToast();
+
+  // Auth gate
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#f8f9fa] flex items-center justify-center">
+        <div className="text-[#5f6368] text-sm">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage />;
+  }
 
   // Copy shareable link to clipboard
   const copyClipLink = async (clip: VideoClip) => {
@@ -125,6 +141,25 @@ const App: React.FC = () => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </button>
+
+            {/* User avatar + sign out */}
+            {user && (
+              <div className="flex items-center gap-2">
+                {user.user_metadata?.avatar_url && (
+                  <img
+                    src={user.user_metadata.avatar_url}
+                    alt=""
+                    className="w-8 h-8 rounded-full"
+                  />
+                )}
+                <button
+                  onClick={signOut}
+                  className="text-xs text-[#5f6368] hover:text-[#202124] transition-colors"
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </header>
