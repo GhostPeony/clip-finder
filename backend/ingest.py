@@ -32,7 +32,7 @@ load_dotenv(env_path)
 # Configuration - use absolute path to avoid issues with working directory
 DB_PATH = os.path.join(os.path.dirname(__file__), "channel_chroma_db")
 CHUNK_SIZE_SECONDS = 60  # 60s chunks for pinpoint accuracy
-EMBEDDING_MODEL = "models/text-embedding-004"  # Recommended (others deprecated Oct 2025)
+EMBEDDING_MODEL = "models/gemini-embedding-001"  # Replacement for deprecated text-embedding-004
 
 # Cache for singleton instances (avoid recreating API clients)
 _embeddings_instance = None

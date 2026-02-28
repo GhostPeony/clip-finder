@@ -37,8 +37,8 @@ else:
 
 # Configuration - use absolute path to avoid issues with working directory
 DB_PATH = os.path.join(os.path.dirname(__file__), "channel_chroma_db")
-EMBEDDING_MODEL = "models/text-embedding-004"
-LLM_MODEL = "gemini-2.0-flash"  # Fast, smart, cost-effective
+EMBEDDING_MODEL = "models/gemini-embedding-001"
+LLM_MODEL = "gemini-2.5-flash-lite"  # Fast, cost-effective (2.0-flash retiring March 2026)
 TOP_K_RESULTS = 5  # Number of relevant clips to retrieve
 
 
