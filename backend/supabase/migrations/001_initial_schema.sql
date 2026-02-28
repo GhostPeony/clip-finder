@@ -74,9 +74,9 @@ CREATE TABLE chunks (
     embedding VECTOR(768) NOT NULL
 );
 
--- Index for vector similarity search
+-- Index for vector similarity search (HNSW works on empty tables, unlike ivfflat)
 CREATE INDEX chunks_embedding_idx ON chunks
-    USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+    USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 
 -- Index for filtering by video
 CREATE INDEX chunks_video_id_idx ON chunks(video_id);
