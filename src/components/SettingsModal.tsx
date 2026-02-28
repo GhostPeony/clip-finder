@@ -1,47 +1,50 @@
 import React, { useState, useEffect } from 'react';
+import { saveApiKey, deleteApiKey, fetchUsage, UsageInfo } from '../services/api';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const API_KEY_STORAGE_KEY = 'clipfinder_api_key';
-
+// Keep for backward compat during migration -- App.tsx still references this
 export const getStoredApiKey = (): string | null => {
-  return localStorage.getItem(API_KEY_STORAGE_KEY);
-};
-
-export const setStoredApiKey = (key: string | null): void => {
-  if (key) {
-    localStorage.setItem(API_KEY_STORAGE_KEY, key);
-  } else {
-    localStorage.removeItem(API_KEY_STORAGE_KEY);
-  }
+  return null; // API key is now server-side
 };
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [usage, setUsage] = useState<UsageInfo | null>(null);
 
   useEffect(() => {
     if (isOpen) {
-      const stored = getStoredApiKey();
-      setApiKey(stored || '');
+      setApiKey('');
       setSaved(false);
+      fetchUsage().then(setUsage);
     }
   }, [isOpen]);
 
-  const handleSave = () => {
-    setStoredApiKey(apiKey.trim() || null);
-    setSaved(true);
-    setTimeout(() => onClose(), 1000);
+  const handleSave = async () => {
+    if (!apiKey.trim()) return;
+    setSaving(true);
+    const success = await saveApiKey(apiKey.trim());
+    setSaving(false);
+    if (success) {
+      setSaved(true);
+      fetchUsage().then(setUsage);
+      setTimeout(() => onClose(), 1000);
+    }
   };
 
-  const handleClear = () => {
+  const handleClear = async () => {
+    setSaving(true);
+    await deleteApiKey();
+    setSaving(false);
     setApiKey('');
-    setStoredApiKey(null);
     setSaved(true);
+    fetchUsage().then(setUsage);
   };
 
   if (!isOpen) return null;
@@ -61,13 +64,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           </button>
         </div>
 
+        {/* Usage Quota */}
+        {usage && (
+          <div className="mb-5 p-4 bg-[#f8f9fa] rounded-lg border border-[#dadce0]">
+            <h3 className="text-sm font-medium text-[#202124] mb-3">Usage</h3>
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-[#5f6368]">Searches today</span>
+                <span className="text-[#202124] font-medium">
+                  {usage.hasOwnKey ? 'Unlimited' : `${usage.searchesUsedToday} / ${usage.searchLimit}`}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-[#5f6368]">Videos indexed this month</span>
+                <span className="text-[#202124] font-medium">
+                  {usage.hasOwnKey ? 'Unlimited' : `${usage.indexesUsedThisMonth} / ${usage.indexLimit}`}
+                </span>
+              </div>
+              {!usage.hasOwnKey && (
+                <div className="mt-2">
+                  <div className="h-1.5 bg-[#e8eaed] rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#1a73e8] rounded-full transition-all"
+                      style={{ width: `${Math.min(100, (usage.searchesUsedToday / usage.searchLimit) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-[#202124] mb-1">
-              Gemini API Key
+              Gemini API Key {usage?.hasOwnKey && <span className="text-green-600 font-normal">(active)</span>}
             </label>
             <p className="text-xs text-[#5f6368] mb-2">
-              Get your free API key from{' '}
+              Add your own key for unlimited usage. Get one from{' '}
               <a
                 href="https://aistudio.google.com/app/apikey"
                 target="_blank"
@@ -82,7 +116,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 type={showKey ? 'text' : 'password'}
                 value={apiKey}
                 onChange={(e) => { setApiKey(e.target.value); setSaved(false); }}
-                placeholder="AIza..."
+                placeholder={usage?.hasOwnKey ? '(key stored securely)' : 'AIza...'}
                 className="w-full px-3 py-2 border border-[#dadce0] rounded-md focus:outline-none focus:border-[#1a73e8] text-sm pr-10"
               />
               <button
@@ -105,17 +139,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           </div>
 
           <div className="bg-[#e8f0fe] text-[#1967d2] text-xs p-3 rounded-md">
-            <strong>Privacy:</strong> Your API key is stored locally in your browser and never sent to our servers.
-            It's only used to make requests directly to Google's Gemini API.
+            <strong>Security:</strong> Your API key is encrypted and stored on the server.
+            It's used only for your Gemini API requests and is never shared.
           </div>
         </div>
 
         <div className="flex justify-between mt-6">
           <button
             onClick={handleClear}
-            className="text-sm text-[#5f6368] hover:text-[#c5221f] px-3 py-2"
+            disabled={saving}
+            className="text-sm text-[#5f6368] hover:text-[#c5221f] px-3 py-2 disabled:opacity-50"
           >
-            Clear Key
+            Remove Key
           </button>
           <div className="flex gap-2">
             <button
@@ -126,9 +161,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             </button>
             <button
               onClick={handleSave}
-              className="text-sm bg-[#1a73e8] hover:bg-[#1557b0] text-white px-4 py-2 rounded-md font-medium"
+              disabled={saving || !apiKey.trim()}
+              className="text-sm bg-[#1a73e8] hover:bg-[#1557b0] text-white px-4 py-2 rounded-md font-medium disabled:opacity-50"
             >
-              {saved ? '✓ Saved!' : 'Save'}
+              {saved ? 'Saved!' : saving ? 'Saving...' : 'Save Key'}
             </button>
           </div>
         </div>
