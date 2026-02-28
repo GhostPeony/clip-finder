@@ -21,5 +21,9 @@ youtube-transcript-api>=1.0.0  # Transcript extraction
 langchain-google-genai>=4.1.2  # Uses google-genai SDK, supports Gemini 2.0+
 langchain-chroma>=1.1.0  # Vector store
 
+# Supabase
+supabase>=2.0.0
+python-jose[cryptography]>=3.3.0  # JWT validation
+
 # Environment
 python-dotenv>=1.0.0
