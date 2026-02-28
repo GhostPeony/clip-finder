@@ -19,7 +19,6 @@ youtube-transcript-api>=1.0.0  # Transcript extraction
 # LangChain + Google AI (Latest versions as of Dec 2025)
 # See: https://github.com/langchain-ai/langchain-google/discussions/1422
 langchain-google-genai>=4.1.2  # Uses google-genai SDK, supports Gemini 2.0+
-langchain-chroma>=1.1.0  # Vector store
 
 # Supabase
 supabase>=2.0.0

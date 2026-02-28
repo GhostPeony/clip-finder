@@ -29,9 +29,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 
-# Import pgvector-backed modules
-from ingest_pg import ingest_url_pg
-from rag_pg import search_pg, get_library_pg, delete_video_pg, get_video_transcript_pg
+from ingest import ingest_url_pg
+from rag import search_pg, get_library_pg, delete_video_pg, get_video_transcript_pg
 from db import (
     get_current_user,
     get_supabase,

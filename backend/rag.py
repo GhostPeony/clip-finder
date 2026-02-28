@@ -1,248 +1,368 @@
 """
-rag.py - RAG Search Engine for YouTube Content
+rag.py - Supabase/pgvector search engine
 
-Retrieves relevant video clips from ChromaDB and generates answers with citations
-using Gemini 2.0 Flash.
+Primary search module using PostgreSQL + pgvector similarity search.
+Queries are scoped to channels the authenticated user is subscribed to via
+the search_chunks RPC function.
 
-Key Features:
-- Semantic search across all indexed video transcripts
-- Returns timestamped deep links to exact video moments
-- Uses [[clip_N]] citation format for frontend parsing
-- LCEL chain for clean, composable architecture
+Also provides library, transcript, and channel/video management helpers.
 
-Updated: 2025-12-28
-LangChain Google Package: langchain-google-genai>=4.0.0 (consolidated SDK)
+Updated: 2026-02-28
 """
 
 import os
-from typing import TypedDict
+from typing import Optional
+
 from dotenv import load_dotenv
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_chroma import Chroma
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from db import get_supabase
 
-# Load environment variables from parent directory (where .env.local lives)
+# Load environment variables
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env.local')
-loaded = load_dotenv(env_path)
-print(f"[RAG] Loaded .env.local: {loaded}, path: {env_path}")
+load_dotenv(env_path)
 
-# Verify API key is loaded
-api_key = os.getenv("GEMINI_API_KEY")
-if api_key:
-    print(f"[RAG] API key loaded: {api_key[:10]}...")
-else:
-    print(f"[RAG] WARNING: No API key found in environment!")
-
-# Configuration - use absolute path to avoid issues with working directory
-DB_PATH = os.path.join(os.path.dirname(__file__), "channel_chroma_db")
 EMBEDDING_MODEL = "models/gemini-embedding-001"
-LLM_MODEL = "gemini-2.5-flash-lite"  # Fast, cost-effective (2.0-flash retiring March 2026)
-TOP_K_RESULTS = 5  # Number of relevant clips to retrieve
+
+# Cache for embedding instances keyed by api_key prefix
+_embeddings_cache: dict[str, GoogleGenerativeAIEmbeddings] = {}
 
 
-class VideoClip(TypedDict):
-    """Video clip structure matching frontend expectations."""
-    id: str
-    videoId: str
-    title: str
-    channelName: str
-    startSeconds: int
-    endSeconds: int
-    content: str
-    thumbnailUrl: str
-
-
-class SearchResult(TypedDict):
-    """Search result structure matching frontend expectations."""
-    answer: str
-    relevantClips: list[VideoClip]
-
-
-# Cache for singleton instances (avoid recreating API clients)
-_embeddings_instance = None
-_embeddings_api_key = None  # Track key for embeddings
-_llm_instance = None
-_llm_api_key = None  # Track key for LLM
-_vectorstore_instance = None
-_vectorstore_api_key = None  # Track key for vectorstore
-
-
-def get_embeddings(api_key: str = None) -> GoogleGenerativeAIEmbeddings:
-    """Get embeddings instance with API key from parameter or environment."""
-    global _embeddings_instance, _embeddings_api_key
-
+def _get_embeddings(api_key: Optional[str] = None) -> GoogleGenerativeAIEmbeddings:
+    """Get cached embedding instance configured for retrieval queries."""
     key_to_use = api_key or os.getenv("GEMINI_API_KEY")
     if not key_to_use or key_to_use == "PLACEHOLDER_API_KEY":
-        raise ValueError("No API key provided. Set GEMINI_API_KEY or provide via header.")
+        raise ValueError(
+            "No API key provided. Set GEMINI_API_KEY in .env.local or provide via header."
+        )
 
-    # Reuse existing instance if same key (compare first 10 chars to handle minor differences)
-    if _embeddings_instance is not None and _embeddings_api_key and key_to_use:
-        if _embeddings_api_key[:10] == key_to_use[:10]:
-            return _embeddings_instance
+    if key_to_use in _embeddings_cache:
+        return _embeddings_cache[key_to_use]
 
-    print(f"[RAG] Creating new embeddings instance (key: {key_to_use[:8]}...)")
-    _embeddings_api_key = key_to_use
-    _embeddings_instance = GoogleGenerativeAIEmbeddings(
+    instance = GoogleGenerativeAIEmbeddings(
         model=EMBEDDING_MODEL,
-        google_api_key=key_to_use
-    )
-    return _embeddings_instance
-
-
-def get_llm(api_key: str = None) -> ChatGoogleGenerativeAI:
-    """Get LLM instance with API key from parameter or environment."""
-    global _llm_instance, _llm_api_key
-
-    key_to_use = api_key or os.getenv("GEMINI_API_KEY")
-    if not key_to_use or key_to_use == "PLACEHOLDER_API_KEY":
-        raise ValueError("No API key provided. Set GEMINI_API_KEY or provide via header.")
-
-    # Reuse existing instance if same key
-    if _llm_instance is not None and _llm_api_key and key_to_use:
-        if _llm_api_key[:10] == key_to_use[:10]:
-            return _llm_instance
-
-    print(f"[RAG] Creating new LLM instance (key: {key_to_use[:8]}...)")
-    _llm_api_key = key_to_use
-    _llm_instance = ChatGoogleGenerativeAI(
-        model=LLM_MODEL,
         google_api_key=key_to_use,
-        temperature=0.3,
+        task_type="RETRIEVAL_QUERY",
     )
-    return _llm_instance
+    _embeddings_cache[key_to_use] = instance
+    return instance
 
 
-def get_vectorstore(api_key: str = None) -> Chroma:
-    """Get ChromaDB vector store with optional API key for embeddings."""
-    global _vectorstore_instance, _vectorstore_api_key
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
 
-    key_to_use = api_key or os.getenv("GEMINI_API_KEY")
-
-    # Reuse existing instance if same key
-    if _vectorstore_instance is not None and _vectorstore_api_key and key_to_use:
-        if _vectorstore_api_key[:10] == key_to_use[:10]:
-            return _vectorstore_instance
-
-    print(f"[RAG] Creating new vectorstore instance (key: {key_to_use[:8] if key_to_use else 'None'}...)")
-    _vectorstore_api_key = key_to_use
-    _vectorstore_instance = Chroma(
-        persist_directory=DB_PATH,
-        embedding_function=get_embeddings(api_key),
-        collection_name="video_knowledge"
-    )
-    return _vectorstore_instance
-
-
-def search(query: str, api_key: str = None, limit: int = 5) -> SearchResult:
+def search_pg(
+    query: str,
+    user_id: str,
+    api_key: Optional[str] = None,
+    limit: int = 5,
+) -> dict:
     """
-    Search the indexed videos and return relevant clips with transcripts.
+    Semantic search scoped to a user's subscribed channels.
+
+    Embeds the query, calls the search_chunks RPC function, and returns
+    results in the same SearchResult format as rag.py.
 
     Args:
-        query: The user's question
-        api_key: Optional API key override (for BYOK)
-        limit: Number of results to return (default 5)
+        query: The user's search text.
+        user_id: Supabase auth user UUID.
+        api_key: Optional Gemini API key override (BYOK).
+        limit: Maximum number of clips to return.
 
     Returns:
-        SearchResult with clips containing their transcript content
+        SearchResult dict with 'answer' (empty string) and 'relevantClips'.
     """
-    print(f"[SEARCH] Starting search for: {query[:50]}... (limit={limit})")
+    print(f"[SEARCH_PG] Starting search for: {query[:50]}... (user={user_id[:8]}, limit={limit})")
 
-    # Check if database exists
-    print(f"[SEARCH] Getting vectorstore...")
-    vectorstore = get_vectorstore(api_key)
+    supabase = get_supabase()
 
-    # Get retriever - request extra results to compensate for intro filtering
-    print(f"[SEARCH] Creating retriever...")
-    retriever = vectorstore.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": limit * 2}  # Get extra to filter from
-    )
+    # 1. Embed the query
+    embeddings = _get_embeddings(api_key)
+    query_vector = embeddings.embed_query(query)
+    print(f"[SEARCH_PG] Embedded query ({len(query_vector)} dims)")
 
-    # Retrieve relevant documents
-    print(f"[SEARCH] Invoking retriever (this calls embeddings API once)...")
-    docs = retriever.invoke(query)
-    print(f"[SEARCH] Found {len(docs)} documents")
+    # 2. Call the search_chunks RPC function
+    #    Request limit*2 to have room after any client-side filtering
+    result = supabase.rpc("search_chunks", {
+        "query_embedding": query_vector,
+        "match_user_id": user_id,
+        "match_limit": limit * 2,
+        "min_start_seconds": 120,
+    }).execute()
 
-    if not docs:
-        return {
-            "answer": "",  # No AI overview needed
-            "relevantClips": []
-        }
+    rows = result.data or []
+    print(f"[SEARCH_PG] RPC returned {len(rows)} rows")
 
-    # Build clips list with transcript content
-    # Filter out intro clips (first 2 minutes) - they're often teasers, not the real content
-    SKIP_INTRO_SECONDS = 120
-    clips: list[VideoClip] = []
-
-    clip_index = 0
-    for doc in docs:
+    # 3. Map to VideoClip dicts (same format frontend expects)
+    clips = []
+    for i, row in enumerate(rows):
         if len(clips) >= limit:
-            break  # We have enough results
+            break
 
-        meta = doc.metadata
-        start_seconds = int(meta.get("start_seconds", 0))
+        clips.append({
+            "id": f"clip_{i}",
+            "videoId": row["youtube_video_id"],
+            "title": row["title"],
+            "channelName": row["channel_name"],
+            "startSeconds": row["start_seconds"],
+            "endSeconds": row["end_seconds"],
+            "content": row["content"],
+            "thumbnailUrl": row["thumbnail_url"] or "",
+        })
 
-        # Skip clips from the intro section
-        if start_seconds < SKIP_INTRO_SECONDS:
-            print(f"[SEARCH] Skipping intro clip at {start_seconds}s")
-            continue
-
-        clip_id = f"clip_{clip_index}"
-        clip_index += 1
-
-        # Create clip object for frontend with full transcript content
-        clip: VideoClip = {
-            "id": clip_id,
-            "videoId": meta.get("video_id", ""),
-            "title": meta.get("title", "Unknown"),
-            "channelName": meta.get("channel_name", "Unknown"),
-            "startSeconds": start_seconds,
-            "endSeconds": int(meta.get("end_seconds", 0)),
-            "content": doc.page_content,  # Full transcript, not truncated
-            "thumbnailUrl": meta.get("thumbnail_url", "")
-        }
-        clips.append(clip)
+    print(f"[SEARCH_PG] Returning {len(clips)} clips")
 
     return {
-        "answer": "",  # Empty - frontend will show transcript content directly
-        "relevantClips": clips
+        "answer": "",
+        "relevantClips": clips,
     }
 
 
-def _format_time(seconds: int) -> str:
-    """Format seconds as MM:SS."""
-    m = seconds // 60
-    s = seconds % 60
-    return f"{m}:{s:02d}"
+# ---------------------------------------------------------------------------
+# Library
+# ---------------------------------------------------------------------------
+
+def get_library_pg(user_id: str) -> dict:
+    """
+    Return the user's subscribed channels with their videos and clip counts.
+
+    Matches the LibraryData format expected by the frontend:
+    {
+        "channels": [{"name": "...", "videoCount": N, "videos": [...]}],
+        "totalVideos": N,
+        "totalClips": N,
+    }
+    """
+    supabase = get_supabase()
+
+    # Get user's subscribed channels
+    uc_result = (
+        supabase.table("user_channels")
+        .select("channel_id, channels(id, name)")
+        .eq("user_id", user_id)
+        .execute()
+    )
+
+    subscriptions = uc_result.data or []
+
+    channels_list = []
+    total_videos = 0
+    total_clips = 0
+
+    for sub in subscriptions:
+        channel_data = sub.get("channels")
+        if not channel_data:
+            continue
+
+        channel_id = channel_data["id"]
+        channel_name = channel_data["name"]
+
+        # Get all videos for this channel
+        videos_result = (
+            supabase.table("videos")
+            .select("id, youtube_video_id, title, thumbnail_url, indexed_at")
+            .eq("channel_id", channel_id)
+            .order("indexed_at", desc=True)
+            .execute()
+        )
+
+        videos_data = videos_result.data or []
+        channel_videos = []
+
+        for video in videos_data:
+            # Get clip count via RPC
+            count_result = supabase.rpc(
+                "count_chunks_for_video",
+                {"vid_id": video["id"]},
+            ).execute()
+            clip_count = count_result.data if isinstance(count_result.data, int) else 0
+
+            total_clips += clip_count
+
+            # Parse indexed_at to unix timestamp
+            indexed_at_ts = None
+            if video.get("indexed_at"):
+                from datetime import datetime
+                try:
+                    dt = datetime.fromisoformat(video["indexed_at"].replace("Z", "+00:00"))
+                    indexed_at_ts = int(dt.timestamp())
+                except (ValueError, AttributeError):
+                    pass
+
+            channel_videos.append({
+                "videoId": video["youtube_video_id"],
+                "title": video["title"],
+                "thumbnailUrl": video["thumbnail_url"] or "",
+                "clipCount": clip_count,
+                "indexedAt": indexed_at_ts,
+            })
+
+        total_videos += len(channel_videos)
+
+        channels_list.append({
+            "name": channel_name,
+            "videoCount": len(channel_videos),
+            "videos": channel_videos,
+        })
+
+    return {
+        "channels": channels_list,
+        "totalVideos": total_videos,
+        "totalClips": total_clips,
+    }
 
 
-# For testing/standalone usage
-if __name__ == "__main__":
-    import json
+# ---------------------------------------------------------------------------
+# Channel / video management
+# ---------------------------------------------------------------------------
 
-    print("🔎 ClipSeek RAG Search Test\n")
+def delete_user_channel(user_id: str, channel_id: str) -> dict:
+    """
+    Unsubscribe a user from a channel.
 
-    while True:
-        query = input("\nEnter your question (or 'quit' to exit): ").strip()
-        if query.lower() in ('quit', 'exit', 'q'):
-            break
+    If no other users are subscribed, the channel and all its data
+    (videos, chunks) are cascade-deleted.
 
-        print("\n🔍 Searching...\n")
-        result = search(query)
+    Returns:
+        {"deleted": True, "orphaned": bool} where orphaned indicates
+        whether the channel data was also removed.
+    """
+    supabase = get_supabase()
 
-        print("=" * 60)
-        print("ANSWER:")
-        print("=" * 60)
-        print(result["answer"])
+    # Remove subscription
+    supabase.table("user_channels").delete().match({
+        "user_id": user_id,
+        "channel_id": channel_id,
+    }).execute()
 
-        print("\n" + "=" * 60)
-        print("RELEVANT CLIPS:")
-        print("=" * 60)
-        for clip in result["relevantClips"]:
-            timestamp = _format_time(clip["startSeconds"])
-            link = f"https://youtu.be/{clip['videoId']}?t={clip['startSeconds']}"
-            print(f"\n[{clip['id']}] {clip['title']}")
-            print(f"    Time: {timestamp} | {link}")
-            print(f"    Preview: {clip['content'][:100]}...")
+    # Check if any other users are still subscribed
+    remaining = (
+        supabase.table("user_channels")
+        .select("user_id", count="exact")
+        .eq("channel_id", channel_id)
+        .execute()
+    )
+
+    orphaned = (remaining.count or 0) == 0
+
+    if orphaned:
+        # No subscribers left -- delete channel (cascades to videos & chunks)
+        supabase.table("channels").delete().eq("id", channel_id).execute()
+
+    return {"deleted": True, "orphaned": orphaned}
+
+
+def delete_video_pg(video_id_youtube: str, user_id: str) -> dict:
+    """
+    Remove a video by its YouTube video ID.
+
+    Only deletes if the user is subscribed to the channel that owns this
+    video. If the channel would become empty and no other users subscribe
+    to it, the channel is also cleaned up.
+
+    Returns:
+        {"deleted": True} on success, {"deleted": False, "reason": "..."} otherwise.
+    """
+    supabase = get_supabase()
+
+    # Look up the video
+    video_result = (
+        supabase.table("videos")
+        .select("id, channel_id")
+        .eq("youtube_video_id", video_id_youtube)
+        .maybe_single()
+        .execute()
+    )
+
+    if not video_result.data:
+        return {"deleted": False, "reason": "Video not found"}
+
+    video = video_result.data
+    channel_id = video["channel_id"]
+
+    # Verify user is subscribed to this channel
+    sub_check = (
+        supabase.table("user_channels")
+        .select("user_id")
+        .match({"user_id": user_id, "channel_id": channel_id})
+        .maybe_single()
+        .execute()
+    )
+
+    if not sub_check.data:
+        return {"deleted": False, "reason": "Not subscribed to this channel"}
+
+    # Delete the video (cascades to chunks)
+    supabase.table("videos").delete().eq("id", video["id"]).execute()
+
+    # Update channel video count
+    count_result = (
+        supabase.table("videos")
+        .select("id", count="exact")
+        .eq("channel_id", channel_id)
+        .execute()
+    )
+    remaining_videos = count_result.count or 0
+
+    supabase.table("channels").update({
+        "total_videos": remaining_videos,
+    }).eq("id", channel_id).execute()
+
+    # If channel is now empty, check if we should clean it up
+    if remaining_videos == 0:
+        remaining_subs = (
+            supabase.table("user_channels")
+            .select("user_id", count="exact")
+            .eq("channel_id", channel_id)
+            .execute()
+        )
+        # Only one subscriber (the current user) or none -- clean up
+        if (remaining_subs.count or 0) <= 1:
+            supabase.table("user_channels").delete().eq("channel_id", channel_id).execute()
+            supabase.table("channels").delete().eq("id", channel_id).execute()
+
+    return {"deleted": True}
+
+
+# ---------------------------------------------------------------------------
+# Transcript export
+# ---------------------------------------------------------------------------
+
+def get_video_transcript_pg(video_id_youtube: str) -> list[dict]:
+    """
+    Get ordered transcript chunks for a video, suitable for SRT download.
+
+    Args:
+        video_id_youtube: YouTube video ID (e.g. 'dQw4w9WgXcB').
+
+    Returns:
+        List of dicts with keys: content, start_seconds, end_seconds,
+        ordered by start_seconds ascending. Empty list if video not found.
+    """
+    supabase = get_supabase()
+
+    # Look up internal video ID
+    video_result = (
+        supabase.table("videos")
+        .select("id")
+        .eq("youtube_video_id", video_id_youtube)
+        .maybe_single()
+        .execute()
+    )
+
+    if not video_result.data:
+        return []
+
+    db_video_id = video_result.data["id"]
+
+    # Fetch chunks ordered by timestamp
+    chunks_result = (
+        supabase.table("chunks")
+        .select("content, start_seconds, end_seconds")
+        .eq("video_id", db_video_id)
+        .order("start_seconds", desc=False)
+        .execute()
+    )
+
+    return chunks_result.data or []
