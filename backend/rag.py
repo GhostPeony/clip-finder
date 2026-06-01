@@ -16,13 +16,19 @@ from typing import Optional
 from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-from db import get_supabase
+try:
+    from .config import get_embedding_dimensions, get_embedding_model
+    from .db import get_supabase
+except ImportError:
+    from config import get_embedding_dimensions, get_embedding_model
+    from db import get_supabase
 
 # Load environment variables
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env.local')
 load_dotenv(env_path)
 
-EMBEDDING_MODEL = "models/gemini-embedding-001"
+EMBEDDING_MODEL = get_embedding_model()
+NEARBY_CHUNK_SECONDS = 90
 
 # Cache for embedding instances keyed by api_key prefix
 _embeddings_cache: dict[str, GoogleGenerativeAIEmbeddings] = {}
@@ -43,9 +49,32 @@ def _get_embeddings(api_key: Optional[str] = None) -> GoogleGenerativeAIEmbeddin
         model=EMBEDDING_MODEL,
         google_api_key=key_to_use,
         task_type="RETRIEVAL_QUERY",
+        output_dimensionality=get_embedding_dimensions(),
     )
     _embeddings_cache[key_to_use] = instance
     return instance
+
+
+def _is_near_existing_clip(row: dict, clips: list[dict]) -> bool:
+    """Return true when a row is an adjacent duplicate of an existing result."""
+    start_seconds = int(row["start_seconds"])
+    end_seconds = int(row["end_seconds"])
+    for clip in clips:
+        if clip["videoId"] != row["youtube_video_id"]:
+            continue
+        overlaps = start_seconds < clip["endSeconds"] and end_seconds > clip["startSeconds"]
+        nearby = abs(start_seconds - clip["startSeconds"]) < NEARBY_CHUNK_SECONDS
+        if overlaps or nearby:
+            return True
+    return False
+
+
+def _match_snippet(content: str, max_length: int = 240) -> str:
+    """Create a compact transcript snippet for search result trust cues."""
+    normalized = " ".join(content.split())
+    if len(normalized) <= max_length:
+        return normalized
+    return f"{normalized[: max_length - 1].rstrip()}…"
 
 
 # ---------------------------------------------------------------------------
@@ -83,11 +112,11 @@ def search_pg(
     print(f"[SEARCH_PG] Embedded query ({len(query_vector)} dims)")
 
     # 2. Call the search_chunks RPC function
-    #    Request limit*2 to have room after any client-side filtering
+    #    Request extra rows to allow result grouping after intro filtering.
     result = supabase.rpc("search_chunks", {
         "query_embedding": query_vector,
         "match_user_id": user_id,
-        "match_limit": limit * 2,
+        "match_limit": limit * 4,
         "min_start_seconds": 120,
     }).execute()
 
@@ -99,9 +128,11 @@ def search_pg(
     for i, row in enumerate(rows):
         if len(clips) >= limit:
             break
+        if _is_near_existing_clip(row, clips):
+            continue
 
         clips.append({
-            "id": f"clip_{i}",
+            "id": f"clip_{len(clips)}",
             "videoId": row["youtube_video_id"],
             "title": row["title"],
             "channelName": row["channel_name"],
@@ -109,6 +140,9 @@ def search_pg(
             "endSeconds": row["end_seconds"],
             "content": row["content"],
             "thumbnailUrl": row["thumbnail_url"] or "",
+            "similarity": row.get("similarity"),
+            "matchSnippet": _match_snippet(row["content"]),
+            "relevanceReason": "Semantic match in the transcript near this timestamp.",
         })
 
     print(f"[SEARCH_PG] Returning {len(clips)} clips")
@@ -294,6 +328,14 @@ def delete_video_pg(video_id_youtube: str, user_id: str) -> dict:
         return {"deleted": False, "reason": "Not subscribed to this channel"}
 
     # Delete the video (cascades to chunks)
+    chunk_count_result = (
+        supabase.table("chunks")
+        .select("id", count="exact")
+        .eq("video_id", video["id"])
+        .execute()
+    )
+    deleted_clips = chunk_count_result.count or 0
+
     supabase.table("videos").delete().eq("id", video["id"]).execute()
 
     # Update channel video count
@@ -322,14 +364,14 @@ def delete_video_pg(video_id_youtube: str, user_id: str) -> dict:
             supabase.table("user_channels").delete().eq("channel_id", channel_id).execute()
             supabase.table("channels").delete().eq("id", channel_id).execute()
 
-    return {"deleted": True}
+    return {"deleted": True, "deletedClips": deleted_clips}
 
 
 # ---------------------------------------------------------------------------
 # Transcript export
 # ---------------------------------------------------------------------------
 
-def get_video_transcript_pg(video_id_youtube: str) -> list[dict]:
+def get_video_transcript_pg(video_id_youtube: str, user_id: str) -> list[dict]:
     """
     Get ordered transcript chunks for a video, suitable for SRT download.
 
@@ -345,13 +387,24 @@ def get_video_transcript_pg(video_id_youtube: str) -> list[dict]:
     # Look up internal video ID
     video_result = (
         supabase.table("videos")
-        .select("id")
+        .select("id, channel_id")
         .eq("youtube_video_id", video_id_youtube)
         .maybe_single()
         .execute()
     )
 
     if not video_result.data:
+        return []
+
+    sub_check = (
+        supabase.table("user_channels")
+        .select("user_id")
+        .match({"user_id": user_id, "channel_id": video_result.data["channel_id"]})
+        .maybe_single()
+        .execute()
+    )
+
+    if not sub_check.data:
         return []
 
     db_video_id = video_result.data["id"]

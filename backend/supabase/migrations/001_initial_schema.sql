@@ -1,4 +1,4 @@
--- ClipSeek Multi-User Schema
+-- SearchTube Multi-User Schema
 -- Run in Supabase SQL Editor after enabling pgvector
 
 -- Enable pgvector

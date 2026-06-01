@@ -1,5 +1,6 @@
 import { VideoClip, LibraryData, SearchHistoryEntry } from '../types';
 import { supabase } from '../lib/supabase';
+import { AppConfig, isSupabaseAuth } from '../config';
 
 // Use environment variable for production, fallback to localhost for dev
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
@@ -7,15 +8,54 @@ const API_URL = `${API_BASE}/api`;
 
 // Get auth headers from Supabase session
 async function getAuthHeaders(): Promise<Record<string, string>> {
-  const { data: { session } } = await supabase.auth.getSession();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (session?.access_token) {
+
+  if (isSupabaseAuth) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return headers;
     headers['Authorization'] = `Bearer ${session.access_token}`;
   }
+
+  const apiKey = isSupabaseAuth ? null : getStoredLocalApiKey();
+  if (apiKey) {
+    headers['X-API-Key'] = apiKey;
+  }
+
   return headers;
 }
+
+const LOCAL_API_KEY = 'searchtube_local_api_key';
+
+export const getStoredLocalApiKey = (): string | null => {
+  if (typeof localStorage === 'undefined') return null;
+  return localStorage.getItem(LOCAL_API_KEY);
+};
+
+export const saveStoredLocalApiKey = (apiKey: string): void => {
+  localStorage.setItem(LOCAL_API_KEY, apiKey);
+};
+
+export const deleteStoredLocalApiKey = (): void => {
+  localStorage.removeItem(LOCAL_API_KEY);
+};
+
+export const fetchAppConfig = async (): Promise<AppConfig> => {
+  try {
+    const res = await fetch(`${API_URL}/config`);
+    if (!res.ok) throw new Error(`Config error: ${res.statusText}`);
+    return await res.json();
+  } catch {
+    return {
+      storage: isSupabaseAuth ? 'supabase' : 'local',
+      authMode: isSupabaseAuth ? 'supabase' : 'none',
+      hasServerKey: false,
+      apiKeyMode: 'byok',
+      allowUserKeys: true,
+    };
+  }
+};
 
 export const checkBackendHealth = async (): Promise<{ connected: boolean; hasServerKey: boolean }> => {
   try {
@@ -125,10 +165,13 @@ export const searchVideoClips = async (query: string, limit: number = 5): Promis
 // Usage quota
 export interface UsageInfo {
   searchesUsedToday: number;
-  searchLimit: number;
+  searchLimit: number | null;
   indexesUsedThisMonth: number;
-  indexLimit: number;
+  indexLimit: number | null;
   hasOwnKey: boolean;
+  hasServerKey?: boolean;
+  apiKeyMode?: 'server' | 'byok' | 'hybrid';
+  allowUserKeys?: boolean;
 }
 
 export const fetchUsage = async (): Promise<UsageInfo | null> => {
@@ -144,6 +187,11 @@ export const fetchUsage = async (): Promise<UsageInfo | null> => {
 
 // API key management (server-side)
 export const saveApiKey = async (apiKey: string): Promise<boolean> => {
+  if (!isSupabaseAuth) {
+    saveStoredLocalApiKey(apiKey);
+    return true;
+  }
+
   try {
     const headers = await getAuthHeaders();
     const response = await fetch(`${API_URL}/settings/key`, {
@@ -158,6 +206,11 @@ export const saveApiKey = async (apiKey: string): Promise<boolean> => {
 };
 
 export const deleteApiKey = async (): Promise<boolean> => {
+  if (!isSupabaseAuth) {
+    deleteStoredLocalApiKey();
+    return true;
+  }
+
   try {
     const headers = await getAuthHeaders();
     const response = await fetch(`${API_URL}/settings/key`, {
@@ -171,7 +224,7 @@ export const deleteApiKey = async (): Promise<boolean> => {
 };
 
 // Search History (localStorage - kept client-side for now)
-const SEARCH_HISTORY_KEY = 'clipfinder_search_history';
+const SEARCH_HISTORY_KEY = 'searchtube_search_history';
 const MAX_HISTORY_ENTRIES = 20;
 
 export const saveSearchToHistory = (query: string, clips: VideoClip[]): void => {

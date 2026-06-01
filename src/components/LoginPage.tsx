@@ -30,7 +30,7 @@ export function LoginPage() {
               letterSpacing: '-0.02em',
             }}
           >
-            ClipSeek
+            SearchTube
           </h1>
           <p
             className="text-sm tracking-widest uppercase"

@@ -1,0 +1,56 @@
+{
+  "documents": [
+    {
+      "id": "clip_ai_agents",
+      "title": "Building Useful AI Agents",
+      "text": "The important part of an AI agent is not that it loops forever. It needs tools, memory, clear stopping criteria, and a way to recover when a tool call fails."
+    },
+    {
+      "id": "clip_python_errors",
+      "title": "Debugging Python Backends",
+      "text": "When a FastAPI import works as a script but fails through uvicorn, check package-relative imports and the current working directory first."
+    },
+    {
+      "id": "clip_video_editing",
+      "title": "Editing Long YouTube Videos",
+      "text": "Finding the right timestamp in a long video is faster when transcript chunks include enough surrounding context and the search query is semantic."
+    },
+    {
+      "id": "clip_video_editing_adjacent",
+      "title": "Editing Long YouTube Videos",
+      "text": "Adjacent transcript chunks can repeat the same context, so search results should avoid returning five nearby clips from the same video."
+    },
+    {
+      "id": "clip_exact_quote",
+      "title": "Creator Archive Workflow",
+      "text": "The quote I always come back to is search before generation because retrieval has to be trustworthy before the AI writes anything."
+    },
+    {
+      "id": "clip_gardening",
+      "title": "Spring Garden Notes",
+      "text": "Peonies prefer full sun, well drained soil, and shallow planting. Too much shade can reduce blooms in spring."
+    }
+  ],
+  "queries": [
+    {
+      "query": "why does uvicorn fail to import my backend package",
+      "expected": ["clip_python_errors"]
+    },
+    {
+      "query": "how should agentic tools stop and recover from errors",
+      "expected": ["clip_ai_agents"]
+    },
+    {
+      "query": "find exact moments in long youtube transcripts",
+      "expected": ["clip_video_editing", "clip_video_editing_adjacent"]
+    },
+    {
+      "query": "search before generation",
+      "expected": ["clip_exact_quote"]
+    },
+    {
+      "query": "avoid duplicate nearby chunks from the same video",
+      "expected": ["clip_video_editing_adjacent"]
+    }
+  ]
+}

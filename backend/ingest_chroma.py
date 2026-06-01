@@ -8,7 +8,7 @@ Key Features:
 - No YouTube API key required (uses scrapetube)
 - 60-second chunks with timestamps for pinpoint accuracy
 - Smart skip: Only indexes new videos on re-runs
-- Uses text-embedding-004 (recommended, older models deprecated Oct 2025)
+- Uses the configured Gemini embedding model (default: gemini-embedding-001)
 
 Updated: 2025-12-28
 LangChain Google Package: langchain-google-genai>=4.0.0 (consolidated SDK)
@@ -20,10 +20,16 @@ from typing import Generator, Optional
 from dotenv import load_dotenv
 
 import scrapetube
-from youtube_transcript_api import YouTubeTranscriptApi
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
+
+try:
+    from .config import get_embedding_dimensions, get_embedding_model
+    from .youtube_utils import get_transcript_chunks as get_shared_transcript_chunks
+except ImportError:
+    from config import get_embedding_dimensions, get_embedding_model
+    from youtube_utils import get_transcript_chunks as get_shared_transcript_chunks
 
 # Load environment variables from parent directory (where .env.local lives)
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env.local')
@@ -32,12 +38,13 @@ load_dotenv(env_path)
 # Configuration - use absolute path to avoid issues with working directory
 DB_PATH = os.path.join(os.path.dirname(__file__), "channel_chroma_db")
 CHUNK_SIZE_SECONDS = 60  # 60s chunks for pinpoint accuracy
-EMBEDDING_MODEL = "models/gemini-embedding-001"  # Replacement for deprecated text-embedding-004
+EMBEDDING_MODEL = get_embedding_model()
 
 # Cache for singleton instances (avoid recreating API clients)
 _embeddings_instance = None
 _vectorstore_instance = None
 _current_api_key = None  # Track which API key is being used
+_vectorstore_api_key = None
 
 
 def get_embeddings(api_key: str = None) -> GoogleGenerativeAIEmbeddings:
@@ -57,30 +64,35 @@ def get_embeddings(api_key: str = None) -> GoogleGenerativeAIEmbeddings:
     _current_api_key = key_to_use
     _embeddings_instance = GoogleGenerativeAIEmbeddings(
         model=EMBEDDING_MODEL,
-        google_api_key=key_to_use
+        google_api_key=key_to_use,
+        task_type="RETRIEVAL_DOCUMENT",
+        output_dimensionality=get_embedding_dimensions(),
     )
     return _embeddings_instance
 
 
-def get_vectorstore() -> Chroma:
+def get_vectorstore(api_key: str = None) -> Chroma:
     """Get cached ChromaDB vector store."""
-    global _vectorstore_instance
+    global _vectorstore_instance, _vectorstore_api_key
 
-    if _vectorstore_instance is not None:
+    key_to_use = api_key or os.getenv("GEMINI_API_KEY")
+
+    if _vectorstore_instance is not None and _vectorstore_api_key == key_to_use:
         return _vectorstore_instance
 
+    _vectorstore_api_key = key_to_use
     _vectorstore_instance = Chroma(
         persist_directory=DB_PATH,
-        embedding_function=get_embeddings(),
+        embedding_function=get_embeddings(api_key),
         collection_name="video_knowledge"
     )
     return _vectorstore_instance
 
 
-def get_indexed_video_ids() -> set:
+def get_indexed_video_ids(api_key: str = None) -> set:
     """Get set of video IDs already in the database."""
     try:
-        vectorstore = get_vectorstore()
+        vectorstore = get_vectorstore(api_key)
         existing = vectorstore.get()
         indexed_ids = set()
         if existing and existing.get('metadatas'):
@@ -371,69 +383,11 @@ def fetch_video_metadata(video_id: str) -> tuple[str, str]:
 
 def get_transcript_chunks(video_id: str) -> list[dict]:
     """
-    Get transcript and split into ~60 second chunks with timestamps.
+    Get transcript and split into overlapping sentence-aware chunks.
 
     Returns list of dicts with: text, start_seconds, end_seconds
     """
-    chunks = []
-
-    try:
-        # Get transcript using youtube-transcript-api v1.x
-        # API changed: now requires instantiation and uses .fetch()
-        api = YouTubeTranscriptApi()
-        fetched = api.fetch(video_id)
-
-        # Convert FetchedTranscript to list of dicts
-        transcript = [
-            {'text': snippet.text, 'start': snippet.start, 'duration': snippet.duration}
-            for snippet in fetched
-        ]
-
-        if not transcript:
-            return []
-
-        # Group transcript entries into ~60 second chunks
-        current_chunk_text = ""
-        current_chunk_start = 0
-        current_duration = 0
-
-        for entry in transcript:
-            text = entry.get('text', '')
-            start = entry.get('start', 0)
-            duration = entry.get('duration', 0)
-
-            # Start new chunk if this is the first entry
-            if not current_chunk_text:
-                current_chunk_start = start
-
-            current_chunk_text += " " + text
-            current_duration += duration
-
-            # If chunk is ~60 seconds, save it and start new one
-            if current_duration >= CHUNK_SIZE_SECONDS:
-                chunks.append({
-                    'text': current_chunk_text.strip(),
-                    'start_seconds': int(current_chunk_start),
-                    'end_seconds': int(start + duration)
-                })
-
-                # Reset for next chunk (with small overlap for context)
-                current_chunk_text = ""
-                current_duration = 0
-
-        # Don't forget the last chunk
-        if current_chunk_text.strip():
-            chunks.append({
-                'text': current_chunk_text.strip(),
-                'start_seconds': int(current_chunk_start),
-                'end_seconds': int(transcript[-1].get('start', 0) + transcript[-1].get('duration', 0))
-            })
-
-    except Exception as e:
-        # Common: No transcript available, video is live, or region locked
-        pass
-
-    return chunks
+    return get_shared_transcript_chunks(video_id)
 
 
 def detect_url_type(url: str) -> tuple[str, Optional[str]]:
@@ -489,7 +443,7 @@ def detect_url_type(url: str) -> tuple[str, Optional[str]]:
     return ('unknown', None)
 
 
-def ingest_single_video(video_id: str) -> Generator[str, None, None]:
+def ingest_single_video(video_id: str, api_key: str = None) -> Generator[str, None, None]:
     """
     Index a single YouTube video.
 
@@ -502,7 +456,7 @@ def ingest_single_video(video_id: str) -> Generator[str, None, None]:
     yield f"🎬 Processing single video: {video_id}"
 
     # Check if already indexed
-    indexed_ids = get_indexed_video_ids()
+    indexed_ids = get_indexed_video_ids(api_key)
     if video_id in indexed_ids:
         yield "✅ This video is already indexed!"
         return
@@ -517,12 +471,12 @@ def ingest_single_video(video_id: str) -> Generator[str, None, None]:
     chunks = get_transcript_chunks(video_id)
 
     if not chunks:
-        yield "❌ No transcript available for this video"
+        yield "❌ Skipped: transcript unavailable, disabled, restricted, or still processing"
         return
 
     yield f"📊 Found {len(chunks)} transcript chunks"
 
-    vectorstore = get_vectorstore()
+    vectorstore = get_vectorstore(api_key)
     indexed_at = int(time.time())
 
     documents = []
@@ -551,7 +505,7 @@ def ingest_single_video(video_id: str) -> Generator[str, None, None]:
     yield "🎉 Complete!"
 
 
-def ingest_playlist(playlist_id: str) -> Generator[str, None, None]:
+def ingest_playlist(playlist_id: str, api_key: str = None) -> Generator[str, None, None]:
     """
     Index all videos from a YouTube playlist.
 
@@ -573,7 +527,7 @@ def ingest_playlist(playlist_id: str) -> Generator[str, None, None]:
     yield f"📊 Found {total_videos} videos in playlist"
 
     # Get already indexed video IDs to skip
-    indexed_ids = get_indexed_video_ids()
+    indexed_ids = get_indexed_video_ids(api_key)
     yield f"📚 Database contains {len(indexed_ids)} previously indexed videos"
 
     # Filter to only new videos
@@ -585,7 +539,7 @@ def ingest_playlist(playlist_id: str) -> Generator[str, None, None]:
 
     yield f"🆕 {len(new_videos)} new videos to index"
 
-    vectorstore = get_vectorstore()
+    vectorstore = get_vectorstore(api_key)
     indexed_count = 0
     skipped_count = 0
 
@@ -599,7 +553,7 @@ def ingest_playlist(playlist_id: str) -> Generator[str, None, None]:
         chunks = get_transcript_chunks(video_id)
 
         if not chunks:
-            yield f"   ⏭️ Skipped (no transcript available)"
+            yield "   ⏭️ Skipped: transcript unavailable, disabled, restricted, or still processing"
             skipped_count += 1
             continue
 
@@ -634,7 +588,7 @@ def ingest_playlist(playlist_id: str) -> Generator[str, None, None]:
     yield f"🎉 Complete! Indexed {indexed_count} videos ({skipped_count} skipped)"
 
 
-def ingest_channel(channel_url: str) -> Generator[str, None, None]:
+def ingest_channel(channel_url: str, api_key: str = None) -> Generator[str, None, None]:
     """
     Index all videos from a YouTube channel.
 
@@ -675,7 +629,7 @@ def ingest_channel(channel_url: str) -> Generator[str, None, None]:
     yield f"📺 Channel: {channel_name}"
 
     # Get already indexed video IDs to skip
-    indexed_ids = get_indexed_video_ids()
+    indexed_ids = get_indexed_video_ids(api_key)
     yield f"📚 Database contains {len(indexed_ids)} previously indexed videos"
 
     # Filter to only new videos
@@ -688,7 +642,7 @@ def ingest_channel(channel_url: str) -> Generator[str, None, None]:
     yield f"🆕 {len(new_videos)} new videos to index"
 
     # Get vectorstore for adding documents
-    vectorstore = get_vectorstore()
+    vectorstore = get_vectorstore(api_key)
 
     indexed_count = 0
     skipped_count = 0
@@ -704,7 +658,7 @@ def ingest_channel(channel_url: str) -> Generator[str, None, None]:
         chunks = get_transcript_chunks(video_id)
 
         if not chunks:
-            yield f"   ⏭️ Skipped (no transcript available)"
+            yield "   ⏭️ Skipped: transcript unavailable, disabled, restricted, or still processing"
             skipped_count += 1
             continue
 
@@ -743,7 +697,7 @@ def ingest_channel(channel_url: str) -> Generator[str, None, None]:
     yield f"🎉 Complete! Indexed {indexed_count} videos ({skipped_count} skipped)"
 
 
-def ingest_url(url: str) -> Generator[str, None, None]:
+def ingest_url(url: str, api_key: str = None) -> Generator[str, None, None]:
     """
     Smart ingestion that auto-detects URL type and handles appropriately.
 
@@ -763,11 +717,11 @@ def ingest_url(url: str) -> Generator[str, None, None]:
     yield f"🔗 Detected URL type: {url_type.upper()}"
 
     if url_type == 'channel':
-        yield from ingest_channel(url)
+        yield from ingest_channel(url, api_key)
     elif url_type == 'playlist':
-        yield from ingest_playlist(extracted_id)
+        yield from ingest_playlist(extracted_id, api_key)
     elif url_type == 'video':
-        yield from ingest_single_video(extracted_id)
+        yield from ingest_single_video(extracted_id, api_key)
     else:
         yield f"❌ Could not detect URL type. Please provide a valid YouTube channel, playlist, or video URL."
         yield "   Examples:"

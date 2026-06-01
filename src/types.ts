@@ -7,6 +7,9 @@ export interface VideoClip {
   endSeconds: number;
   content: string; // The transcript text for this chunk
   thumbnailUrl: string;
+  similarity?: number;
+  matchSnippet?: string;
+  relevanceReason?: string;
 }
 
 export interface SearchState {

@@ -23,23 +23,21 @@ from langchain_chroma import Chroma
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
+try:
+    from .config import get_embedding_dimensions, get_embedding_model, get_llm_model
+except ImportError:
+    from config import get_embedding_dimensions, get_embedding_model, get_llm_model
+
 # Load environment variables from parent directory (where .env.local lives)
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env.local')
-loaded = load_dotenv(env_path)
-print(f"[RAG] Loaded .env.local: {loaded}, path: {env_path}")
-
-# Verify API key is loaded
-api_key = os.getenv("GEMINI_API_KEY")
-if api_key:
-    print(f"[RAG] API key loaded: {api_key[:10]}...")
-else:
-    print(f"[RAG] WARNING: No API key found in environment!")
+load_dotenv(env_path)
 
 # Configuration - use absolute path to avoid issues with working directory
 DB_PATH = os.path.join(os.path.dirname(__file__), "channel_chroma_db")
-EMBEDDING_MODEL = "models/gemini-embedding-001"
-LLM_MODEL = "gemini-2.5-flash-lite"  # Fast, cost-effective (2.0-flash retiring March 2026)
+EMBEDDING_MODEL = get_embedding_model()
+LLM_MODEL = get_llm_model()
 TOP_K_RESULTS = 5  # Number of relevant clips to retrieve
+NEARBY_CHUNK_SECONDS = 90
 
 
 class VideoClip(TypedDict):
@@ -52,6 +50,8 @@ class VideoClip(TypedDict):
     endSeconds: int
     content: str
     thumbnailUrl: str
+    matchSnippet: str
+    relevanceReason: str
 
 
 class SearchResult(TypedDict):
@@ -86,7 +86,9 @@ def get_embeddings(api_key: str = None) -> GoogleGenerativeAIEmbeddings:
     _embeddings_api_key = key_to_use
     _embeddings_instance = GoogleGenerativeAIEmbeddings(
         model=EMBEDDING_MODEL,
-        google_api_key=key_to_use
+        google_api_key=key_to_use,
+        task_type="RETRIEVAL_QUERY",
+        output_dimensionality=get_embedding_dimensions(),
     )
     return _embeddings_instance
 
@@ -133,6 +135,24 @@ def get_vectorstore(api_key: str = None) -> Chroma:
         collection_name="video_knowledge"
     )
     return _vectorstore_instance
+
+
+def _is_near_existing_clip(video_id: str, start_seconds: int, end_seconds: int, clips: list[VideoClip]) -> bool:
+    for clip in clips:
+        if clip["videoId"] != video_id:
+            continue
+        overlaps = start_seconds < clip["endSeconds"] and end_seconds > clip["startSeconds"]
+        nearby = abs(start_seconds - clip["startSeconds"]) < NEARBY_CHUNK_SECONDS
+        if overlaps or nearby:
+            return True
+    return False
+
+
+def _match_snippet(content: str, max_length: int = 240) -> str:
+    normalized = " ".join(content.split())
+    if len(normalized) <= max_length:
+        return normalized
+    return f"{normalized[: max_length - 1].rstrip()}…"
 
 
 def search(query: str, api_key: str = None, limit: int = 5) -> SearchResult:
@@ -183,10 +203,15 @@ def search(query: str, api_key: str = None, limit: int = 5) -> SearchResult:
 
         meta = doc.metadata
         start_seconds = int(meta.get("start_seconds", 0))
+        end_seconds = int(meta.get("end_seconds", 0))
+        video_id = meta.get("video_id", "")
 
         # Skip clips from the intro section
         if start_seconds < SKIP_INTRO_SECONDS:
             print(f"[SEARCH] Skipping intro clip at {start_seconds}s")
+            continue
+        if _is_near_existing_clip(video_id, start_seconds, end_seconds, clips):
+            print(f"[SEARCH] Skipping nearby duplicate clip at {start_seconds}s")
             continue
 
         clip_id = f"clip_{clip_index}"
@@ -195,13 +220,15 @@ def search(query: str, api_key: str = None, limit: int = 5) -> SearchResult:
         # Create clip object for frontend with full transcript content
         clip: VideoClip = {
             "id": clip_id,
-            "videoId": meta.get("video_id", ""),
+            "videoId": video_id,
             "title": meta.get("title", "Unknown"),
             "channelName": meta.get("channel_name", "Unknown"),
             "startSeconds": start_seconds,
-            "endSeconds": int(meta.get("end_seconds", 0)),
+            "endSeconds": end_seconds,
             "content": doc.page_content,  # Full transcript, not truncated
-            "thumbnailUrl": meta.get("thumbnail_url", "")
+            "thumbnailUrl": meta.get("thumbnail_url", ""),
+            "matchSnippet": _match_snippet(doc.page_content),
+            "relevanceReason": "Semantic match in the transcript near this timestamp.",
         }
         clips.append(clip)
 
@@ -222,7 +249,7 @@ def _format_time(seconds: int) -> str:
 if __name__ == "__main__":
     import json
 
-    print("🔎 ClipSeek RAG Search Test\n")
+    print("SearchTube RAG Search Test\n")
 
     while True:
         query = input("\nEnter your question (or 'quit' to exit): ").strip()

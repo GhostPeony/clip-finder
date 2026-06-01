@@ -173,7 +173,7 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
           </svg>
         </div>
         <h1 className="text-3xl font-normal text-[#202124] mb-2">
-          Clip Finder
+          SearchTube
         </h1>
         <p className="text-[#5f6368] text-base">
           Search your videos like Google. Find that perfect clip in seconds, not hours.

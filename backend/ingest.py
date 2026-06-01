@@ -20,20 +20,32 @@ from typing import Generator, Optional
 from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
-from db import get_supabase
-from ingest_chroma import (
-    detect_url_type,
-    extract_video_title,
-    extract_channel_name,
-    fetch_video_metadata,
-    get_transcript_chunks,
-)
+try:
+    from .config import get_embedding_dimensions, get_embedding_model
+    from .db import get_supabase, check_index_quota, get_user_profile
+    from .youtube_utils import (
+        detect_url_type,
+        extract_video_title,
+        extract_channel_name,
+        fetch_video_metadata,
+        get_transcript_chunks,
+    )
+except ImportError:
+    from config import get_embedding_dimensions, get_embedding_model
+    from db import get_supabase, check_index_quota, get_user_profile
+    from youtube_utils import (
+        detect_url_type,
+        extract_video_title,
+        extract_channel_name,
+        fetch_video_metadata,
+        get_transcript_chunks,
+    )
 
 # Load environment variables
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env.local')
 load_dotenv(env_path)
 
-EMBEDDING_MODEL = "models/gemini-embedding-001"
+EMBEDDING_MODEL = get_embedding_model()
 
 # Cache for embedding instances keyed by api_key
 _embeddings_cache: dict[str, GoogleGenerativeAIEmbeddings] = {}
@@ -53,6 +65,8 @@ def get_embeddings(api_key: Optional[str] = None) -> GoogleGenerativeAIEmbedding
     instance = GoogleGenerativeAIEmbeddings(
         model=EMBEDDING_MODEL,
         google_api_key=key_to_use,
+        task_type="RETRIEVAL_DOCUMENT",
+        output_dimensionality=get_embedding_dimensions(),
     )
     _embeddings_cache[key_to_use] = instance
     return instance
@@ -169,7 +183,7 @@ def index_video_to_pg(
     embeddings = get_embeddings(api_key)
 
     # Generate embeddings for all chunks in one batch call
-    texts = [chunk["text"] for chunk in chunks]
+    texts = [f"{title}\n\n{chunk['text']}" for chunk in chunks]
     vectors = embeddings.embed_documents(texts)
 
     # Create video row
@@ -251,12 +265,17 @@ def ingest_single_video_pg(
         yield "This video is already indexed!"
         return
 
+    profile = get_user_profile(supabase, user_id)
+    if not check_index_quota(profile, 1):
+        yield "Monthly index limit reached. Add your own Gemini API key in Settings to index more videos."
+        return
+
     # Get transcript chunks
     yield "Fetching transcript..."
     chunks = get_transcript_chunks(video_id)
 
     if not chunks:
-        yield "No transcript available for this video"
+        yield "Skipped: transcript unavailable, disabled, restricted, or still processing"
         return
 
     yield f"Found {len(chunks)} transcript chunks"
@@ -331,6 +350,11 @@ def ingest_channel_pg(
 
     yield f"{len(new_videos)} new videos to index"
 
+    profile = get_user_profile(supabase, user_id)
+    if not check_index_quota(profile, len(new_videos)):
+        yield "Monthly index limit reached. Add your own Gemini API key in Settings to index more videos."
+        return
+
     indexed_count = 0
     skipped_count = 0
 
@@ -343,7 +367,7 @@ def ingest_channel_pg(
         chunks = get_transcript_chunks(vid)
 
         if not chunks:
-            yield f"  Skipped (no transcript available)"
+            yield "  Skipped: transcript unavailable, disabled, restricted, or still processing"
             skipped_count += 1
             continue
 
@@ -414,6 +438,11 @@ def ingest_playlist_pg(
 
     yield f"{len(new_videos)} new videos to index"
 
+    profile = get_user_profile(supabase, user_id)
+    if not check_index_quota(profile, len(new_videos)):
+        yield "Monthly index limit reached. Add your own Gemini API key in Settings to index more videos."
+        return
+
     indexed_count = 0
     skipped_count = 0
 
@@ -427,7 +456,7 @@ def ingest_playlist_pg(
         chunks = get_transcript_chunks(vid)
 
         if not chunks:
-            yield f"  Skipped (no transcript available)"
+            yield "  Skipped: transcript unavailable, disabled, restricted, or still processing"
             skipped_count += 1
             continue
 

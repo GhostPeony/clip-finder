@@ -8,6 +8,8 @@ Provides:
 """
 
 import os
+import base64
+import hashlib
 from datetime import date
 
 from dotenv import load_dotenv
@@ -15,6 +17,7 @@ from supabase import create_client, Client
 from jose import jwt, JWTError
 from fastapi import HTTPException, Header
 from typing import Optional
+from cryptography.fernet import Fernet, InvalidToken
 
 # Load environment
 env_path = os.path.join(os.path.dirname(__file__), '..', '.env.local')
@@ -23,6 +26,7 @@ load_dotenv(env_path)
 SUPABASE_URL = os.getenv("VITE_SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
+API_KEY_ENCRYPTION_KEY = os.getenv("API_KEY_ENCRYPTION_KEY", "")
 
 # Free tier limits
 FREE_SEARCHES_PER_DAY = 20
@@ -30,6 +34,36 @@ FREE_INDEXES_PER_MONTH = 50
 
 # Singleton
 _supabase_client: Optional[Client] = None
+
+
+def _get_fernet() -> Fernet:
+    """Build a Fernet cipher from API_KEY_ENCRYPTION_KEY."""
+    if not API_KEY_ENCRYPTION_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="API_KEY_ENCRYPTION_KEY must be set before storing user API keys",
+        )
+
+    key_bytes = hashlib.sha256(API_KEY_ENCRYPTION_KEY.encode("utf-8")).digest()
+    fernet_key = base64.urlsafe_b64encode(key_bytes)
+    return Fernet(fernet_key)
+
+
+def encrypt_api_key(api_key: str) -> str:
+    """Encrypt a user-provided API key before writing it to the database."""
+    return _get_fernet().encrypt(api_key.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_api_key(encrypted_value: str) -> str:
+    """Decrypt a stored API key, with legacy plaintext fallback."""
+    if not encrypted_value:
+        return ""
+
+    try:
+        return _get_fernet().decrypt(encrypted_value.encode("utf-8")).decode("utf-8")
+    except InvalidToken:
+        # Backward compatibility for existing plaintext rows created before encryption.
+        return encrypted_value
 
 
 def get_supabase() -> Client:
@@ -151,5 +185,6 @@ def get_user_api_key(supabase: Client, user_id: str) -> Optional[str]:
     """Get the user's decrypted API key, or None if not set."""
     profile = supabase.table("profiles").select("api_key_enc").eq("id", user_id).single().execute()
     if profile.data:
-        return profile.data.get("api_key_enc")
+        encrypted_value = profile.data.get("api_key_enc")
+        return decrypt_api_key(encrypted_value) if encrypted_value else None
     return None

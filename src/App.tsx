@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { SearchState, VideoClip, AppMode } from './types';
-import { searchVideoClips, checkBackendHealth } from './services/api';
+import { searchVideoClips, checkBackendHealth, fetchAppConfig } from './services/api';
 import { VideoPlayer } from './components/VideoPlayer';
 import { UnifiedSearchView } from './components/UnifiedSearchView';
 import { LibraryView } from './components/LibraryView';
@@ -8,6 +8,7 @@ import { SettingsModal, getStoredApiKey } from './components/SettingsModal';
 import { Toast, useToast } from './components/Toast';
 import { LoginPage } from './components/LoginPage';
 import { useAuth } from './contexts/AuthContext';
+import { isSupabaseAuth } from './config';
 
 const App: React.FC = () => {
   const { user, loading: authLoading, signOut } = useAuth();
@@ -16,6 +17,7 @@ const App: React.FC = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(!!getStoredApiKey());
   const [hasServerKey, setHasServerKey] = useState(false);  // Server has .env key
+  const [allowUserKeys, setAllowUserKeys] = useState(true);
   const { toast, showToast, hideToast } = useToast();
 
   // Auth gate
@@ -27,7 +29,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (!user) {
+  if (isSupabaseAuth && !user) {
     return <LoginPage />;
   }
 
@@ -58,6 +60,10 @@ const App: React.FC = () => {
     checkBackendHealth().then(({ connected, hasServerKey }) => {
       setIsBackendConnected(connected);
       setHasServerKey(hasServerKey);
+    });
+    fetchAppConfig().then((config) => {
+      setHasServerKey(config.hasServerKey);
+      setAllowUserKeys(config.allowUserKeys);
     });
   }, []);
 
@@ -108,7 +114,7 @@ const App: React.FC = () => {
               <circle cx="11" cy="11" r="7" stroke="#ea4335" strokeWidth="2.5" />
               <path d="M16 16l5 5" stroke="#4285f4" strokeWidth="2.5" strokeLinecap="round" />
             </svg>
-            <span className="font-medium text-lg text-[#5f6368]">Clip Finder</span>
+            <span className="font-medium text-lg text-[#5f6368]">SearchTube</span>
           </div>
 
           <div className="flex items-center gap-4">
@@ -143,7 +149,7 @@ const App: React.FC = () => {
             </button>
 
             {/* User avatar + sign out */}
-            {user && (
+            {isSupabaseAuth && user && (
               <div className="flex items-center gap-2">
                 {user.user_metadata?.avatar_url && (
                   <img
@@ -168,6 +174,8 @@ const App: React.FC = () => {
       <SettingsModal
         isOpen={settingsOpen}
         onClose={() => { setSettingsOpen(false); setHasApiKey(!!getStoredApiKey()); }}
+        hasServerKey={hasServerKey}
+        allowUserKeys={allowUserKeys}
       />
 
       {/* Main Content */}
@@ -214,7 +222,7 @@ const App: React.FC = () => {
             </button>
             <div className="bg-white rounded-lg border border-[#dadce0] p-8">
               <div className="flex items-center justify-between mb-6">
-                <h1 className="text-2xl font-normal text-[#202124]">About Clip Finder</h1>
+                <h1 className="text-2xl font-normal text-[#202124]">About SearchTube</h1>
                 <div className="flex items-center gap-4">
                   <a
                     href="https://linkedin.com/in/cadecrussell"
@@ -253,7 +261,7 @@ const App: React.FC = () => {
               </div>
               <div className="text-[#5f6368] space-y-4 text-sm leading-relaxed">
                 <p>
-                  You remember saying something great — but where? Clip Finder indexes your YouTube
+                  You remember saying something great — but where? SearchTube indexes your YouTube
                   channels, making every word searchable. Just describe what you're looking for in
                   plain English, and we'll find the exact moment.
                 </p>
@@ -262,7 +270,7 @@ const App: React.FC = () => {
                   moments, commentary channels, educational creators, and anyone who needs to mine
                   their videos for clips without scrubbing through endless footage.
                 </p>
-                <h2 className="text-lg font-medium text-[#202124] pt-4">Why Clip Finder?</h2>
+                <h2 className="text-lg font-medium text-[#202124] pt-4">Why SearchTube?</h2>
                 <ul className="list-disc list-inside space-y-2">
                   <li><strong>Semantic search</strong> — Find by meaning, not just keywords</li>
                   <li><strong>You control the search</strong> — Find what you're looking for, not AI-guessed "viral moments"</li>
@@ -273,7 +281,7 @@ const App: React.FC = () => {
                 <ol className="list-decimal list-inside space-y-2">
                   <li>Paste any YouTube URL (video, playlist, or channel)</li>
                   <li>We extract and chunk the transcript into searchable segments</li>
-                  <li>Segments are embedded using Google's text-embedding-004 model</li>
+                  <li>Segments are embedded using Google's Gemini embedding model</li>
                   <li>Your questions are matched against the embeddings to find relevant clips</li>
                   <li>An AI summarizes the findings with clickable timestamp citations</li>
                 </ol>
@@ -316,7 +324,7 @@ const App: React.FC = () => {
                   </div>
                 </div>
                 <p className="pt-2">
-                  Clip Finder is an open-source project. Contributions, issues, and feature requests
+                  SearchTube is an open-source project. Contributions, issues, and feature requests
                   are welcome on GitHub.
                 </p>
               </div>
@@ -454,6 +462,11 @@ const App: React.FC = () => {
                       <p className="text-[#3c4043] text-sm leading-relaxed whitespace-pre-wrap">
                         {activeClip.content}
                       </p>
+                      {activeClip.relevanceReason && (
+                        <p className="mt-3 text-xs text-[#5f6368]">
+                          {activeClip.relevanceReason}
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
