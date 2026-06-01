@@ -1,4 +1,4 @@
-# Clip Finder (SearchTube) Dependencies
+# SearchTube Dependencies
 # Updated: 2026-01-24
 #
 # Recommended: Use a virtual environment to avoid conflicts
@@ -19,7 +19,15 @@ youtube-transcript-api>=1.0.0  # Transcript extraction
 # LangChain + Google AI (Latest versions as of Dec 2025)
 # See: https://github.com/langchain-ai/langchain-google/discussions/1422
 langchain-google-genai>=4.1.2  # Uses google-genai SDK, supports Gemini 2.0+
-langchain-chroma>=1.1.0  # Vector store
+langchain-chroma>=1.0.0  # Local self-hosted vector store mode
+
+# Supabase
+supabase>=2.0.0
+python-jose[cryptography]>=3.3.0  # JWT validation
+cryptography>=46.0.0  # BYOK encryption at rest in Supabase mode
 
 # Environment
 python-dotenv>=1.0.0
+
+# Tests
+pytest>=9.0.0

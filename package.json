@@ -1,5 +1,5 @@
 {
-  "name": "clip-finder",
+  "name": "searchtube",
   "private": false,
   "version": "1.0.0",
   "description": "RAG-powered YouTube video search with AI-generated answers and timestamp citations",
@@ -14,33 +14,42 @@
     "langchain",
     "video",
     "transcript",
-    "clip-finder"
+    "searchtube"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/GhostPeony/clip-finder.git"
+    "url": "https://github.com/GhostPeony/SearchTube.git"
   },
-  "homepage": "https://github.com/GhostPeony/clip-finder",
+  "homepage": "https://github.com/GhostPeony/SearchTube",
   "bugs": {
-    "url": "https://github.com/GhostPeony/clip-finder/issues"
+    "url": "https://github.com/GhostPeony/SearchTube/issues"
   },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "verify": "npm run build && npm test && npm audit --audit-level=moderate"
   },
   "dependencies": {
-    "@google/genai": "^1.34.0",
+    "@supabase/supabase-js": "^2.98.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.0",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.4.22",
+    "jsdom": "^27.2.0",
+    "postcss": "^8.5.10",
+    "tailwindcss": "^3.4.18",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.4.2",
+    "vitest": "^4.0.16"
   }
 }

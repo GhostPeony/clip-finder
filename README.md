@@ -1,335 +1,176 @@
-## Clip Finder
+# SearchTube
 
-![clipfinder1](https://github.com/user-attachments/assets/fbdfd867-8975-46b4-af52-c2da019870db)
+AI-powered semantic search for YouTube transcripts. Index channels, playlists, or single videos, then search by meaning and jump straight to the timestamped clip.
 
+SearchTube is now **dual mode**:
 
-Index your favorite YouTube channels, playlists, or individual videos and instantly find the exact quote or conversation you're looking for.
-
-Ever forget where your favorite podcaster dropped that quote you wanted to share with a friend? Can't remember which episode had that perfect explanation? Trying to find a specific scene in a movie that's on YouTube?
-
-Clip Finder solves this.
-
-🎙️ Podcasts — Index entire shows and search for topics, quotes, or guests
-🎓 Educational Content — Index coding tutorials and find exact clips on the topics you need help with
-🎬 Entertainment — Find that scene, that line, that moment
-📺 Any YouTube Content — Channels, playlists, or single videos
-
-
-https://github.com/user-attachments/assets/a6e21dd1-af9a-433c-9ee8-d6dabdccf92c
-
+- **Local mode**: default open-source setup. No auth. Uses local ChromaDB in `backend/channel_chroma_db/`.
+- **Supabase mode**: optional hosted setup. Uses Supabase Auth, Postgres, pgvector, quotas, server-hosted Gemini keys, and optional encrypted BYOK storage.
 
 ## Features
 
-<!-- Add screenshot here -->
+- Semantic transcript search with timestamped YouTube links
+- Channel, playlist, and single-video indexing
+- Smart skip for already-indexed videos
+- Local BYOK support via browser storage
+- Hosted server-key mode with optional encrypted BYOK/hybrid modes
+- Library browser, transcript downloads, result count controls, and recent search history
+- Retrieval eval harness for testing embedding changes before changing defaults
 
-## Features
+## Quick Start: Local Mode
 
-### Search & Discovery
-- **Semantic Search** — Find clips by meaning, not just keywords
-- **Configurable Results** — Choose 1, 3, 5, or 10 clips per search
-- **Intro Skip** — Automatically filters out first 2 minutes to avoid teasers
-- **Timestamp Citations** — Click any result to jump to that exact moment
-
-### Content Indexing
-- **Index Anything** — Channels, playlists, or individual videos
-- **Smart Skip** — Re-running on a channel only indexes new videos
-- **No YouTube API Key** — Uses web scraping (scrapetube) for video discovery
-- **Real-time Progress** — Live status updates via Server-Sent Events
-
-### Library Management
-- **Multiple Views** — Grid layout or grouped by channel
-- **Filter & Sort** — Search by name, sort by date added
-- **Compact/Large Modes** — Choose your preferred density
-- **Search History** — Quick access to your last 20 searches
-- **Delete Videos** — Remove individual videos from your index
-- **Rename Channels** — Fix "Unknown Channel" labels via API
-
-### Transcripts
-- **60-Second Chunks** — Precise segments for accurate timestamps
-- **SRT Export** — Download any video's transcript as subtitles
-- **Full Text View** — Read complete transcript for each clip
-
-### Developer Experience
-- **BYOK** — Bring Your Own Gemini API Key (stored locally in browser)
-- **REST API** — Full API with OpenAPI documentation at `/docs`
-- **Local Storage** — All data stored on your machine in ChromaDB
-
----
-
-## Quick Start
-
-### Prerequisites
-
-- Python 3.12+
-- Node.js 18+
-- [Gemini API Key](https://aistudio.google.com/apikey) (free tier available)
-
-### Installation
+Local mode is the default and does not require Supabase.
 
 ```bash
-# Clone the repository
-git clone https://github.com/GhostPeony/clip-finder.git
-cd clip-finder
+git clone https://github.com/GhostPeony/SearchTube.git
+cd SearchTube
 
-# Create and activate a virtual environment (recommended)
 python -m venv venv
-# Windows:
 venv\Scripts\activate
-# Mac/Linux:
-# source venv/bin/activate
-
-# Install Python dependencies
 pip install -r requirements.txt
 
-# Install Node dependencies
 npm install
 ```
 
-### Configuration
-
-Create a `.env.local` file in the project root:
+Create `.env.local`:
 
 ```env
+SEARCHTUBE_STORAGE=local
+SEARCHTUBE_AUTH_MODE=none
 GEMINI_API_KEY=your_gemini_api_key_here
+VITE_AUTH_MODE=none
+VITE_API_URL=http://localhost:8080
 ```
 
-Or use BYOK mode — add your API key in the app's Settings after launching.
+Run the app:
 
-### Running
-
-**Terminal 1 — Backend (FastAPI on port 8080):**
 ```bash
+# Terminal 1
 python backend/server.py
-```
 
-**Terminal 2 — Frontend (Vite on port 3001):**
-```bash
+# Terminal 2
 npm run dev
 ```
 
-Open **http://localhost:3001** in your browser.
+Open `http://localhost:3001`.
 
----
+## Optional: Supabase Mode
 
-## Usage
+Supabase mode is for hosted, multi-user deployments.
 
-### Index Videos
+Required env vars:
 
-1. Go to the **Home** page
-2. Paste a YouTube URL in the search box:
-   - Channel: `https://www.youtube.com/@ChannelName`
-   - Playlist: `https://www.youtube.com/playlist?list=PLxxxxx`
-   - Video: `https://www.youtube.com/watch?v=xxxxx`
-3. Click **Index** and watch the progress stream in real-time
+```env
+SEARCHTUBE_STORAGE=supabase
+SEARCHTUBE_AUTH_MODE=supabase
+SEARCHTUBE_API_KEY_MODE=server
+VITE_AUTH_MODE=supabase
 
-**Note:** Only videos with captions (including auto-generated) can be indexed.
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SUPABASE_JWT_SECRET=your-jwt-secret
+API_KEY_ENCRYPTION_KEY=a-long-random-secret
 
-### Search Your Library
+GEMINI_API_KEY=your-server-side-key
+LLM_MODEL=gemini-3.1-flash-lite
+VITE_API_URL=http://localhost:8080
+```
 
-1. Check the **Search Library** checkbox
-2. Type a natural language query (e.g., "What did they say about machine learning?")
-3. Choose how many results you want (1-10)
-4. Click **Search**
+Run the SQL migrations in `backend/supabase/migrations/`, enable Google/GitHub OAuth in Supabase, then run the same backend/frontend commands.
 
-### Browse Results
+## Runtime Modes
 
-- **Left sidebar** — Click any clip thumbnail to select it
-- **Main area** — Video player starts at that timestamp
-- **Below video** — Full transcript of the selected segment
-- **Share button** — Copy a YouTube link with timestamp
+| Variable | Values | Default | Purpose |
+|---|---|---:|---|
+| `SEARCHTUBE_STORAGE` | `local`, `supabase` | `local` | Backend storage engine |
+| `SEARCHTUBE_AUTH_MODE` | `none`, `supabase` | derived | Backend auth requirement |
+| `SEARCHTUBE_API_KEY_MODE` | `server`, `byok`, `hybrid` | server if `GEMINI_API_KEY` exists | Gemini key resolution |
+| `VITE_AUTH_MODE` | `none`, `supabase` | `none` | Frontend auth UI mode |
+| `EMBEDDING_MODEL` | model id | `models/gemini-embedding-001` | Embedding model |
+| `EMBEDDING_DIMENSIONS` | integer | `768` | Embedding vector size |
+| `LLM_MODEL` | model id | `gemini-3.1-flash-lite` | Optional answer-generation model |
 
-### Manage Library
+The backend exposes `GET /api/config` so the frontend can discover the active storage/auth/key mode.
 
-1. Click **Library** in the navigation
-2. Use the filter box to search by channel or video name
-3. Toggle between **Grid** and **By Channel** views
-4. Choose **Compact** or **Large** thumbnail sizes
-5. Sort by **Default** or **Recently Added**
-6. Hover over any video to **Download transcript** or **Delete**
+## API
 
-### Download Transcripts
+Backend runs on `http://localhost:8080`.
 
-- In Library view, hover over a video and click the download icon
-- Transcript downloads as an SRT subtitle file
+| Method | Endpoint | Auth in Local | Auth in Supabase | Description |
+|---|---|---:|---:|---|
+| `GET` | `/` | No | No | Health check |
+| `GET` | `/api/config` | No | No | Public runtime config |
+| `GET` | `/api/library` | No | Yes | Indexed library |
+| `POST` | `/api/ingest` | No | Yes | Index YouTube content via SSE |
+| `POST` | `/api/search` | No | Yes | Semantic transcript search |
+| `GET` | `/api/transcript/{video_id}` | No | Yes | Download SRT transcript |
+| `DELETE` | `/api/video/{video_id}` | No | Yes | Delete video or subscription-scoped data |
+| `GET` | `/api/usage` | No | Yes | Quota status |
+| `PUT` | `/api/settings/key` | No | Yes | Save encrypted hosted BYOK when user keys are enabled |
+| `DELETE` | `/api/settings/key` | No | Yes | Remove hosted BYOK when user keys are enabled |
 
----
+Local mode can also send `X-API-Key` for BYOK requests; the frontend stores this in browser localStorage.
 
-## API Reference
+## Embeddings and Evals
 
-The backend runs on `http://localhost:8080` with interactive docs at `/docs`.
+Default embedding config:
 
-### Endpoints
+- Model: `models/gemini-embedding-001`
+- Dimensions: `768`
+- Document task type for indexing
+- Query task type for search
+- Supabase schema remains `VECTOR(768)`
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/` | Health check, returns `{ status, hasApiKey }` |
-| `GET` | `/api/library` | Get all indexed content grouped by channel |
-| `POST` | `/api/ingest` | Index YouTube content (SSE streaming) |
-| `POST` | `/api/search` | Semantic search with optional BYOK header |
-| `GET` | `/api/transcript/{video_id}` | Download transcript as SRT file |
-| `DELETE` | `/api/video/{video_id}` | Delete a video and all its clips |
-| `POST` | `/api/channel/rename` | Rename a channel in the database |
-
-### Example: Search
+Do not switch embedding models blindly. Run:
 
 ```bash
-curl -X POST http://localhost:8080/api/search \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your_gemini_key" \
-  -d '{"query": "How does the creator handle errors?", "limit": 5}'
+python scripts/evaluate_retrieval.py
 ```
 
-### Example: Rename Channel
+To compare candidates:
 
 ```bash
-curl -X POST http://localhost:8080/api/channel/rename \
-  -H "Content-Type: application/json" \
-  -d '{"old_name": "Unknown Channel", "new_name": "Actual Channel Name"}'
+$env:EVAL_EMBEDDING_CANDIDATES="models/gemini-embedding-001:768,models/gemini-embedding-001:1536"
+python scripts/evaluate_retrieval.py
 ```
 
----
+Changing dimensions in Supabase requires a schema migration and full re-embed.
 
-## Configuration
+## Development
 
-### Environment Variables
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `GEMINI_API_KEY` | Google Gemini API key for embeddings and search | Yes* |
-
-*Or use BYOK mode via the Settings modal in the app.
-
-### Tunable Constants
-
-| Setting | File | Default | Description |
-|---------|------|---------|-------------|
-| Chunk size | `backend/ingest.py` | 60 seconds | Transcript segment length |
-| Intro skip | `backend/rag.py` | 120 seconds | Skip clips from first N seconds |
-| Top-K results | `backend/rag.py` | 5 | Default number of search results |
-| Embedding model | `backend/ingest.py` | `text-embedding-004` | Google embedding model |
-| LLM model | `backend/rag.py` | `gemini-2.0-flash` | Model for search |
-
-### Storage
-
-- **Database:** `./channel_chroma_db/` (ChromaDB vector store)
-- **API Key:** Browser localStorage (`clipfinder_api_key`)
-- **Search History:** Browser localStorage (`clipfinder_search_history`)
-
-To reset: delete `./channel_chroma_db/` folder.
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Frontend | React 19, TypeScript, Vite, Tailwind CSS |
-| Backend | FastAPI, Python 3.12 |
-| AI/ML | Google Gemini (`text-embedding-004`, `gemini-2.0-flash`) |
-| Vector DB | ChromaDB (local) |
-| Scraping | scrapetube, youtube-transcript-api |
-
----
-
-## Project Structure
-
-```
-clip-finder/
-├── backend/
-│   ├── server.py          # FastAPI routes and SSE streaming
-│   ├── ingest.py          # YouTube indexing pipeline
-│   └── rag.py             # Semantic search engine
-├── src/
-│   ├── App.tsx            # Main React application
-│   ├── components/
-│   │   ├── UnifiedSearchView.tsx  # Home page (index + search)
-│   │   ├── LibraryView.tsx        # Indexed content browser
-│   │   ├── VideoPlayer.tsx        # YouTube embed wrapper
-│   │   ├── SettingsModal.tsx      # API key management
-│   │   ├── AnswerSection.tsx      # Citation rendering
-│   │   └── Toast.tsx              # Notifications
-│   ├── services/
-│   │   └── api.ts         # Backend client + localStorage
-│   └── types.ts           # TypeScript interfaces
-├── .env.local             # Your API key (create this)
-├── requirements.txt       # Python dependencies
-├── package.json           # Node dependencies
-└── vite.config.ts         # Vite configuration
+```bash
+npm run build
+npm test
+python -m compileall backend
+python -c "import backend.server"
+python -m pytest
 ```
 
----
+Run audit checks:
+
+```bash
+npm audit --audit-level=moderate
+```
 
 ## Docker
 
-```bash
-# Create .env file
-echo "GEMINI_API_KEY=your_key_here" > .env
+Local mode:
 
-# Build and run
+```bash
 docker-compose up --build
 ```
 
-Access at **http://localhost**
-
----
+For Supabase mode, set the Supabase and encryption env vars before building.
 
 ## Troubleshooting
 
-### "No transcript available"
-- The video doesn't have captions (including auto-generated)
-- Some videos have captions disabled by the creator
-
-### "Unknown Channel" appearing
-- Use the rename API to fix: `POST /api/channel/rename`
-- Future indexes will use the correct name
-
-### Rate limiting on large channels
-- Channels with 100+ videos may trigger YouTube rate limits
-- The backend automatically adds delays between requests
-- If issues persist, try indexing in smaller batches
-
-### Search returns no results
-- Make sure you've indexed some content first
-- Check that your Gemini API key is configured
-- Try a broader search query
-
-### Reset everything
-```bash
-# Delete the database
-rm -rf ./channel_chroma_db/
-
-# Clear browser storage (in browser console)
-localStorage.clear()
-```
-
----
-
-## Contributing
-
-Contributions welcome! Feel free to:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Development Setup
-
-```bash
-# Backend with auto-reload
-uvicorn backend.server:app --reload --host 0.0.0.0 --port 8080
-
-# Frontend with hot reload
-npm run dev
-```
-
----
+- **No transcript available**: the video may not have captions or may be region/age restricted.
+- **Backend unavailable**: confirm `python backend/server.py` is running on port `8080`.
+- **Supabase auth fails**: check `VITE_AUTH_MODE=supabase`, OAuth provider setup, and `SUPABASE_JWT_SECRET`.
+- **Vector dimension error**: `EMBEDDING_DIMENSIONS` must match the vector store schema.
+- **Reset local data**: delete `backend/channel_chroma_db/`.
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
-
----
-
-Made by [Ghost Peony](https://ghostpeony.com) · [GitHub](https://github.com/ghostpeony) · [LinkedIn](https://linkedin.com/in/cadecrussell)
+MIT. See [LICENSE](LICENSE).

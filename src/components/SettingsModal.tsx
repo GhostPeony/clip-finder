@@ -1,47 +1,57 @@
 import React, { useState, useEffect } from 'react';
+import { saveApiKey, deleteApiKey, fetchUsage, getStoredLocalApiKey, UsageInfo } from '../services/api';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  hasServerKey?: boolean;
+  allowUserKeys?: boolean;
 }
 
-const API_KEY_STORAGE_KEY = 'clipfinder_api_key';
-
+// Keep for backward compat during migration -- App.tsx still references this
 export const getStoredApiKey = (): string | null => {
-  return localStorage.getItem(API_KEY_STORAGE_KEY);
+  return getStoredLocalApiKey();
 };
 
-export const setStoredApiKey = (key: string | null): void => {
-  if (key) {
-    localStorage.setItem(API_KEY_STORAGE_KEY, key);
-  } else {
-    localStorage.removeItem(API_KEY_STORAGE_KEY);
-  }
-};
-
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({
+  isOpen,
+  onClose,
+  hasServerKey = false,
+  allowUserKeys = true,
+}) => {
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [usage, setUsage] = useState<UsageInfo | null>(null);
 
   useEffect(() => {
     if (isOpen) {
-      const stored = getStoredApiKey();
-      setApiKey(stored || '');
+      setApiKey('');
       setSaved(false);
+      fetchUsage().then(setUsage);
     }
   }, [isOpen]);
 
-  const handleSave = () => {
-    setStoredApiKey(apiKey.trim() || null);
-    setSaved(true);
-    setTimeout(() => onClose(), 1000);
+  const handleSave = async () => {
+    if (!apiKey.trim()) return;
+    setSaving(true);
+    const success = await saveApiKey(apiKey.trim());
+    setSaving(false);
+    if (success) {
+      setSaved(true);
+      fetchUsage().then(setUsage);
+      setTimeout(() => onClose(), 1000);
+    }
   };
 
-  const handleClear = () => {
+  const handleClear = async () => {
+    setSaving(true);
+    await deleteApiKey();
+    setSaving(false);
     setApiKey('');
-    setStoredApiKey(null);
     setSaved(true);
+    fetchUsage().then(setUsage);
   };
 
   if (!isOpen) return null;
@@ -61,62 +71,111 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           </button>
         </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-[#202124] mb-1">
-              Gemini API Key
-            </label>
-            <p className="text-xs text-[#5f6368] mb-2">
-              Get your free API key from{' '}
-              <a
-                href="https://aistudio.google.com/app/apikey"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[#1a73e8] hover:underline"
-              >
-                Google AI Studio
-              </a>
-            </p>
-            <div className="relative">
-              <input
-                type={showKey ? 'text' : 'password'}
-                value={apiKey}
-                onChange={(e) => { setApiKey(e.target.value); setSaved(false); }}
-                placeholder="AIza..."
-                className="w-full px-3 py-2 border border-[#dadce0] rounded-md focus:outline-none focus:border-[#1a73e8] text-sm pr-10"
-              />
-              <button
-                type="button"
-                onClick={() => setShowKey(!showKey)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-[#5f6368] hover:text-[#202124]"
-              >
-                {showKey ? (
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                  </svg>
-                ) : (
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                  </svg>
-                )}
-              </button>
+        {/* Usage Quota */}
+        {usage && (
+          <div className="mb-5 p-4 bg-[#f8f9fa] rounded-lg border border-[#dadce0]">
+            <h3 className="text-sm font-medium text-[#202124] mb-3">Usage</h3>
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-[#5f6368]">Searches today</span>
+                <span className="text-[#202124] font-medium">
+                  {usage.hasOwnKey ? 'Unlimited' : `${usage.searchesUsedToday} / ${usage.searchLimit}`}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-[#5f6368]">Videos indexed this month</span>
+                <span className="text-[#202124] font-medium">
+                  {usage.hasOwnKey ? 'Unlimited' : `${usage.indexesUsedThisMonth} / ${usage.indexLimit}`}
+                </span>
+              </div>
+              {!usage.hasOwnKey && usage.searchLimit && (
+                <div className="mt-2">
+                  <div className="h-1.5 bg-[#e8eaed] rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#1a73e8] rounded-full transition-all"
+                      style={{ width: `${Math.min(100, (usage.searchesUsedToday / usage.searchLimit) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
+        )}
+
+        <div className="space-y-4">
+          {allowUserKeys ? (
+            <div>
+              <label className="block text-sm font-medium text-[#202124] mb-1">
+                Gemini API Key {usage?.hasOwnKey && <span className="text-green-600 font-normal">(active)</span>}
+              </label>
+              <p className="text-xs text-[#5f6368] mb-2">
+                Add your own key for local searches or unlimited hosted usage. Get one from{' '}
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#1a73e8] hover:underline"
+                >
+                  Google AI Studio
+                </a>
+              </p>
+              <div className="relative">
+                <input
+                  type={showKey ? 'text' : 'password'}
+                  value={apiKey}
+                  onChange={(e) => { setApiKey(e.target.value); setSaved(false); }}
+                  placeholder={usage?.hasOwnKey ? '(key stored securely)' : 'AIza...'}
+                  className="w-full px-3 py-2 border border-[#dadce0] rounded-md focus:outline-none focus:border-[#1a73e8] text-sm pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[#5f6368] hover:text-[#202124]"
+                >
+                  {showKey ? (
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                    </svg>
+                  ) : (
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="p-4 bg-[#f8f9fa] rounded-lg border border-[#dadce0]">
+              <h3 className="text-sm font-medium text-[#202124] mb-1">Gemini access managed</h3>
+              <p className="text-xs text-[#5f6368]">
+                This hosted deployment uses the server Gemini key, so users do not need to add or store their own key.
+              </p>
+            </div>
+          )}
 
           <div className="bg-[#e8f0fe] text-[#1967d2] text-xs p-3 rounded-md">
-            <strong>Privacy:</strong> Your API key is stored locally in your browser and never sent to our servers.
-            It's only used to make requests directly to Google's Gemini API.
+            <strong>Security:</strong>{' '}
+            {allowUserKeys
+              ? 'In local mode your key stays in this browser. In hosted mode it is encrypted on the server and used only for your Gemini API requests.'
+              : 'The server Gemini key is never sent to the browser and is protected by backend quotas.'}
           </div>
         </div>
 
         <div className="flex justify-between mt-6">
-          <button
-            onClick={handleClear}
-            className="text-sm text-[#5f6368] hover:text-[#c5221f] px-3 py-2"
-          >
-            Clear Key
-          </button>
+          {allowUserKeys ? (
+            <button
+              onClick={handleClear}
+              disabled={saving}
+              className="text-sm text-[#5f6368] hover:text-[#c5221f] px-3 py-2 disabled:opacity-50"
+            >
+              Remove Key
+            </button>
+          ) : (
+            <span className="text-xs text-[#5f6368] px-3 py-2">
+              {hasServerKey ? 'Server key active' : 'Server key missing'}
+            </span>
+          )}
           <div className="flex gap-2">
             <button
               onClick={onClose}
@@ -124,12 +183,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             >
               Cancel
             </button>
-            <button
-              onClick={handleSave}
-              className="text-sm bg-[#1a73e8] hover:bg-[#1557b0] text-white px-4 py-2 rounded-md font-medium"
-            >
-              {saved ? '✓ Saved!' : 'Save'}
-            </button>
+            {allowUserKeys && (
+              <button
+                onClick={handleSave}
+                disabled={saving || !apiKey.trim()}
+                className="text-sm bg-[#1a73e8] hover:bg-[#1557b0] text-white px-4 py-2 rounded-md font-medium disabled:opacity-50"
+              >
+                {saved ? 'Saved!' : saving ? 'Saving...' : 'Save Key'}
+              </button>
+            )}
           </div>
         </div>
       </div>
