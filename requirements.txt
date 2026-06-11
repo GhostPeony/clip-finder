@@ -16,9 +16,9 @@ sse-starlette>=2.0.0  # For Server-Sent Events
 scrapetube>=2.5.0  # Channel video discovery (no API key needed)
 youtube-transcript-api>=1.0.0  # Transcript extraction
 
-# LangChain + Google AI (Latest versions as of Dec 2025)
+# LangChain + Google AI (Gemini API model wrappers)
 # See: https://github.com/langchain-ai/langchain-google/discussions/1422
-langchain-google-genai>=4.1.2  # Uses google-genai SDK, supports Gemini 2.0+
+langchain-google-genai>=4.1.2  # Uses google-genai SDK for current Gemini API models
 langchain-chroma>=1.0.0  # Local self-hosted vector store mode
 
 # Supabase
@@ -31,3 +31,6 @@ python-dotenv>=1.0.0
 
 # Tests
 pytest>=9.0.0
+
+# Code hygiene
+ruff>=0.14.0

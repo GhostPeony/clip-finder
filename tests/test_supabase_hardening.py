@@ -1,3 +1,5 @@
+import asyncio
+
 from backend import db
 
 
@@ -22,16 +24,17 @@ def test_ingest_single_video_pg_stops_when_index_quota_is_exhausted(monkeypatch)
     )
     monkeypatch.setattr(ingest, "get_indexed_video_ids_pg", lambda supabase, channel_id: set())
     monkeypatch.setattr(ingest, "get_user_profile", lambda supabase, user_id: {"api_key_enc": None})
-    monkeypatch.setattr(ingest, "check_index_quota", lambda profile, count: False)
+    monkeypatch.setattr(ingest, "check_index_quota", lambda profile, count, seconds=0: False)
+    monkeypatch.setattr(ingest, "ensure_user_channel_subscription", lambda *_args: None)
     monkeypatch.setattr(
         ingest,
-        "get_transcript_chunks",
+        "fetch_transcript_chunks",
         lambda video_id: (_ for _ in ()).throw(AssertionError("transcripts should not be fetched")),
     )
 
     messages = list(ingest.ingest_single_video_pg("video123", "user123"))
 
-    assert messages[-1].startswith("Monthly index limit reached")
+    assert messages[-1].startswith("Free indexing limit reached")
 
 
 def test_transcript_export_requires_channel_subscription(monkeypatch):
@@ -76,3 +79,34 @@ def test_transcript_export_requires_channel_subscription(monkeypatch):
 
     assert rag.get_video_transcript_pg("yt-id", "other-user") == []
     assert calls == ["videos", "user_channels"]
+
+
+def test_get_current_user_prefers_supabase_auth_server(monkeypatch):
+    monkeypatch.setattr(
+        db,
+        "_get_user_from_auth_server",
+        lambda token: {"sub": "user-from-auth-server", "email": "creator@example.com"},
+    )
+    monkeypatch.setattr(
+        db,
+        "_get_user_from_jwt_secret",
+        lambda token: (_ for _ in ()).throw(AssertionError("JWT fallback should not run")),
+    )
+
+    user = asyncio.run(db.get_current_user("Bearer test-token"))
+
+    assert user["sub"] == "user-from-auth-server"
+    assert user["email"] == "creator@example.com"
+
+
+def test_get_current_user_falls_back_to_jwt_secret_when_auth_server_unavailable(monkeypatch):
+    monkeypatch.setattr(db, "_get_user_from_auth_server", lambda token: None)
+    monkeypatch.setattr(
+        db,
+        "_get_user_from_jwt_secret",
+        lambda token: {"sub": "user-from-jwt"},
+    )
+
+    user = asyncio.run(db.get_current_user("Bearer test-token"))
+
+    assert user["sub"] == "user-from-jwt"

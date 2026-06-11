@@ -8,7 +8,7 @@ Key Features:
 - No YouTube API key required (uses scrapetube)
 - 60-second chunks with timestamps for pinpoint accuracy
 - Smart skip: Only indexes new videos on re-runs
-- Uses the configured Gemini embedding model (default: gemini-embedding-001)
+- Uses the configured Gemini embedding model (default: models/gemini-embedding-001)
 
 Updated: 2025-12-28
 LangChain Google Package: langchain-google-genai>=4.0.0 (consolidated SDK)

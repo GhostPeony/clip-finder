@@ -20,25 +20,55 @@ Updated: 2026-02-28
 """
 
 import asyncio
-from typing import AsyncGenerator
+import threading
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 try:
     from .config import (
         API_KEY_BYOK,
         API_KEY_HYBRID,
+        API_KEY_SERVER,
         NO_AUTH,
         SUPABASE_AUTH,
         allow_user_keys,
+        get_allowed_origins,
         get_api_key_mode,
         get_auth_mode,
+        get_free_indexed_transcript_seconds_total,
+        get_free_indexed_videos_total,
+        get_free_max_active_ingestion_jobs,
+        get_free_max_import_videos,
+        get_free_max_search_results,
+        get_free_searches_per_month,
         get_public_config,
         get_server_api_key,
+    )
+    from .db import (
+        check_search_quota,
+        decrypt_api_key,
+        encrypt_api_key,
+        get_current_user,
+        get_supabase,
+        get_user_profile,
+        increment_search_usage,
+    )
+    from .jobs import (
+        classify_ingestion_event_level,
+        count_active_ingestion_jobs,
+        create_ingestion_job,
+        extract_ingestion_event_reason,
+        get_ingestion_job,
+        list_ingestion_jobs,
+        record_ingestion_job_event,
+        summarize_ingestion_messages,
+        update_ingestion_job,
     )
     from .storage import (
         LOCAL_USER_ID,
@@ -49,27 +79,46 @@ try:
         is_supabase_mode,
         search,
     )
-    from .db import (
+    from .youtube_utils import detect_url_type
+except ImportError:
+    from config import (
+        API_KEY_BYOK,
+        API_KEY_HYBRID,
+        API_KEY_SERVER,
+        NO_AUTH,
+        SUPABASE_AUTH,
+        allow_user_keys,
+        get_allowed_origins,
+        get_api_key_mode,
+        get_auth_mode,
+        get_free_indexed_transcript_seconds_total,
+        get_free_indexed_videos_total,
+        get_free_max_active_ingestion_jobs,
+        get_free_max_import_videos,
+        get_free_max_search_results,
+        get_free_searches_per_month,
+        get_public_config,
+        get_server_api_key,
+    )
+    from db import (
+        check_search_quota,
         decrypt_api_key,
         encrypt_api_key,
         get_current_user,
         get_supabase,
         get_user_profile,
-        check_search_quota,
         increment_search_usage,
-        increment_index_usage,
     )
-except ImportError:
-    from config import (
-        API_KEY_BYOK,
-        API_KEY_HYBRID,
-        NO_AUTH,
-        SUPABASE_AUTH,
-        allow_user_keys,
-        get_api_key_mode,
-        get_auth_mode,
-        get_public_config,
-        get_server_api_key,
+    from jobs import (
+        classify_ingestion_event_level,
+        count_active_ingestion_jobs,
+        create_ingestion_job,
+        extract_ingestion_event_reason,
+        get_ingestion_job,
+        list_ingestion_jobs,
+        record_ingestion_job_event,
+        summarize_ingestion_messages,
+        update_ingestion_job,
     )
     from storage import (
         LOCAL_USER_ID,
@@ -80,16 +129,7 @@ except ImportError:
         is_supabase_mode,
         search,
     )
-    from db import (
-        decrypt_api_key,
-        encrypt_api_key,
-        get_current_user,
-        get_supabase,
-        get_user_profile,
-        check_search_quota,
-        increment_search_usage,
-        increment_index_usage,
-    )
+    from youtube_utils import detect_url_type
 
 
 # Pydantic models for request/response validation
@@ -104,6 +144,35 @@ class SearchRequest(BaseModel):
 
 class ApiKeyRequest(BaseModel):
     api_key: str
+
+
+async def stream_sync_generator(factory) -> AsyncGenerator[str, None]:
+    """Bridge a blocking string generator into async streaming output."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[object] = asyncio.Queue()
+    sentinel = object()
+
+    def publish(item: object) -> None:
+        asyncio.run_coroutine_threadsafe(queue.put(item), loop).result()
+
+    def worker() -> None:
+        try:
+            for item in factory():
+                publish(item)
+        except Exception as exc:
+            publish(exc)
+        finally:
+            publish(sentinel)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    while True:
+        item = await queue.get()
+        if item is sentinel:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield str(item)
 
 
 # Lifespan handler (replaces deprecated on_startup/on_shutdown)
@@ -123,15 +192,16 @@ app = FastAPI(
     title="SearchTube API",
     description="Intelligent YouTube Video Search powered by Gemini",
     version="2.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-# CORS middleware for frontend
-# In development, allow all origins. In production, restrict this.
+allowed_origins = get_allowed_origins()
+
+# CORS middleware for frontend.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # React dev server and production
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials="*" not in allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -140,6 +210,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Public endpoints
 # ---------------------------------------------------------------------------
+
 
 @app.get("/")
 async def health_check():
@@ -152,7 +223,7 @@ async def health_check():
     return {
         "status": "ok",
         "message": "SearchTube Backend is running",
-        "hasApiKey": public_config.hasServerKey
+        "hasApiKey": public_config.hasServerKey,
     }
 
 
@@ -165,6 +236,7 @@ async def config_endpoint():
 # ---------------------------------------------------------------------------
 # Authenticated endpoints
 # ---------------------------------------------------------------------------
+
 
 async def get_request_user(authorization: str | None = Header(None)) -> dict:
     """Return the authenticated user, or a local pseudo-user in no-auth mode."""
@@ -184,7 +256,9 @@ def get_profile_api_key(profile: dict) -> tuple[str | None, bool]:
     return decrypt_api_key(stored_key), True
 
 
-def resolve_api_key(profile: dict | None = None, x_api_key: str | None = None) -> tuple[str | None, bool]:
+def resolve_api_key(
+    profile: dict | None = None, x_api_key: str | None = None
+) -> tuple[str | None, bool]:
     """Resolve Gemini credentials according to the configured hosted key mode."""
     server_key = get_server_api_key()
     stored_key = None
@@ -273,9 +347,9 @@ async def transcript_endpoint(
     # Build SRT content
     srt_lines = []
     for i, chunk in enumerate(chunks, 1):
-        start_ts = format_srt_timestamp(chunk['start_seconds'])
-        end_ts = format_srt_timestamp(chunk['end_seconds'])
-        text = chunk['content'].strip()
+        start_ts = format_srt_timestamp(chunk["start_seconds"])
+        end_ts = format_srt_timestamp(chunk["end_seconds"])
+        text = chunk["content"].strip()
 
         srt_lines.append(f"{i}")
         srt_lines.append(f"{start_ts} --> {end_ts}")
@@ -291,9 +365,7 @@ async def transcript_endpoint(
     return Response(
         content=srt_content,
         media_type="text/plain",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"'
-        }
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -319,48 +391,91 @@ async def ingest_endpoint(
     supabase = None
     used_own_key = False
     api_key = x_api_key
+    ingestion_job = None
 
     if is_supabase_mode():
         supabase = get_supabase()
         profile = get_user_profile(supabase, user_id)
         api_key, used_own_key = resolve_api_key(profile)
+        source_type, _ = detect_url_type(request.url)
+        active_jobs = count_active_ingestion_jobs(supabase, user_id)
+        if active_jobs >= get_free_max_active_ingestion_jobs():
+            raise HTTPException(
+                status_code=409,
+                detail="You already have an import running. Wait for it to finish before starting another.",
+            )
+        ingestion_job = create_ingestion_job(supabase, user_id, request.url, source_type)
     elif x_api_key:
         used_own_key = True
     else:
         api_key, used_own_key = resolve_api_key()
 
     async def generate_events() -> AsyncGenerator[str, None]:
+        messages: list[str] = []
         try:
-            # Run the synchronous ingest pipeline in a thread pool
-            # to avoid blocking the async event loop
-            loop = asyncio.get_event_loop()
+            if supabase is not None and ingestion_job:
+                update_ingestion_job(
+                    supabase,
+                    ingestion_job["id"],
+                    status="running",
+                    started_at=datetime.now(timezone.utc).isoformat(),
+                )
 
             def run_ingestion():
-                return list(ingest_url(request.url, user_id, api_key))
+                yield from ingest_url(request.url, user_id, api_key, used_own_key)
 
-            messages = await loop.run_in_executor(None, run_ingestion)
-
-            for message in messages:
+            async for message in stream_sync_generator(run_ingestion):
+                messages.append(message)
+                if supabase is not None and ingestion_job:
+                    try:
+                        record_ingestion_job_event(
+                            supabase,
+                            ingestion_job["id"],
+                            classify_ingestion_event_level(message),
+                            message,
+                            reason=extract_ingestion_event_reason(message),
+                        )
+                        update_ingestion_job(supabase, ingestion_job["id"], last_message=message)
+                    except Exception as job_err:
+                        print(f"[WARN] Failed to record ingestion job event: {job_err}")
                 yield f"data: {message}\n\n"
                 # Small delay for frontend to render each message
                 await asyncio.sleep(0.05)
 
-            # Log usage after successful ingestion
-            # Count indexed videos from the messages (rough heuristic)
-            indexed_count = sum(
-                1 for m in messages if "Indexed" in m and "clips" in m
-            )
-            if indexed_count > 0:
-                try:
-                    if supabase is not None:
-                        increment_index_usage(supabase, user_id, indexed_count, used_own_key)
-                except Exception as usage_err:
-                    print(f"[WARN] Failed to log index usage: {usage_err}")
+            if supabase is not None and ingestion_job:
+                summary = summarize_ingestion_messages(messages)
+                update_ingestion_job(
+                    supabase,
+                    ingestion_job["id"],
+                    requested_video_count=summary["requested_video_count"],
+                    indexed_video_count=summary["indexed_video_count"],
+                    skipped_video_count=summary["skipped_video_count"],
+                    failed_video_count=summary["failed_video_count"],
+                    status=summary["status"],
+                    last_message=messages[-1] if messages else "Complete",
+                )
 
             # Signal completion
             yield "data: [DONE]\n\n"
 
         except Exception as e:
+            if supabase is not None and ingestion_job:
+                try:
+                    update_ingestion_job(
+                        supabase,
+                        ingestion_job["id"],
+                        status="failed",
+                        error=str(e),
+                        last_message=f"Error: {str(e)}",
+                    )
+                    record_ingestion_job_event(
+                        supabase,
+                        ingestion_job["id"],
+                        "error",
+                        f"Error: {str(e)}",
+                    )
+                except Exception as job_err:
+                    print(f"[WARN] Failed to mark ingestion job failed: {job_err}")
             yield f"data: Error: {str(e)}\n\n"
             yield "data: [DONE]\n\n"
 
@@ -371,7 +486,7 @@ async def ingest_endpoint(
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # Disable nginx buffering
-        }
+        },
     )
 
 
@@ -404,10 +519,20 @@ async def search_endpoint(
         profile = get_user_profile(supabase, user_id)
         api_key, used_own_key = resolve_api_key(profile)
 
-        if not check_search_quota(profile):
+        max_search_results = get_free_max_search_results()
+        if request.limit > max_search_results:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Free searches can return up to {max_search_results} clips.",
+            )
+
+        if not check_search_quota(profile, used_own_key):
             raise HTTPException(
                 status_code=429,
-                detail="Daily search limit reached."
+                detail=(
+                    "Monthly hosted search limit reached. Use your own Gemini key for AI requests "
+                    "or contact us to unlock more hosted searches."
+                ),
             )
     elif not x_api_key:
         api_key, used_own_key = resolve_api_key()
@@ -416,14 +541,13 @@ async def search_endpoint(
         # Run the synchronous search in a thread pool
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            None,
-            lambda: search(request.query, user_id, api_key, request.limit)
+            None, lambda: search(request.query, user_id, api_key, request.limit)
         )
 
         # Log usage after successful search
         try:
             if supabase is not None:
-                increment_search_usage(supabase, user_id, used_own_key)
+                increment_search_usage(supabase, user_id, used_own_key, request.limit)
         except Exception as usage_err:
             print(f"[WARN] Failed to log search usage: {usage_err}")
 
@@ -438,6 +562,7 @@ async def search_endpoint(
 # ---------------------------------------------------------------------------
 # User profile & settings
 # ---------------------------------------------------------------------------
+
 
 @app.get("/api/profile")
 async def profile_endpoint(user: dict = Depends(get_request_user)):
@@ -470,12 +595,27 @@ async def profile_endpoint(user: dict = Depends(get_request_user)):
 @app.get("/api/usage")
 async def usage_endpoint(user: dict = Depends(get_request_user)):
     """Returns the user's current quota status."""
+    search_limit = get_free_searches_per_month()
+    indexed_video_limit = get_free_indexed_videos_total()
+    indexed_seconds_limit = get_free_indexed_transcript_seconds_total()
+    max_search_results = get_free_max_search_results()
+    max_import_videos = get_free_max_import_videos()
+
     if not is_supabase_mode():
         return {
+            "plan": "local",
             "searchesUsedToday": 0,
             "searchLimit": None,
+            "searchesUsedThisMonth": 0,
+            "searchPeriod": "month",
             "indexesUsedThisMonth": 0,
             "indexLimit": None,
+            "indexedVideosUsed": 0,
+            "indexedVideoLimit": None,
+            "indexedSecondsUsed": 0,
+            "indexedSecondsLimit": None,
+            "maxImportVideos": None,
+            "maxSearchResults": None,
             "hasOwnKey": False,
             "apiKeyMode": get_api_key_mode(),
             "hasServerKey": bool(get_server_api_key()),
@@ -486,11 +626,23 @@ async def usage_endpoint(user: dict = Depends(get_request_user)):
     supabase = get_supabase()
     profile = get_user_profile(supabase, user_id)
     has_own_key = bool(profile.get("api_key_enc"))
+    searches_used = profile.get("free_searches_this_month", 0)
+    indexed_videos = profile.get("free_indexed_videos_total", 0)
+    indexed_seconds = profile.get("free_indexed_seconds_total", 0)
     return {
-        "searchesUsedToday": profile.get("free_searches_today", 0),
-        "searchLimit": 20,
-        "indexesUsedThisMonth": profile.get("free_indexes_this_month", 0),
-        "indexLimit": 50,
+        "plan": "free",
+        "searchesUsedToday": searches_used,
+        "searchLimit": None if has_own_key else search_limit,
+        "searchesUsedThisMonth": searches_used,
+        "searchPeriod": "month",
+        "indexesUsedThisMonth": indexed_videos,
+        "indexLimit": indexed_video_limit,
+        "indexedVideosUsed": indexed_videos,
+        "indexedVideoLimit": indexed_video_limit,
+        "indexedSecondsUsed": indexed_seconds,
+        "indexedSecondsLimit": indexed_seconds_limit,
+        "maxImportVideos": max_import_videos,
+        "maxSearchResults": max_search_results,
         "hasOwnKey": has_own_key,
         "apiKeyMode": get_api_key_mode(),
         "hasServerKey": bool(get_server_api_key()),
@@ -498,20 +650,47 @@ async def usage_endpoint(user: dict = Depends(get_request_user)):
     }
 
 
+@app.get("/api/ingestion-jobs")
+async def ingestion_jobs_endpoint(user: dict = Depends(get_request_user)):
+    """List recent durable ingestion jobs for the current user."""
+    if not is_supabase_mode():
+        return {"jobs": []}
+
+    supabase = get_supabase()
+    return {"jobs": list_ingestion_jobs(supabase, user["sub"])}
+
+
+@app.get("/api/ingestion-jobs/{job_id}")
+async def ingestion_job_endpoint(job_id: str, user: dict = Depends(get_request_user)):
+    """Fetch one durable ingestion job, scoped to the current user."""
+    if not is_supabase_mode():
+        raise HTTPException(
+            status_code=404, detail="Ingestion jobs are only available in hosted mode"
+        )
+
+    supabase = get_supabase()
+    job = get_ingestion_job(supabase, user["sub"], job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Ingestion job not found")
+    return job
+
+
 @app.put("/api/settings/key")
 async def save_api_key(request: ApiKeyRequest, user: dict = Depends(get_request_user)):
     """Save or update the user's Gemini API key."""
     if not allow_user_keys():
-        raise HTTPException(status_code=403, detail="User API keys are disabled for this deployment")
+        raise HTTPException(
+            status_code=403, detail="User API keys are disabled for this deployment"
+        )
 
     if not is_supabase_mode():
         return {"success": True}
 
     user_id = user["sub"]
     supabase = get_supabase()
-    supabase.table("profiles").update({
-        "api_key_enc": encrypt_api_key(request.api_key)
-    }).eq("id", user_id).execute()
+    supabase.table("profiles").update({"api_key_enc": encrypt_api_key(request.api_key)}).eq(
+        "id", user_id
+    ).execute()
     return {"success": True}
 
 
@@ -519,29 +698,30 @@ async def save_api_key(request: ApiKeyRequest, user: dict = Depends(get_request_
 async def delete_api_key(user: dict = Depends(get_request_user)):
     """Remove the user's stored Gemini API key."""
     if not allow_user_keys():
-        raise HTTPException(status_code=403, detail="User API keys are disabled for this deployment")
+        raise HTTPException(
+            status_code=403, detail="User API keys are disabled for this deployment"
+        )
 
     if not is_supabase_mode():
         return {"success": True}
 
     user_id = user["sub"]
     supabase = get_supabase()
-    supabase.table("profiles").update({
-        "api_key_enc": None
-    }).eq("id", user_id).execute()
+    supabase.table("profiles").update({"api_key_enc": None}).eq("id", user_id).execute()
     return {"success": True}
 
 
 # Run with uvicorn if executed directly
 if __name__ == "__main__":
-    import uvicorn
-    import sys
     import io
+    import sys
+
+    import uvicorn
 
     # Fix Windows console encoding for Unicode
     if sys.platform == "win32":
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
     print("\n" + "=" * 60)
     print("  SearchTube Backend")
@@ -553,5 +733,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8080,
         reload=False,  # Disable to preserve singleton state (restart manually when needed)
-        log_level="warning"  # Suppress routine request logs
+        log_level="warning",  # Suppress routine request logs
     )

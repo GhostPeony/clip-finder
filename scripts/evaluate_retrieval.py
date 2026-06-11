@@ -119,8 +119,7 @@ def main() -> int:
 
     fixture = json.loads(Path(args.fixture).read_text(encoding="utf-8"))
     results = [
-        evaluate(candidate, fixture, api_key)
-        for candidate in parse_candidates(args.candidates)
+        evaluate(candidate, fixture, api_key) for candidate in parse_candidates(args.candidates)
     ]
     print(json.dumps({"results": results}, indent=2))
     return 0

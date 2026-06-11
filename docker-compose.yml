@@ -4,12 +4,14 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     ports:
-      - "8080:8080"
+      - '8080:8080'
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - SEARCHTUBE_STORAGE=${SEARCHTUBE_STORAGE:-local}
       - SEARCHTUBE_AUTH_MODE=${SEARCHTUBE_AUTH_MODE:-none}
       - SEARCHTUBE_API_KEY_MODE=${SEARCHTUBE_API_KEY_MODE:-server}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-models/gemini-embedding-001}
+      - EMBEDDING_DIMENSIONS=${EMBEDDING_DIMENSIONS:-768}
       - LLM_MODEL=${LLM_MODEL:-gemini-3.1-flash-lite}
       - API_KEY_ENCRYPTION_KEY=${API_KEY_ENCRYPTION_KEY}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
@@ -31,7 +33,7 @@ services:
         - VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
         - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
     ports:
-      - "80:80"
+      - '80:80'
     depends_on:
       - backend
     restart: unless-stopped

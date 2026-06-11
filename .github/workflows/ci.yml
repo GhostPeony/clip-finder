@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Frontend and hygiene checks
+        run: npm run verify
+
+      - name: Backend smoke and tests
+        run: |
+          python -m compileall backend
+          python -c "import backend.server; import backend.worker"
+          python -m pytest

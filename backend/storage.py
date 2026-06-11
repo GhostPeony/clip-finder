@@ -7,27 +7,27 @@ from typing import Generator, Optional
 
 try:
     from .config import LOCAL_STORAGE, SUPABASE_STORAGE, get_storage_mode
-    from .ingest_chroma import ingest_url as ingest_url_local
-    from .ingest_chroma import get_library as get_library_local
-    from .ingest_chroma import delete_video as delete_video_local
-    from .ingest_chroma import get_video_transcript as get_video_transcript_local
-    from .rag_chroma import search as search_local
     from .ingest import ingest_url_pg
+    from .ingest_chroma import delete_video as delete_video_local
+    from .ingest_chroma import get_library as get_library_local
+    from .ingest_chroma import get_video_transcript as get_video_transcript_local
+    from .ingest_chroma import ingest_url as ingest_url_local
     from .rag import (
-        search_pg,
-        get_library_pg,
         delete_video_pg,
+        get_library_pg,
         get_video_transcript_pg,
+        search_pg,
     )
+    from .rag_chroma import search as search_local
 except ImportError:
     from config import LOCAL_STORAGE, SUPABASE_STORAGE, get_storage_mode
-    from ingest_chroma import ingest_url as ingest_url_local
-    from ingest_chroma import get_library as get_library_local
-    from ingest_chroma import delete_video as delete_video_local
-    from ingest_chroma import get_video_transcript as get_video_transcript_local
-    from rag_chroma import search as search_local
     from ingest import ingest_url_pg
-    from rag import search_pg, get_library_pg, delete_video_pg, get_video_transcript_pg
+    from ingest_chroma import delete_video as delete_video_local
+    from ingest_chroma import get_library as get_library_local
+    from ingest_chroma import get_video_transcript as get_video_transcript_local
+    from ingest_chroma import ingest_url as ingest_url_local
+    from rag import delete_video_pg, get_library_pg, get_video_transcript_pg, search_pg
+    from rag_chroma import search as search_local
 
 
 LOCAL_USER_ID = "local"
@@ -52,9 +52,10 @@ def ingest_url(
     url: str,
     user_id: str = LOCAL_USER_ID,
     api_key: Optional[str] = None,
+    used_own_key: bool = False,
 ) -> Generator[str, None, None]:
     if is_supabase_mode():
-        yield from ingest_url_pg(url, user_id, api_key)
+        yield from ingest_url_pg(url, user_id, api_key, used_own_key)
     else:
         yield from ingest_url_local(url, api_key=api_key)
 

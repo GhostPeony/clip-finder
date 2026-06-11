@@ -6,6 +6,7 @@ import json
 import re
 import time
 import urllib.request
+from dataclasses import dataclass
 from typing import Optional
 
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -13,6 +14,13 @@ from youtube_transcript_api import YouTubeTranscriptApi
 CHUNK_SIZE_SECONDS = 60
 CHUNK_OVERLAP_SECONDS = 12
 CHUNK_MAX_SECONDS = 75
+
+
+@dataclass(frozen=True)
+class TranscriptFetchResult:
+    chunks: list[dict]
+    skip_reason: str | None = None
+    error: str | None = None
 
 
 def extract_video_title(video: dict) -> str:
@@ -101,30 +109,68 @@ def chunk_transcript_entries(
             continue
 
         chunk_end = _snippet_end(current_entries[-1])
-        chunks.append({
-            "text": chunk_text,
-            "start_seconds": int(current_entries[0]["start"]),
-            "end_seconds": int(chunk_end),
-        })
+        chunks.append(
+            {
+                "text": chunk_text,
+                "start_seconds": int(current_entries[0]["start"]),
+                "end_seconds": int(chunk_end),
+            }
+        )
 
         overlap_start = chunk_end - overlap_seconds
-        overlap_entries = [
-            item for item in current_entries if _snippet_end(item) > overlap_start
-        ]
+        overlap_entries = [item for item in current_entries if _snippet_end(item) > overlap_start]
         current_entries = overlap_entries if len(overlap_entries) < len(current_entries) else []
 
     if current_entries:
-        chunks.append({
-            "text": " ".join(item["text"] for item in current_entries),
-            "start_seconds": int(current_entries[0]["start"]),
-            "end_seconds": int(_snippet_end(current_entries[-1])),
-        })
+        chunks.append(
+            {
+                "text": " ".join(item["text"] for item in current_entries),
+                "start_seconds": int(current_entries[0]["start"]),
+                "end_seconds": int(_snippet_end(current_entries[-1])),
+            }
+        )
 
     return chunks
 
 
-def get_transcript_chunks(video_id: str) -> list[dict]:
-    """Get transcript and split it into sentence-aware overlapping chunks."""
+def classify_transcript_error(exc: Exception) -> str:
+    """Map youtube-transcript-api failures into stable hosted skip reasons."""
+    name = exc.__class__.__name__.lower()
+    message = str(exc).lower()
+    combined = f"{name} {message}"
+
+    if "disabled" in combined:
+        return "captions_disabled"
+    if "notranscript" in combined or "no transcript" in combined:
+        return "captions_unavailable"
+    if "unavailable" in combined or "video unavailable" in combined:
+        return "video_unavailable"
+    if "private" in combined:
+        return "private_video"
+    if "too many" in combined or "ratelimit" in combined or "rate limit" in combined:
+        return "rate_limited"
+    if "blocked" in combined or "forbidden" in combined:
+        return "request_blocked"
+    return "transcript_fetch_error"
+
+
+def describe_transcript_skip(reason: str, video_id: str) -> str:
+    descriptions = {
+        "captions_disabled": "captions are disabled",
+        "captions_unavailable": "captions are unavailable",
+        "video_unavailable": "video is unavailable",
+        "private_video": "video is private or restricted",
+        "rate_limited": "transcript service rate limited the request",
+        "request_blocked": "transcript request was blocked",
+        "empty_transcript": "transcript returned no usable text",
+        "transcript_fetch_error": "transcript fetch failed",
+    }
+    return f"{descriptions.get(reason, 'transcript unavailable')} for {video_id}"
+
+
+def fetch_transcript_chunks(video_id: str) -> TranscriptFetchResult:
+    """Get transcript chunks plus a stable skip reason when unavailable."""
+    last_error: Exception | None = None
     for attempt in range(2):
         try:
             api = YouTubeTranscriptApi()
@@ -134,13 +180,26 @@ def get_transcript_chunks(video_id: str) -> list[dict]:
                 for snippet in fetched
             ]
             if not transcript:
-                return []
-            return chunk_transcript_entries(transcript)
-        except Exception:
+                return TranscriptFetchResult([], "empty_transcript")
+            chunks = chunk_transcript_entries(transcript)
+            if not chunks:
+                return TranscriptFetchResult([], "empty_transcript")
+            return TranscriptFetchResult(chunks)
+        except Exception as exc:
+            last_error = exc
             if attempt == 0:
                 time.sleep(0.5)
                 continue
-            return []
+            reason = classify_transcript_error(exc)
+            return TranscriptFetchResult([], reason, str(exc))
+
+    reason = classify_transcript_error(last_error) if last_error else "transcript_fetch_error"
+    return TranscriptFetchResult([], reason, str(last_error) if last_error else None)
+
+
+def get_transcript_chunks(video_id: str) -> list[dict]:
+    """Get transcript and split it into sentence-aware overlapping chunks."""
+    return fetch_transcript_chunks(video_id).chunks
 
 
 def detect_url_type(url: str) -> tuple[str, Optional[str]]:
