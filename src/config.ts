@@ -9,7 +9,6 @@ export interface AppConfig {
   allowUserKeys: boolean;
 }
 
-export const AUTH_MODE: AuthMode =
-  (import.meta.env.VITE_AUTH_MODE === 'supabase' ? 'supabase' : 'none');
+export const AUTH_MODE: AuthMode = import.meta.env.VITE_AUTH_MODE === 'none' ? 'none' : 'supabase';
 
 export const isSupabaseAuth = AUTH_MODE === 'supabase';

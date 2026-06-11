@@ -1,8 +1,8 @@
 {
-  "name": "searchtube",
+  "name": "embed-moments",
   "private": false,
   "version": "1.0.0",
-  "description": "RAG-powered YouTube video search with AI-generated answers and timestamp citations",
+  "description": "Hosted transcript search for finding exact YouTube moments with timestamp citations",
   "license": "MIT",
   "author": "Ghost Peony",
   "keywords": [
@@ -14,23 +14,38 @@
     "langchain",
     "video",
     "transcript",
-    "searchtube"
+    "embed-moments"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/GhostPeony/SearchTube.git"
+    "url": "https://github.com/GhostPeony/embed-moments.git"
   },
-  "homepage": "https://github.com/GhostPeony/SearchTube",
+  "homepage": "https://embedmoments.com",
   "bugs": {
-    "url": "https://github.com/GhostPeony/SearchTube/issues"
+    "url": "https://github.com/GhostPeony/embed-moments/issues"
   },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "deploy:pages": "npm run build && wrangler pages deploy dist --project-name embed-moments --branch main --commit-dirty=true",
     "preview": "vite preview",
+    "screenshots": "node scripts/screenshots.mjs",
     "test": "vitest run",
-    "verify": "npm run build && npm test && npm audit --audit-level=moderate"
+    "lint": "eslint . && npm run py:lint",
+    "lint:fix": "eslint . --fix && npm run py:format",
+    "format": "prettier --write . && npm run py:format",
+    "format:check": "prettier --check . && python -m ruff format --check .",
+    "typecheck": "tsc --noEmit",
+    "py:lint": "python -m ruff check .",
+    "py:format": "python -m ruff format .",
+    "py:security": "python -m ruff check --select S --ignore S104,S310 backend scripts",
+    "supabase:projects": "supabase projects list",
+    "supabase:link": "supabase link --project-ref favppxodzkmnjvhlrpbq",
+    "supabase:migrations": "supabase migration list",
+    "supabase:push": "supabase db push",
+    "supabase:types": "supabase gen types typescript --linked > src/types/supabase.ts",
+    "verify": "npm run lint && npm run format:check && npm run typecheck && npm run build && npm test && npm run py:security && npm audit --audit-level=moderate"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",
@@ -38,6 +53,7 @@
     "react-dom": "^19.2.3"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^22.14.0",
@@ -45,11 +61,20 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.22",
+    "eslint": "^10.4.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
     "jsdom": "^27.2.0",
+    "playwright": "^1.60.0",
     "postcss": "^8.5.10",
+    "prettier": "^3.8.3",
+    "supabase": "^2.105.0",
     "tailwindcss": "^3.4.18",
     "typescript": "~5.8.2",
+    "typescript-eslint": "^8.60.0",
     "vite": "^6.4.2",
-    "vitest": "^4.0.16"
+    "vitest": "^4.0.16",
+    "wrangler": "^4.96.0"
   }
 }

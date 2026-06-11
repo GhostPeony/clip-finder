@@ -1,0 +1,94 @@
+<!doctype html>
+<!-- Source for public/images/og-card.png. Regenerate with:
+     npx playwright screenshot --viewport-size=1200,630 scripts/og-card.html public/images/og-card.png -->
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..600&family=Inter:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      * {
+        margin: 0;
+        box-sizing: border-box;
+      }
+      body {
+        width: 1200px;
+        height: 630px;
+        background:
+          radial-gradient(ellipse 60% 45% at 18% 8%, rgba(255, 111, 145, 0.12), transparent 70%),
+          radial-gradient(ellipse 55% 40% at 85% 20%, rgba(220, 203, 255, 0.2), transparent 70%),
+          radial-gradient(ellipse 70% 50% at 55% 100%, rgba(255, 217, 90, 0.14), transparent 70%),
+          #fff4df;
+        color: #251b2e;
+        font-family: Inter, sans-serif;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding: 0 96px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin-bottom: 48px;
+      }
+      .brand span {
+        font-family: Fraunces, serif;
+        font-size: 34px;
+        font-weight: 500;
+      }
+      h1 {
+        font-family: Fraunces, serif;
+        font-size: 84px;
+        font-weight: 500;
+        line-height: 1.04;
+        letter-spacing: -0.01em;
+        max-width: 950px;
+      }
+      h1 em {
+        color: #b83558;
+      }
+      p {
+        margin-top: 28px;
+        font-size: 28px;
+        color: #5a3d35;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="brand">
+      <svg viewBox="0 0 48 48" width="64" height="64">
+        <rect width="48" height="48" rx="14" fill="#251b2e" />
+        <line
+          x1="10"
+          y1="24"
+          x2="38"
+          y2="24"
+          stroke="#fff4df"
+          stroke-opacity="0.35"
+          stroke-width="2.5"
+          stroke-linecap="round"
+        />
+        <line
+          x1="10"
+          y1="24"
+          x2="29"
+          y2="24"
+          stroke="#fff4df"
+          stroke-opacity="0.85"
+          stroke-width="2.5"
+          stroke-linecap="round"
+        />
+        <circle cx="29" cy="24" r="8" fill="#ff6f91" fill-opacity="0.28" />
+        <circle cx="29" cy="24" r="4.5" fill="#ff6f91" />
+      </svg>
+      <span>Embed Moments</span>
+    </div>
+    <h1>A searchable <em>memory</em> for everything you watch.</h1>
+    <p>Index any YouTube channel. Ask. Land on the exact second.</p>
+  </body>
+</html>

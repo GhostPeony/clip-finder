@@ -1,6 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { LibraryData, LibraryChannel, LibraryVideo, DensityMode, SortMode, ViewMode, SearchHistoryEntry } from '../types';
-import { fetchLibrary, deleteVideo, getSearchHistory, deleteSearchHistoryEntry, clearSearchHistory, downloadTranscript } from '../services/api';
+import {
+  LibraryData,
+  LibraryChannel,
+  LibraryVideo,
+  DensityMode,
+  SortMode,
+  ViewMode,
+  SearchHistoryEntry,
+} from '../types';
+import {
+  fetchLibrary,
+  deleteVideo,
+  getSearchHistory,
+  deleteSearchHistoryEntry,
+  clearSearchHistory,
+  downloadTranscript,
+} from '../services/api';
 
 interface LibraryViewProps {
   onIndexMore: () => void;
@@ -49,7 +64,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onIndexMore }) => {
   };
 
   const toggleChannel = (name: string) => {
-    setExpandedChannels(prev => {
+    setExpandedChannels((prev) => {
       const next = new Set(prev);
       if (next.has(name)) {
         next.delete(name);
@@ -82,32 +97,33 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onIndexMore }) => {
     setDownloadingVideo(null);
   };
 
-  const filteredChannels = library?.channels.filter(channel => {
-    if (!filter) return true;
-    const lowerFilter = filter.toLowerCase();
-    if (channel.name.toLowerCase().includes(lowerFilter)) return true;
-    return channel.videos.some(v => v.title.toLowerCase().includes(lowerFilter));
-  }) || [];
+  const filteredChannels =
+    library?.channels.filter((channel) => {
+      if (!filter) return true;
+      const lowerFilter = filter.toLowerCase();
+      if (channel.name.toLowerCase().includes(lowerFilter)) return true;
+      return channel.videos.some((v) => v.title.toLowerCase().includes(lowerFilter));
+    }) || [];
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#1a73e8]"></div>
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-petal border-t-rose"></div>
       </div>
     );
   }
 
   if (!library || library.totalVideos === 0) {
     return (
-      <div className="max-w-xl mx-auto text-center py-16">
-        <div className="text-6xl mb-4">📚</div>
-        <h2 className="text-2xl font-normal text-[#202124] mb-2">Your Library is Empty</h2>
-        <p className="text-[#5f6368] mb-6">Index some YouTube videos to get started</p>
-        <button
-          onClick={onIndexMore}
-          className="bg-[#1a73e8] hover:bg-[#1557b0] text-white px-6 py-2 rounded-md text-sm font-medium transition-colors"
-        >
-          Index Videos
+      <div className="card mx-auto max-w-xl p-8 text-center">
+        <p className="eyebrow mx-auto mb-4 w-fit">Library</p>
+        <h2 className="font-serif text-4xl font-medium text-ink">Your library is empty</h2>
+        <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-bark">
+          Index a YouTube video, playlist, or channel to start building your searchable moment
+          archive.
+        </p>
+        <button onClick={onIndexMore} className="btn btn-primary mt-6">
+          Index videos
         </button>
       </div>
     );
@@ -116,81 +132,107 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onIndexMore }) => {
   return (
     <div className="max-w-5xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="card mb-6 flex flex-col gap-5 p-5 md:flex-row md:items-end md:justify-between">
         <div>
-          <h1 className="text-2xl font-normal text-[#202124] flex items-center gap-2">
-            📚 Your Library
-          </h1>
-          <p className="text-sm text-[#5f6368] mt-1">
-            {library.totalVideos} videos • {library.totalClips} clips • {library.channels.length} channels
+          <p className="eyebrow mb-3 w-fit">Library</p>
+          <h1 className="font-serif text-4xl font-medium text-ink">Indexed moments</h1>
+          <p className="mt-2 text-sm text-bark">
+            {library.totalVideos} videos - {library.totalClips} clips - {library.channels.length}{' '}
+            channels
           </p>
         </div>
-        <button
-          onClick={onIndexMore}
-          className="bg-[#1a73e8] hover:bg-[#1557b0] text-white px-4 py-2 rounded-md text-sm font-medium transition-colors"
-        >
-          + Add Videos
+        <div className="grid grid-cols-3 rounded-2xl border border-ink/10 bg-cream">
+          <Metric value={library.totalVideos} label="videos" />
+          <Metric value={library.totalClips} label="clips" />
+          <Metric value={library.channels.length} label="channels" isLast />
+        </div>
+        <button onClick={onIndexMore} className="btn btn-primary">
+          Add source
         </button>
       </div>
 
       {/* Filter */}
-      <div className="mb-4">
+      <div className="card mb-5 p-4">
         <div className="relative max-w-md">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#5f6368]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          <svg
+            className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+            />
           </svg>
           <input
             type="text"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter videos..."
-            className="w-full pl-10 pr-4 py-2 border border-[#dadce0] rounded-md focus:outline-none focus:border-[#1a73e8] text-sm"
+            className="input w-full py-2 pl-10 pr-4 text-sm"
           />
         </div>
       </div>
 
       {/* View Controls */}
-      <div className="flex items-center gap-4 mb-6 flex-wrap">
+      <div className="mb-6 flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
-          <span className="text-sm text-[#5f6368]">Layout:</span>
-          <div className="flex border border-[#dadce0] rounded-md overflow-hidden">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted">Layout</span>
+          <div className="inline-flex rounded-full border border-ink/10 bg-cream p-1">
             <button
               onClick={() => setViewMode('flat')}
-              className={`px-3 py-1.5 text-sm ${viewMode === 'flat' ? 'bg-[#e8f0fe] text-[#1a73e8]' : 'text-[#5f6368] hover:bg-[#f1f3f4]'}`}
+              className={`rounded-full px-3 py-1 text-xs font-medium ${
+                viewMode === 'flat' ? 'bg-surface text-ink shadow-soft' : 'text-bark hover:text-ink'
+              }`}
             >
               Grid
             </button>
             <button
               onClick={() => setViewMode('grouped')}
-              className={`px-3 py-1.5 text-sm ${viewMode === 'grouped' ? 'bg-[#e8f0fe] text-[#1a73e8]' : 'text-[#5f6368] hover:bg-[#f1f3f4]'}`}
+              className={`rounded-full px-3 py-1 text-xs font-medium ${
+                viewMode === 'grouped'
+                  ? 'bg-surface text-ink shadow-soft'
+                  : 'text-bark hover:text-ink'
+              }`}
             >
               By Channel
             </button>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-[#5f6368]">Size:</span>
-          <div className="flex border border-[#dadce0] rounded-md overflow-hidden">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted">Size</span>
+          <div className="inline-flex rounded-full border border-ink/10 bg-cream p-1">
             <button
               onClick={() => setDensity('compact')}
-              className={`px-3 py-1.5 text-sm ${density === 'compact' ? 'bg-[#e8f0fe] text-[#1a73e8]' : 'text-[#5f6368] hover:bg-[#f1f3f4]'}`}
+              className={`rounded-full px-3 py-1 text-xs font-medium ${
+                density === 'compact'
+                  ? 'bg-surface text-ink shadow-soft'
+                  : 'text-bark hover:text-ink'
+              }`}
             >
               Small
             </button>
             <button
               onClick={() => setDensity('comfortable')}
-              className={`px-3 py-1.5 text-sm ${density === 'comfortable' ? 'bg-[#e8f0fe] text-[#1a73e8]' : 'text-[#5f6368] hover:bg-[#f1f3f4]'}`}
+              className={`rounded-full px-3 py-1 text-xs font-medium ${
+                density === 'comfortable'
+                  ? 'bg-surface text-ink shadow-soft'
+                  : 'text-bark hover:text-ink'
+              }`}
             >
               Large
             </button>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-[#5f6368]">Sort:</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted">Sort</span>
           <select
             value={sortMode}
             onChange={(e) => setSortMode(e.target.value as SortMode)}
-            className="px-3 py-1.5 text-sm border border-[#dadce0] rounded-md bg-white focus:outline-none focus:border-[#1a73e8]"
+            className="input px-3 py-1.5 text-sm"
           >
             <option value="default">Default</option>
             <option value="dateAdded">Recently added</option>
@@ -201,26 +243,29 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onIndexMore }) => {
       {/* Recent Searches */}
       {searchHistory.length > 0 && (
         <div className="mb-6">
-          <div className="bg-white rounded-lg border border-[#dadce0] overflow-hidden">
+          <div className="card overflow-hidden">
             <button
               onClick={() => setHistoryExpanded(!historyExpanded)}
-              className="w-full px-4 py-3 flex items-center justify-between hover:bg-[#f8f9fa] transition-colors"
+              className="flex w-full items-center justify-between px-4 py-3 transition-colors hover:bg-petal"
             >
               <div className="flex items-center gap-3">
                 <svg
-                  className={`w-4 h-4 text-[#5f6368] transition-transform ${historyExpanded ? 'rotate-90' : ''}`}
+                  className={`h-4 w-4 text-muted transition-transform ${historyExpanded ? 'rotate-90' : ''}`}
                   fill="currentColor"
                   viewBox="0 0 24 24"
                 >
                   <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z" />
                 </svg>
-                <span className="font-medium text-[#202124]">Recent Searches</span>
-                <span className="text-sm text-[#5f6368]">({searchHistory.length})</span>
+                <span className="font-serif text-xl font-medium text-ink">Recent searches</span>
+                <span className="chip chip-leaf">{searchHistory.length}</span>
               </div>
               {historyExpanded && (
                 <span
-                  onClick={(e) => { e.stopPropagation(); handleClearHistory(); }}
-                  className="text-xs text-[#5f6368] hover:text-[#c5221f] cursor-pointer"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleClearHistory();
+                  }}
+                  className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-muted hover:text-rose-deep"
                 >
                   Clear all
                 </span>
@@ -237,7 +282,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onIndexMore }) => {
                   />
                 ))}
                 {searchHistory.length > 5 && (
-                  <p className="text-xs text-[#5f6368] text-center pt-2">
+                  <p className="pt-2 text-center text-xs text-muted">
                     + {searchHistory.length - 5} more searches
                   </p>
                 )}
@@ -280,9 +325,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({ onIndexMore }) => {
       )}
 
       {filteredChannels.length === 0 && filter && (
-        <div className="text-center py-12 text-[#5f6368]">
-          No videos matching "{filter}"
-        </div>
+        <div className="card py-12 text-center text-bark">No videos matching "{filter}"</div>
       )}
     </div>
   );
@@ -300,12 +343,21 @@ interface FlatVideoGridProps {
   downloadingVideo: string | null;
 }
 
-const FlatVideoGrid: React.FC<FlatVideoGridProps> = ({ channels, density, sortMode, filter, onDeleteVideo, onDownloadTranscript, deletingVideo, downloadingVideo }) => {
+const FlatVideoGrid: React.FC<FlatVideoGridProps> = ({
+  channels,
+  density,
+  sortMode,
+  filter,
+  onDeleteVideo,
+  onDownloadTranscript,
+  deletingVideo,
+  downloadingVideo,
+}) => {
   // Flatten all videos from all channels
-  const allVideos = channels.flatMap(channel =>
+  const allVideos = channels.flatMap((channel) =>
     channel.videos
-      .filter(v => !filter || v.title.toLowerCase().includes(filter.toLowerCase()))
-      .map(video => ({ ...video, channelName: channel.name }))
+      .filter((v) => !filter || v.title.toLowerCase().includes(filter.toLowerCase()))
+      .map((video) => ({ ...video, channelName: channel.name })),
   );
 
   // Sort videos
@@ -316,16 +368,13 @@ const FlatVideoGrid: React.FC<FlatVideoGridProps> = ({ channels, density, sortMo
     return 0;
   });
 
-  const gridClass = density === 'compact'
-    ? 'grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 gap-2'
-    : 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4';
+  const gridClass =
+    density === 'compact'
+      ? 'grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 gap-2'
+      : 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4';
 
   if (sortedVideos.length === 0) {
-    return (
-      <div className="text-center py-12 text-[#5f6368]">
-        No videos found
-      </div>
-    );
+    return <div className="card py-12 text-center text-bark">No videos found</div>;
   }
 
   return (
@@ -357,7 +406,15 @@ interface FlatVideoCardProps {
   density: DensityMode;
 }
 
-const FlatVideoCard: React.FC<FlatVideoCardProps> = ({ video, channelName, onDelete, onDownload, isDeleting, isDownloading, density }) => {
+const FlatVideoCard: React.FC<FlatVideoCardProps> = ({
+  video,
+  channelName,
+  onDelete,
+  onDownload,
+  isDeleting,
+  isDownloading,
+  density,
+}) => {
   const isCompact = density === 'compact';
 
   return (
@@ -367,7 +424,7 @@ const FlatVideoCard: React.FC<FlatVideoCardProps> = ({ video, channelName, onDel
         target="_blank"
         rel="noopener noreferrer"
       >
-        <div className={`aspect-video bg-[#f1f3f4] overflow-hidden relative ${isCompact ? 'rounded' : 'rounded-lg'}`}>
+        <div className="relative aspect-video overflow-hidden rounded-lg bg-petal shadow-soft">
           <img
             src={video.thumbnailUrl}
             alt={video.title}
@@ -380,44 +437,82 @@ const FlatVideoCard: React.FC<FlatVideoCardProps> = ({ video, channelName, onDel
           )}
         </div>
         <div className={isCompact ? 'mt-1' : 'mt-2'}>
-          <h4 className={`text-[#202124] group-hover:text-[#1a73e8] ${isCompact ? 'text-[11px] line-clamp-1' : 'text-sm line-clamp-2'}`}>
+          <h4
+            className={`text-ink group-hover:text-rose-deep ${isCompact ? 'line-clamp-1 text-[11px]' : 'line-clamp-2 text-sm'}`}
+          >
             {video.title}
           </h4>
-          <p className={`text-[#5f6368] ${isCompact ? 'text-[10px]' : 'text-xs mt-0.5'}`}>
+          <p className={`text-muted ${isCompact ? 'text-[10px]' : 'mt-0.5 text-xs'}`}>
             {channelName}
           </p>
         </div>
       </a>
 
       {/* Action buttons */}
-      <div className={`absolute flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity ${isCompact ? 'top-1 right-1' : 'top-2 right-2'}`}>
+      <div
+        className={`absolute flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity ${isCompact ? 'top-1 right-1' : 'top-2 right-2'}`}
+      >
         {/* Download button */}
         <button
-          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDownload(); }}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDownload();
+          }}
           disabled={isDownloading}
-          className={`bg-black/70 hover:bg-[#1a73e8] text-white rounded disabled:opacity-50 ${isCompact ? 'p-0.5' : 'p-1'}`}
+          className={`rounded-full bg-surface/90 text-teal-deep shadow-soft transition-colors hover:bg-surface disabled:opacity-50 ${isCompact ? 'p-1' : 'p-1.5'}`}
           title="Download transcript (SRT)"
+          aria-label="Download transcript (SRT)"
         >
           {isDownloading ? (
-            <div className={`animate-spin border-2 border-white border-t-transparent rounded-full ${isCompact ? 'w-3 h-3' : 'w-4 h-4'}`} />
+            <div
+              className={`animate-spin border-2 border-current border-t-transparent rounded-full ${isCompact ? 'w-3 h-3' : 'w-4 h-4'}`}
+            />
           ) : (
-            <svg className={isCompact ? 'w-3 h-3' : 'w-4 h-4'} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            <svg
+              className={isCompact ? 'w-3 h-3' : 'w-4 h-4'}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+              />
             </svg>
           )}
         </button>
         {/* Delete button */}
         <button
-          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(); }}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDelete();
+          }}
           disabled={isDeleting}
-          className={`bg-black/70 hover:bg-red-600 text-white rounded disabled:opacity-50 ${isCompact ? 'p-0.5' : 'p-1'}`}
+          className={`rounded-full bg-surface/90 text-rose-deep shadow-soft transition-colors hover:bg-surface disabled:opacity-50 ${isCompact ? 'p-1' : 'p-1.5'}`}
           title="Delete from library"
+          aria-label="Delete from library"
         >
           {isDeleting ? (
-            <div className={`animate-spin border-2 border-white border-t-transparent rounded-full ${isCompact ? 'w-3 h-3' : 'w-4 h-4'}`} />
+            <div
+              className={`animate-spin border-2 border-current border-t-transparent rounded-full ${isCompact ? 'w-3 h-3' : 'w-4 h-4'}`}
+            />
           ) : (
-            <svg className={isCompact ? 'w-3 h-3' : 'w-4 h-4'} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            <svg
+              className={isCompact ? 'w-3 h-3' : 'w-4 h-4'}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+              />
             </svg>
           )}
         </button>
@@ -439,9 +534,20 @@ interface ChannelSectionProps {
   sortMode: SortMode;
 }
 
-const ChannelSection: React.FC<ChannelSectionProps> = ({ channel, isExpanded, onToggle, filter, onDeleteVideo, onDownloadTranscript, deletingVideo, downloadingVideo, density, sortMode }) => {
+const ChannelSection: React.FC<ChannelSectionProps> = ({
+  channel,
+  isExpanded,
+  onToggle,
+  filter,
+  onDeleteVideo,
+  onDownloadTranscript,
+  deletingVideo,
+  downloadingVideo,
+  density,
+  sortMode,
+}) => {
   const filteredVideos = filter
-    ? channel.videos.filter(v => v.title.toLowerCase().includes(filter.toLowerCase()))
+    ? channel.videos.filter((v) => v.title.toLowerCase().includes(filter.toLowerCase()))
     : channel.videos;
 
   // Sort videos based on sortMode
@@ -453,26 +559,27 @@ const ChannelSection: React.FC<ChannelSectionProps> = ({ channel, isExpanded, on
     return 0; // default: maintain original order
   });
 
-  const gridClass = density === 'compact'
-    ? 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-1.5'
-    : 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3';
+  const gridClass =
+    density === 'compact'
+      ? 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-1.5'
+      : 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3';
 
   return (
-    <div className="bg-white rounded-lg border border-[#dadce0] overflow-hidden">
+    <div className="card overflow-hidden">
       <button
         onClick={onToggle}
-        className="w-full px-4 py-3 flex items-center justify-between hover:bg-[#f8f9fa] transition-colors"
+        className="flex w-full items-center justify-between px-4 py-3 transition-colors hover:bg-petal"
       >
         <div className="flex items-center gap-3">
           <svg
-            className={`w-4 h-4 text-[#5f6368] transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+            className={`h-4 w-4 text-muted transition-transform ${isExpanded ? 'rotate-90' : ''}`}
             fill="currentColor"
             viewBox="0 0 24 24"
           >
             <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z" />
           </svg>
-          <span className="font-medium text-[#202124]">{channel.name}</span>
-          <span className="text-sm text-[#5f6368]">({channel.videoCount} videos)</span>
+          <span className="font-serif text-xl font-medium text-ink">{channel.name}</span>
+          <span className="chip chip-sun">{channel.videoCount} videos</span>
         </div>
       </button>
 
@@ -506,7 +613,14 @@ interface VideoCardProps {
   density: DensityMode;
 }
 
-const VideoCard: React.FC<VideoCardProps> = ({ video, onDelete, onDownload, isDeleting, isDownloading, density }) => {
+const VideoCard: React.FC<VideoCardProps> = ({
+  video,
+  onDelete,
+  onDownload,
+  isDeleting,
+  isDownloading,
+  density,
+}) => {
   const isCompact = density === 'compact';
 
   return (
@@ -516,52 +630,88 @@ const VideoCard: React.FC<VideoCardProps> = ({ video, onDelete, onDownload, isDe
         target="_blank"
         rel="noopener noreferrer"
       >
-        <div className={`aspect-video bg-[#f1f3f4] overflow-hidden relative ${isCompact ? 'rounded' : 'rounded-lg mb-2'}`}>
+        <div
+          className={`relative aspect-video overflow-hidden rounded-lg bg-petal shadow-soft ${isCompact ? '' : 'mb-2'}`}
+        >
           <img
             src={video.thumbnailUrl}
             alt={video.title}
             className="w-full h-full object-cover group-hover:scale-105 transition-transform"
           />
         </div>
-        <h4 className={`text-[#202124] group-hover:text-[#1a73e8] ${isCompact ? 'text-xs line-clamp-1 mt-1' : 'text-sm line-clamp-2'}`}>
+        <h4
+          className={`text-ink group-hover:text-rose-deep ${isCompact ? 'mt-1 line-clamp-1 text-xs' : 'line-clamp-2 text-sm'}`}
+        >
           {video.title}
         </h4>
-        {!isCompact && (
-          <p className="text-xs text-[#5f6368] mt-1">
-            {video.clipCount} clips
-          </p>
-        )}
+        {!isCompact && <p className="mt-1 text-xs text-muted">{video.clipCount} clips</p>}
       </a>
 
       {/* Action buttons */}
-      <div className={`absolute flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity ${isCompact ? 'top-1 right-1' : 'top-2 right-2'}`}>
+      <div
+        className={`absolute flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity ${isCompact ? 'top-1 right-1' : 'top-2 right-2'}`}
+      >
         {/* Download button */}
         <button
-          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDownload(); }}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDownload();
+          }}
           disabled={isDownloading}
-          className={`bg-black/70 hover:bg-[#1a73e8] text-white rounded disabled:opacity-50 ${isCompact ? 'p-1' : 'p-1.5'}`}
+          className={`rounded-full bg-surface/90 text-teal-deep shadow-soft transition-colors hover:bg-surface disabled:opacity-50 ${isCompact ? 'p-1' : 'p-1.5'}`}
           title="Download transcript (SRT)"
+          aria-label="Download transcript (SRT)"
         >
           {isDownloading ? (
-            <div className={`animate-spin border-2 border-white border-t-transparent rounded-full ${isCompact ? 'w-3 h-3' : 'w-4 h-4'}`} />
+            <div
+              className={`animate-spin border-2 border-current border-t-transparent rounded-full ${isCompact ? 'w-3 h-3' : 'w-4 h-4'}`}
+            />
           ) : (
-            <svg className={isCompact ? 'w-3 h-3' : 'w-4 h-4'} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            <svg
+              className={isCompact ? 'w-3 h-3' : 'w-4 h-4'}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+              />
             </svg>
           )}
         </button>
         {/* Delete button */}
         <button
-          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDelete(); }}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onDelete();
+          }}
           disabled={isDeleting}
-          className={`bg-black/70 hover:bg-red-600 text-white rounded disabled:opacity-50 ${isCompact ? 'p-1' : 'p-1.5'}`}
+          className={`rounded-full bg-surface/90 text-rose-deep shadow-soft transition-colors hover:bg-surface disabled:opacity-50 ${isCompact ? 'p-1' : 'p-1.5'}`}
           title="Delete from library"
+          aria-label="Delete from library"
         >
           {isDeleting ? (
-            <div className={`animate-spin border-2 border-white border-t-transparent rounded-full ${isCompact ? 'w-3 h-3' : 'w-4 h-4'}`} />
+            <div
+              className={`animate-spin border-2 border-current border-t-transparent rounded-full ${isCompact ? 'w-3 h-3' : 'w-4 h-4'}`}
+            />
           ) : (
-            <svg className={isCompact ? 'w-3 h-3' : 'w-4 h-4'} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            <svg
+              className={isCompact ? 'w-3 h-3' : 'w-4 h-4'}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+              />
             </svg>
           )}
         </button>
@@ -598,21 +748,31 @@ const SearchHistoryCard: React.FC<SearchHistoryCardProps> = ({ entry, onDelete }
   };
 
   return (
-    <div className="group border border-[#e8eaed] rounded-lg p-3 hover:border-[#dadce0] transition-colors">
+    <div className="group rounded-xl border border-ink/10 bg-cream p-3 transition-colors hover:bg-surface">
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-[#202124] truncate">{entry.query}</p>
-          <p className="text-xs text-[#5f6368]">
-            {formatRelativeTime(entry.timestamp)} • {entry.clips.length} clip{entry.clips.length !== 1 ? 's' : ''}
+          <p className="truncate text-sm font-semibold text-ink">{entry.query}</p>
+          <p className="text-xs text-muted">
+            {formatRelativeTime(entry.timestamp)} - {entry.clips.length} clip
+            {entry.clips.length !== 1 ? 's' : ''}
           </p>
         </div>
         <button
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="text-[#5f6368] hover:text-[#c5221f] p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          className="rounded-full p-1 text-muted opacity-0 transition-opacity hover:text-rose-deep group-hover:opacity-100 focus-visible:opacity-100"
           title="Remove from history"
+          aria-label="Remove from history"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
         </button>
       </div>
@@ -627,29 +787,46 @@ const SearchHistoryCard: React.FC<SearchHistoryCardProps> = ({ entry, onDelete }
             rel="noopener noreferrer"
             className="flex-shrink-0 group/clip"
           >
-            <div className="relative w-24 aspect-video bg-[#f1f3f4] rounded overflow-hidden">
+            <div className="relative aspect-video w-24 overflow-hidden rounded-lg bg-petal">
               <img
                 src={clip.thumbnailUrl}
                 alt={clip.title}
                 className="w-full h-full object-cover group-hover/clip:scale-105 transition-transform"
               />
-              <span className="absolute bottom-1 right-1 bg-black/80 text-white text-[10px] px-1 rounded">
+              <span className="absolute bottom-1 right-1 rounded bg-sun px-1 font-mono text-[10px] font-medium text-ink">
                 {formatTime(clip.startSeconds)}
               </span>
             </div>
-            <p className="text-[10px] text-[#5f6368] mt-1 w-24 truncate group-hover/clip:text-[#1a73e8]">
+            <p className="mt-1 w-24 truncate text-[10px] text-muted group-hover/clip:text-rose-deep">
               {clip.title}
             </p>
           </a>
         ))}
         {entry.clips.length > 4 && (
-          <div className="flex-shrink-0 w-24 aspect-video bg-[#f1f3f4] rounded flex items-center justify-center">
-            <span className="text-xs text-[#5f6368]">+{entry.clips.length - 4} more</span>
+          <div className="flex aspect-video w-24 flex-shrink-0 items-center justify-center rounded-lg bg-lavender">
+            <span className="text-xs font-semibold text-ink">+{entry.clips.length - 4} more</span>
           </div>
         )}
       </div>
     </div>
   );
 };
+
+function Metric({
+  value,
+  label,
+  isLast = false,
+}: {
+  value: number;
+  label: string;
+  isLast?: boolean;
+}) {
+  return (
+    <div className={`min-w-20 px-4 py-3 text-center ${isLast ? '' : 'border-r border-ink/10'}`}>
+      <p className="font-mono text-xl font-semibold text-rose-deep">{value}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">{label}</p>
+    </div>
+  );
+}
 
 export default LibraryView;

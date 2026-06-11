@@ -1,17 +1,21 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { VideoClip } from '../types';
 import { ingestChannel, searchVideoClips, saveSearchToHistory } from '../services/api';
 
 interface UnifiedSearchViewProps {
   onSearchComplete: (clips: VideoClip[], answer: string, activeClip: VideoClip | null) => void;
-  onIndexComplete: () => void;  // Called when indexing completes without a search
+  onIndexComplete: () => void; // Called when indexing completes without a search
   isBackendConnected: boolean;
   hasApiKey: boolean;
   hasServerKey: boolean;
+  allowUserKeys: boolean;
+  showLocalBackendHelp: boolean;
   onOpenSettings: () => void;
+  maxSearchResults?: number | null;
 }
 
 type WorkflowStatus = 'idle' | 'ingesting' | 'searching' | 'complete' | 'error';
+type WorkbenchMode = 'index' | 'library';
 
 export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
   onSearchComplete,
@@ -19,10 +23,13 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
   isBackendConnected,
   hasApiKey,
   hasServerKey,
+  allowUserKeys,
+  showLocalBackendHelp,
   onOpenSettings,
+  maxSearchResults = 5,
 }) => {
   const [message, setMessage] = useState('');
-  const [searchLibrary, setSearchLibrary] = useState(false);
+  const [workbenchMode, setWorkbenchMode] = useState<WorkbenchMode>('index');
   const [resultLimit, setResultLimit] = useState(5);
 
   // Workflow state
@@ -30,6 +37,12 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
   const [currentStep, setCurrentStep] = useState('');
   const [ingestLogs, setIngestLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (maxSearchResults && resultLimit > maxSearchResults) {
+      setResultLimit(maxSearchResults);
+    }
+  }, [maxSearchResults, resultLimit]);
 
   // Track URLs pending ingestion
   const pendingUrlsRef = useRef<string[]>([]);
@@ -63,14 +76,14 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
     const hasUrls = urls.length > 0;
     const hasQuery = queryText.length > 0;
 
-    // Need either URLs to ingest or searchLibrary checked
-    if (!hasUrls && !searchLibrary) {
-      setError('Add YouTube links or check "Search Library" to search existing videos');
+    // Need either URLs to ingest or library mode selected.
+    if (!hasUrls && workbenchMode === 'index') {
+      setError('Paste a YouTube URL, or switch to Search library for existing videos.');
       return;
     }
 
-    // If searching library without URLs, need a query
-    if (!hasUrls && searchLibrary && !hasQuery) {
+    // If searching library without URLs, need a query.
+    if (!hasUrls && workbenchMode === 'library' && !hasQuery) {
       setError('Enter a search query to search your library');
       return;
     }
@@ -82,8 +95,8 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
       setStatus('ingesting');
 
       // If there's a query, search after indexing. Otherwise, just index.
-      const shouldSearch = hasQuery || searchLibrary;
-      await ingestAllUrls(urls, shouldSearch ? (queryText || message) : null);
+      const shouldSearch = hasQuery || workbenchMode === 'library';
+      await ingestAllUrls(urls, shouldSearch ? queryText || message : null);
     } else {
       // Direct search (searching existing library)
       await performSearch(queryText);
@@ -99,8 +112,8 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
       await new Promise<void>((resolve) => {
         ingestChannel(
           urls[i],
-          (msg) => setIngestLogs(prev => [...prev, msg]),
-          () => resolve()
+          (msg) => setIngestLogs((prev) => [...prev, msg]),
+          () => resolve(),
         );
       });
     }
@@ -129,7 +142,7 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
       setCurrentStep('');
 
       // Filter to clips with valid videoId, find first valid one for active clip
-      const validClips = relevantClips.filter(clip => clip.videoId);
+      const validClips = relevantClips.filter((clip) => clip.videoId);
       const firstValidClip = validClips.length > 0 ? validClips[0] : null;
 
       // Save to search history if we got results
@@ -149,137 +162,178 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
   const urls = extractUrls(message);
   const queryText = getQueryText(message);
   const hasQuery = queryText.length > 0;
-  const canSubmit = isBackendConnected && message.trim() && (urls.length > 0 || searchLibrary);
+  const shouldShowApiKeySetup = allowUserKeys && !hasApiKey && !hasServerKey;
+  const canSubmit =
+    isBackendConnected && message.trim() && (urls.length > 0 || workbenchMode === 'library');
+  const resultOptions = [1, 3, 5, 10].filter(
+    (option) => !maxSearchResults || option <= maxSearchResults,
+  );
 
   // Determine button label
   const getButtonLabel = () => {
-    if (urls.length > 0 && (hasQuery || searchLibrary)) {
-      return 'Index & Search';
+    if (urls.length > 0 && (hasQuery || workbenchMode === 'library')) {
+      return 'Index and search';
     } else if (urls.length > 0) {
-      return 'Index';
+      return 'Index source';
+    } else if (workbenchMode === 'index') {
+      return 'Index source';
     } else {
-      return 'Search';
+      return 'Search library';
     }
   };
 
   return (
-    <div className="max-w-2xl mx-auto w-full">
-      {/* Header */}
-      <div className="text-center mb-8">
-        <div className="flex justify-center mb-4">
-          <svg className="w-20 h-20" viewBox="0 0 48 48" fill="none">
-            <circle cx="22" cy="22" r="14" stroke="#ea4335" strokeWidth="4" />
-            <path d="M32 32l12 12" stroke="#4285f4" strokeWidth="4" strokeLinecap="round" />
-          </svg>
-        </div>
-        <h1 className="text-3xl font-normal text-[#202124] mb-2">
-          SearchTube
-        </h1>
-        <p className="text-[#5f6368] text-base">
-          Search your videos like Google. Find that perfect clip in seconds, not hours.
+    <div className="mx-auto w-full max-w-3xl">
+      <div className="mb-6">
+        <p className="eyebrow mb-2">Workbench</p>
+        <h2 className="font-serif text-4xl font-medium text-ink">Find a moment.</h2>
+        <p className="mt-2 text-sm leading-6 text-bark">
+          Index a new YouTube source, search your existing library, or do both in one request.
         </p>
       </div>
 
       {/* API Key Warning */}
-      {!hasApiKey && !hasServerKey && (
-        <div className="mb-6 bg-[#fef7e0] border border-[#fdd663] text-[#5f4000] p-4 rounded-lg flex items-center gap-3">
-          <svg className="w-6 h-6 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+      {shouldShowApiKeySetup && (
+        <div className="mb-6 flex items-center gap-3 rounded-xl bg-sun/25 p-4 text-ink">
+          <svg className="w-6 h-6 flex-shrink-0 text-bark" fill="currentColor" viewBox="0 0 24 24">
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
           </svg>
           <div className="flex-1">
-            <p className="font-medium">API Key Required</p>
-            <p className="text-sm">Add your Gemini API key to get started.</p>
+            <p className="font-medium">API key needed for local mode</p>
+            <p className="text-sm">Add a Gemini API key to use this self-hosted setup.</p>
           </div>
-          <button
-            onClick={onOpenSettings}
-            className="bg-[#5f4000] hover:bg-[#3f2a00] text-white px-4 py-2 rounded-md text-sm font-medium whitespace-nowrap"
-          >
+          <button onClick={onOpenSettings} className="btn btn-secondary whitespace-nowrap">
             Add API Key
           </button>
         </div>
       )}
 
       {/* Main Card */}
-      <div className="bg-white rounded-lg border border-[#dadce0] shadow-sm">
+      <div className="rounded-2xl bg-cream">
         {!isWorking ? (
           <form onSubmit={handleSubmit} className="p-6">
             {/* Single Message Input */}
             <div className="mb-5">
-              <label htmlFor="message" className="block text-sm font-medium text-[#202124] mb-2">
-                What do you want to find?
+              <div className="mb-4 grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setWorkbenchMode('index')}
+                  aria-pressed={workbenchMode === 'index'}
+                  className={`rounded-xl border p-4 text-left transition-all ${
+                    workbenchMode === 'index'
+                      ? 'border-rose-deep bg-petal/40 shadow-soft'
+                      : 'border-ink/10 bg-surface hover:border-ink/25'
+                  }`}
+                >
+                  <span className="block text-sm font-semibold text-ink">Index source</span>
+                  <span className="mt-1 block text-xs text-bark">
+                    Add a video, playlist, or channel.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setWorkbenchMode('library')}
+                  aria-pressed={workbenchMode === 'library'}
+                  className={`rounded-xl border p-4 text-left transition-all ${
+                    workbenchMode === 'library'
+                      ? 'border-rose-deep bg-petal/40 shadow-soft'
+                      : 'border-ink/10 bg-surface hover:border-ink/25'
+                  }`}
+                >
+                  <span className="block text-sm font-semibold text-ink">Search library</span>
+                  <span className="mt-1 block text-xs text-bark">
+                    Search sources you already indexed.
+                  </span>
+                </button>
+              </div>
+              <label
+                htmlFor="message"
+                className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted"
+              >
+                {workbenchMode === 'library'
+                  ? 'Describe the moment'
+                  : 'Paste source and optional query'}
               </label>
               <textarea
                 id="message"
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder={"Paste a YouTube link to index, or add a question to search:\n• https://youtube.com/@channel — Index only\n• What is AI? https://youtube.com/watch?v=abc — Index & Search"}
+                placeholder={
+                  workbenchMode === 'library'
+                    ? 'Example: the part where they explain why pricing objections are really uncertainty'
+                    : 'Example: https://youtube.com/@channel\nOptional: find the section about pricing objections'
+                }
                 disabled={!isBackendConnected}
                 rows={3}
-                className="w-full px-4 py-3 border border-[#dadce0] rounded-lg focus:outline-none focus:border-[#1a73e8] focus:ring-1 focus:ring-[#1a73e8] text-sm disabled:bg-[#f1f3f4] disabled:cursor-not-allowed resize-none"
+                className="input w-full resize-none px-4 py-3 text-sm disabled:cursor-not-allowed disabled:bg-petal/50"
               />
               {urls.length > 0 && (
-                <p className="text-xs text-[#1a73e8] mt-1">
+                <p className="mt-2 text-xs font-medium text-teal-deep">
                   {urls.length} YouTube link{urls.length !== 1 ? 's' : ''} detected
                 </p>
               )}
             </div>
 
-            {/* Search Library Checkbox */}
-            <div className="mb-5">
-              <label className="flex items-center gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={searchLibrary}
-                  onChange={(e) => setSearchLibrary(e.target.checked)}
-                  className="w-4 h-4 text-[#1a73e8] border-[#dadce0] rounded focus:ring-[#1a73e8]"
-                />
-                <span className="text-sm text-[#3c4043]">Search Library</span>
-              </label>
-            </div>
-
             {/* Error Message */}
             {error && (
-              <div className="mb-4 bg-[#fce8e6] border border-[#f5c6cb] text-[#c5221f] p-3 rounded-lg text-sm">
+              <div className="mb-4 rounded-xl bg-rose/10 p-3 text-sm font-medium text-rose-deep">
                 {error}
               </div>
             )}
 
             {/* Submit Row */}
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 type="submit"
                 disabled={!canSubmit}
-                className="bg-[#1a73e8] hover:bg-[#1557b0] text-white px-6 py-2 rounded-md text-sm font-medium disabled:bg-[#dadce0] disabled:cursor-not-allowed transition-colors"
+                className="btn btn-primary whitespace-nowrap"
               >
                 {getButtonLabel()}
               </button>
 
-              <label className="text-xs text-[#5f6368]">Results:</label>
+              <label className="text-xs font-medium uppercase tracking-wide text-muted">
+                Results:
+              </label>
               <select
                 value={resultLimit}
                 onChange={(e) => setResultLimit(Number(e.target.value))}
-                className="text-sm bg-white text-[#3c4043] border border-[#dadce0] rounded px-3 py-2 focus:outline-none focus:border-[#1a73e8] cursor-pointer"
+                className="input cursor-pointer px-3 py-2 text-sm"
               >
-                <option value={1}>1</option>
-                <option value={3}>3</option>
-                <option value={5}>5</option>
-                <option value={10}>10</option>
+                {resultOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
               </select>
             </div>
 
             {/* Backend Unavailable Warning */}
             {!isBackendConnected && (
-              <div className="mt-4 bg-[#fce8e6] border border-[#f5c6cb] rounded-lg p-4">
+              <div className="mt-4 rounded-xl border border-ink/10 bg-surface p-4">
                 <div className="flex gap-3">
-                  <svg className="w-5 h-5 text-[#c5221f] flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  <svg
+                    className="mt-0.5 h-5 w-5 flex-shrink-0 text-teal-deep"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                    />
                   </svg>
-                  <div className="text-sm text-[#c5221f]">
-                    <p className="font-medium">Backend Unavailable</p>
-                    <p className="mt-1 text-[#5f6368]">Run the Python server:</p>
-                    <code className="block bg-[#f1f3f4] text-[#202124] p-2 mt-2 rounded text-xs">
-                      pip install -r requirements.txt && python server.py
-                    </code>
+                  <div className="text-sm text-ink">
+                    <p className="font-semibold">Service is not connected</p>
+                    <p className="mt-1 text-bark">
+                      Search and indexing will be available once the backend is online.
+                    </p>
+                    {showLocalBackendHelp && (
+                      <code className="mt-2 block rounded-lg bg-ink p-2.5 font-mono text-xs text-cream">
+                        pip install -r requirements.txt && python backend/server.py
+                      </code>
+                    )}
                   </div>
                 </div>
               </div>
@@ -291,25 +345,25 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
             <div className="flex flex-col items-center justify-center py-12">
               {/* Spinning Circle */}
               <div className="relative">
-                <div className="w-16 h-16 border-4 border-[#e8f0fe] rounded-full"></div>
-                <div className="absolute top-0 left-0 w-16 h-16 border-4 border-transparent border-t-[#1a73e8] rounded-full animate-spin"></div>
+                <div className="h-16 w-16 rounded-full border-4 border-petal"></div>
+                <div className="absolute left-0 top-0 h-16 w-16 animate-spin rounded-full border-4 border-transparent border-t-rose"></div>
               </div>
 
               {/* Current Step */}
-              <p className="mt-6 text-sm text-[#3c4043] text-center min-h-[1.5rem] transition-all max-w-md">
+              <p className="mt-6 min-h-[1.5rem] max-w-md text-center text-sm font-medium text-ink transition-all">
                 {currentStep || (status === 'ingesting' ? 'Starting indexing...' : 'Searching...')}
               </p>
 
               {/* Progress Context */}
               {status === 'ingesting' && (
-                <p className="mt-2 text-xs text-[#9aa0a6]">
+                <p className="mt-2 text-xs font-medium uppercase tracking-wide text-muted">
                   {currentUrlIndexRef.current + 1} of {pendingUrlsRef.current.length} sources
                 </p>
               )}
 
               {/* Latest Log */}
               {ingestLogs.length > 0 && (
-                <p className="mt-4 text-xs text-[#5f6368] text-center max-w-sm truncate">
+                <p className="mt-4 max-w-sm truncate text-center text-xs text-bark">
                   {ingestLogs[ingestLogs.length - 1]}
                 </p>
               )}
@@ -317,7 +371,6 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
           </div>
         )}
       </div>
-
     </div>
   );
 };

@@ -1,56 +1,52 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SearchTube - Find the exact moment</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <style>
-    body {
-      font-family: 'Google Sans', system-ui, sans-serif;
-      background-color: #f8f9fa;
-      color: #202124;
-    }
-
-    /* Custom scrollbar for clean look */
-    ::-webkit-scrollbar {
-      width: 6px;
-    }
-
-    ::-webkit-scrollbar-track {
-      background: #f1f3f4;
-    }
-
-    ::-webkit-scrollbar-thumb {
-      background: #dadce0;
-      border-radius: 3px;
-    }
-
-    ::-webkit-scrollbar-thumb:hover {
-      background: #bdc1c6;
-    }
-
-    /* Toast animation */
-    @keyframes fade-in-up {
-      from {
-        opacity: 0;
-        transform: translate(-50%, 10px);
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Embed Moments - Find the exact moment worth embedding</title>
+    <meta
+      name="description"
+      content="Embed Moments indexes YouTube channels, playlists, and videos so you can ask what you want to know, search by meaning, and jump straight to the exact timestamp worth quoting, clipping, or citing."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://embedmoments.com" />
+    <meta
+      property="og:title"
+      content="Embed Moments - A searchable memory for everything you watch"
+    />
+    <meta
+      property="og:description"
+      content="Index any YouTube channel, playlist, or video, then ask what you want to know and jump straight to the exact moment worth quoting, clipping, or citing."
+    />
+    <meta property="og:image" content="https://embedmoments.com/images/og-card.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="Embed Moments - A searchable memory for everything you watch"
+    />
+    <meta
+      name="twitter:description"
+      content="Index any YouTube channel, playlist, or video, then ask what you want to know and jump straight to the exact moment worth quoting, clipping, or citing."
+    />
+    <meta name="twitter:image" content="https://embedmoments.com/images/og-card.png" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        font-family: Inter, system-ui, sans-serif;
+        background-color: #fff4df;
+        color: #251b2e;
       }
-      to {
-        opacity: 1;
-        transform: translate(-50%, 0);
-      }
-    }
-    .animate-fade-in-up {
-      animation: fade-in-up 0.2s ease-out;
-    }
-  </style>
+    </style>
   </head>
 
-<body>
-  <div id="root"></div>
-  <script type="module" src="/src/index.tsx"></script>
-</body>
-
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
 </html>

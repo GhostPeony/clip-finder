@@ -34,7 +34,7 @@ export interface LibraryVideo {
   title: string;
   thumbnailUrl: string;
   clipCount: number;
-  indexedAt?: number;  // Unix timestamp, optional for backward compat
+  indexedAt?: number; // Unix timestamp, optional for backward compat
 }
 
 export type DensityMode = 'compact' | 'comfortable';
@@ -53,7 +53,35 @@ export interface LibraryData {
   totalClips: number;
 }
 
-export type AppMode = 'unified' | 'ingest' | 'search' | 'library' | 'about' | 'contact';
+export interface IngestionJobEvent {
+  id: string;
+  job_id: string;
+  level: 'info' | 'warning' | 'error';
+  message: string;
+  youtube_video_id?: string;
+  reason?: string;
+  created_at: string;
+}
+
+export interface IngestionJob {
+  id: string;
+  user_id: string;
+  source_url: string;
+  source_type: 'channel' | 'playlist' | 'video' | 'unknown';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'partial' | 'cancelled';
+  requested_video_count: number;
+  indexed_video_count: number;
+  skipped_video_count: number;
+  failed_video_count: number;
+  last_message?: string;
+  error?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  ingestion_job_events?: IngestionJobEvent[];
+}
+
+export type AppMode = 'unified' | 'ingest' | 'search' | 'library' | 'jobs' | 'about' | 'contact';
 
 // Search history types
 export interface SearchHistoryClip {

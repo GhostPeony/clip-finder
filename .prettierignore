@@ -1,0 +1,8 @@
+dist
+node_modules
+.pytest_cache
+channel_chroma_db
+backend/channel_chroma_db
+data
+package-lock.json
+supabase/.temp
