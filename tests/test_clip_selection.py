@@ -27,7 +27,8 @@ def test_backfills_intro_clips_when_short():
 
 
 def test_all_intro_still_returns_results():
-    candidates = [make_clip("a", 0, 60), make_clip("a", 61, 110)]
+    # both clips inside the intro window, far enough apart to not be duplicates
+    candidates = [make_clip("a", 0, 60), make_clip("a", 100, 160)]
     result = select_clips(candidates, limit=5)
     assert len(result) == 2
 
