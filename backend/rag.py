@@ -17,18 +17,21 @@ from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 try:
+    from .answers import generate_answer
+    from .clip_selection import select_clips
     from .config import get_embedding_dimensions, get_embedding_model
     from .db import get_supabase
 except ImportError:
+    from answers import generate_answer
+    from clip_selection import select_clips
     from config import get_embedding_dimensions, get_embedding_model
     from db import get_supabase
 
 # Load environment variables
-env_path = os.path.join(os.path.dirname(__file__), '..', '.env.local')
+env_path = os.path.join(os.path.dirname(__file__), "..", ".env.local")
 load_dotenv(env_path)
 
 EMBEDDING_MODEL = get_embedding_model()
-NEARBY_CHUNK_SECONDS = 90
 
 # Cache for embedding instances keyed by api_key prefix
 _embeddings_cache: dict[str, GoogleGenerativeAIEmbeddings] = {}
@@ -55,20 +58,6 @@ def _get_embeddings(api_key: Optional[str] = None) -> GoogleGenerativeAIEmbeddin
     return instance
 
 
-def _is_near_existing_clip(row: dict, clips: list[dict]) -> bool:
-    """Return true when a row is an adjacent duplicate of an existing result."""
-    start_seconds = int(row["start_seconds"])
-    end_seconds = int(row["end_seconds"])
-    for clip in clips:
-        if clip["videoId"] != row["youtube_video_id"]:
-            continue
-        overlaps = start_seconds < clip["endSeconds"] and end_seconds > clip["startSeconds"]
-        nearby = abs(start_seconds - clip["startSeconds"]) < NEARBY_CHUNK_SECONDS
-        if overlaps or nearby:
-            return True
-    return False
-
-
 def _match_snippet(content: str, max_length: int = 240) -> str:
     """Create a compact transcript snippet for search result trust cues."""
     normalized = " ".join(content.split())
@@ -80,6 +69,7 @@ def _match_snippet(content: str, max_length: int = 240) -> str:
 # ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------
+
 
 def search_pg(
     query: str,
@@ -111,28 +101,26 @@ def search_pg(
     query_vector = embeddings.embed_query(query)
     print(f"[SEARCH_PG] Embedded query ({len(query_vector)} dims)")
 
-    # 2. Call the search_chunks RPC function
-    #    Request extra rows to allow result grouping after intro filtering.
-    result = supabase.rpc("search_chunks", {
-        "query_embedding": query_vector,
-        "match_user_id": user_id,
-        "match_limit": limit * 4,
-        "min_start_seconds": 120,
-    }).execute()
+    # 2. Call the search_chunks RPC function.
+    #    min_start_seconds=0: intro filtering is now a soft preference applied
+    #    in select_clips(), so short videos still return results.
+    result = supabase.rpc(
+        "search_chunks",
+        {
+            "query_embedding": query_vector,
+            "match_user_id": user_id,
+            "match_limit": limit * 4,
+            "min_start_seconds": 0,
+        },
+    ).execute()
 
     rows = result.data or []
     print(f"[SEARCH_PG] RPC returned {len(rows)} rows")
 
-    # 3. Map to VideoClip dicts (same format frontend expects)
-    clips = []
-    for i, row in enumerate(rows):
-        if len(clips) >= limit:
-            break
-        if _is_near_existing_clip(row, clips):
-            continue
-
-        clips.append({
-            "id": f"clip_{len(clips)}",
+    # 3. Map to VideoClip dicts, then apply shared selection + cited answer.
+    candidates = [
+        {
+            "id": "clip_pending",
             "videoId": row["youtube_video_id"],
             "title": row["title"],
             "channelName": row["channel_name"],
@@ -143,12 +131,17 @@ def search_pg(
             "similarity": row.get("similarity"),
             "matchSnippet": _match_snippet(row["content"]),
             "relevanceReason": "Semantic match in the transcript near this timestamp.",
-        })
+        }
+        for row in rows
+    ]
 
-    print(f"[SEARCH_PG] Returning {len(clips)} clips")
+    clips = select_clips(candidates, limit)
+    answer = generate_answer(query, clips, api_key)
+
+    print(f"[SEARCH_PG] Returning {len(clips)} clips (answer: {len(answer)} chars)")
 
     return {
-        "answer": "",
+        "answer": answer,
         "relevantClips": clips,
     }
 
@@ -156,6 +149,7 @@ def search_pg(
 # ---------------------------------------------------------------------------
 # Library
 # ---------------------------------------------------------------------------
+
 
 def get_library_pg(user_id: str) -> dict:
     """
@@ -218,27 +212,32 @@ def get_library_pg(user_id: str) -> dict:
             indexed_at_ts = None
             if video.get("indexed_at"):
                 from datetime import datetime
+
                 try:
                     dt = datetime.fromisoformat(video["indexed_at"].replace("Z", "+00:00"))
                     indexed_at_ts = int(dt.timestamp())
                 except (ValueError, AttributeError):
                     pass
 
-            channel_videos.append({
-                "videoId": video["youtube_video_id"],
-                "title": video["title"],
-                "thumbnailUrl": video["thumbnail_url"] or "",
-                "clipCount": clip_count,
-                "indexedAt": indexed_at_ts,
-            })
+            channel_videos.append(
+                {
+                    "videoId": video["youtube_video_id"],
+                    "title": video["title"],
+                    "thumbnailUrl": video["thumbnail_url"] or "",
+                    "clipCount": clip_count,
+                    "indexedAt": indexed_at_ts,
+                }
+            )
 
         total_videos += len(channel_videos)
 
-        channels_list.append({
-            "name": channel_name,
-            "videoCount": len(channel_videos),
-            "videos": channel_videos,
-        })
+        channels_list.append(
+            {
+                "name": channel_name,
+                "videoCount": len(channel_videos),
+                "videos": channel_videos,
+            }
+        )
 
     return {
         "channels": channels_list,
@@ -250,6 +249,7 @@ def get_library_pg(user_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # Channel / video management
 # ---------------------------------------------------------------------------
+
 
 def delete_user_channel(user_id: str, channel_id: str) -> dict:
     """
@@ -265,10 +265,12 @@ def delete_user_channel(user_id: str, channel_id: str) -> dict:
     supabase = get_supabase()
 
     # Remove subscription
-    supabase.table("user_channels").delete().match({
-        "user_id": user_id,
-        "channel_id": channel_id,
-    }).execute()
+    supabase.table("user_channels").delete().match(
+        {
+            "user_id": user_id,
+            "channel_id": channel_id,
+        }
+    ).execute()
 
     # Check if any other users are still subscribed
     remaining = (
@@ -329,10 +331,7 @@ def delete_video_pg(video_id_youtube: str, user_id: str) -> dict:
 
     # Delete the video (cascades to chunks)
     chunk_count_result = (
-        supabase.table("chunks")
-        .select("id", count="exact")
-        .eq("video_id", video["id"])
-        .execute()
+        supabase.table("chunks").select("id", count="exact").eq("video_id", video["id"]).execute()
     )
     deleted_clips = chunk_count_result.count or 0
 
@@ -340,16 +339,15 @@ def delete_video_pg(video_id_youtube: str, user_id: str) -> dict:
 
     # Update channel video count
     count_result = (
-        supabase.table("videos")
-        .select("id", count="exact")
-        .eq("channel_id", channel_id)
-        .execute()
+        supabase.table("videos").select("id", count="exact").eq("channel_id", channel_id).execute()
     )
     remaining_videos = count_result.count or 0
 
-    supabase.table("channels").update({
-        "total_videos": remaining_videos,
-    }).eq("id", channel_id).execute()
+    supabase.table("channels").update(
+        {
+            "total_videos": remaining_videos,
+        }
+    ).eq("id", channel_id).execute()
 
     # If channel is now empty, check if we should clean it up
     if remaining_videos == 0:
@@ -370,6 +368,7 @@ def delete_video_pg(video_id_youtube: str, user_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # Transcript export
 # ---------------------------------------------------------------------------
+
 
 def get_video_transcript_pg(video_id_youtube: str, user_id: str) -> list[dict]:
     """

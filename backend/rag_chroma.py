@@ -1,8 +1,8 @@
 """
 rag.py - RAG Search Engine for YouTube Content
 
-Retrieves relevant video clips from ChromaDB and generates answers with citations
-using Gemini 2.0 Flash.
+Retrieves relevant video clips from ChromaDB and can generate answers with citations
+using the configured Gemini LLM model.
 
 Key Features:
 - Semantic search across all indexed video transcripts
@@ -24,8 +24,12 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 try:
+    from .answers import generate_answer
+    from .clip_selection import select_clips
     from .config import get_embedding_dimensions, get_embedding_model, get_llm_model
 except ImportError:
+    from answers import generate_answer
+    from clip_selection import select_clips
     from config import get_embedding_dimensions, get_embedding_model, get_llm_model
 
 # Load environment variables from parent directory (where .env.local lives)
@@ -37,7 +41,6 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "channel_chroma_db")
 EMBEDDING_MODEL = get_embedding_model()
 LLM_MODEL = get_llm_model()
 TOP_K_RESULTS = 5  # Number of relevant clips to retrieve
-NEARBY_CHUNK_SECONDS = 90
 
 
 class VideoClip(TypedDict):
@@ -137,17 +140,6 @@ def get_vectorstore(api_key: str = None) -> Chroma:
     return _vectorstore_instance
 
 
-def _is_near_existing_clip(video_id: str, start_seconds: int, end_seconds: int, clips: list[VideoClip]) -> bool:
-    for clip in clips:
-        if clip["videoId"] != video_id:
-            continue
-        overlaps = start_seconds < clip["endSeconds"] and end_seconds > clip["startSeconds"]
-        nearby = abs(start_seconds - clip["startSeconds"]) < NEARBY_CHUNK_SECONDS
-        if overlaps or nearby:
-            return True
-    return False
-
-
 def _match_snippet(content: str, max_length: int = 240) -> str:
     normalized = " ".join(content.split())
     if len(normalized) <= max_length:
@@ -177,7 +169,7 @@ def search(query: str, api_key: str = None, limit: int = 5) -> SearchResult:
     print(f"[SEARCH] Creating retriever...")
     retriever = vectorstore.as_retriever(
         search_type="similarity",
-        search_kwargs={"k": limit * 2}  # Get extra to filter from
+        search_kwargs={"k": limit * 4}  # Get extra to filter from
     )
 
     # Retrieve relevant documents
@@ -191,49 +183,31 @@ def search(query: str, api_key: str = None, limit: int = 5) -> SearchResult:
             "relevantClips": []
         }
 
-    # Build clips list with transcript content
-    # Filter out intro clips (first 2 minutes) - they're often teasers, not the real content
-    SKIP_INTRO_SECONDS = 120
-    clips: list[VideoClip] = []
-
-    clip_index = 0
+    # Build all candidates, then apply shared selection (soft intro filter +
+    # near-duplicate suppression) and generate a cited answer over the winners.
+    candidates: list[VideoClip] = []
     for doc in docs:
-        if len(clips) >= limit:
-            break  # We have enough results
-
         meta = doc.metadata
-        start_seconds = int(meta.get("start_seconds", 0))
-        end_seconds = int(meta.get("end_seconds", 0))
-        video_id = meta.get("video_id", "")
+        candidates.append(
+            {
+                "id": "clip_pending",
+                "videoId": meta.get("video_id", ""),
+                "title": meta.get("title", "Unknown"),
+                "channelName": meta.get("channel_name", "Unknown"),
+                "startSeconds": int(meta.get("start_seconds", 0)),
+                "endSeconds": int(meta.get("end_seconds", 0)),
+                "content": doc.page_content,  # Full transcript, not truncated
+                "thumbnailUrl": meta.get("thumbnail_url", ""),
+                "matchSnippet": _match_snippet(doc.page_content),
+                "relevanceReason": "Semantic match in the transcript near this timestamp.",
+            }
+        )
 
-        # Skip clips from the intro section
-        if start_seconds < SKIP_INTRO_SECONDS:
-            print(f"[SEARCH] Skipping intro clip at {start_seconds}s")
-            continue
-        if _is_near_existing_clip(video_id, start_seconds, end_seconds, clips):
-            print(f"[SEARCH] Skipping nearby duplicate clip at {start_seconds}s")
-            continue
-
-        clip_id = f"clip_{clip_index}"
-        clip_index += 1
-
-        # Create clip object for frontend with full transcript content
-        clip: VideoClip = {
-            "id": clip_id,
-            "videoId": video_id,
-            "title": meta.get("title", "Unknown"),
-            "channelName": meta.get("channel_name", "Unknown"),
-            "startSeconds": start_seconds,
-            "endSeconds": end_seconds,
-            "content": doc.page_content,  # Full transcript, not truncated
-            "thumbnailUrl": meta.get("thumbnail_url", ""),
-            "matchSnippet": _match_snippet(doc.page_content),
-            "relevanceReason": "Semantic match in the transcript near this timestamp.",
-        }
-        clips.append(clip)
+    clips = select_clips(candidates, limit)
+    answer = generate_answer(query, clips, api_key)
 
     return {
-        "answer": "",  # Empty - frontend will show transcript content directly
+        "answer": answer,
         "relevantClips": clips
     }
 
