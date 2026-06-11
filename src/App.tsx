@@ -1,36 +1,87 @@
 import React, { useState, useEffect } from 'react';
 import { SearchState, VideoClip, AppMode } from './types';
-import { searchVideoClips, checkBackendHealth, fetchAppConfig } from './services/api';
+import { checkBackendHealth, fetchAppConfig } from './services/api';
+import { groupClipsByVideo } from './lib/clips';
+import { AnswerSection } from './components/AnswerSection';
 import { VideoPlayer } from './components/VideoPlayer';
-import { UnifiedSearchView } from './components/UnifiedSearchView';
 import { LibraryView } from './components/LibraryView';
+import { IngestionJobsView } from './components/IngestionJobsView';
 import { SettingsModal, getStoredApiKey } from './components/SettingsModal';
 import { Toast, useToast } from './components/Toast';
-import { LoginPage } from './components/LoginPage';
+import { LandingPage } from './components/LandingPage';
+import { ProductDashboard } from './components/ProductDashboard';
+import { BrandLogo } from './components/BrandLogo';
+import { SocialLinks } from './components/SocialLinks';
 import { useAuth } from './contexts/AuthContext';
-import { isSupabaseAuth } from './config';
+import { isSupabaseAuth, StorageMode } from './config';
+import {
+  CONTACT_EMAIL,
+  GHOST_PEONY_FOOTER_LINE,
+  GHOST_PEONY_GITHUB_URL,
+  GHOST_PEONY_NAME,
+  GHOST_PEONY_URL,
+  PRODUCT_DOMAIN,
+  PRODUCT_NAME,
+} from './brand';
 
 const App: React.FC = () => {
   const { user, loading: authLoading, signOut } = useAuth();
   const [mode, setMode] = useState<AppMode>('unified');
   const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [hasApiKey, setHasApiKey] = useState(!!getStoredApiKey());
-  const [hasServerKey, setHasServerKey] = useState(false);  // Server has .env key
-  const [allowUserKeys, setAllowUserKeys] = useState(true);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const [hasServerKey, setHasServerKey] = useState(false); // Server has .env key
+  const [allowUserKeys, setAllowUserKeys] = useState(false);
+  const [storageMode, setStorageMode] = useState<StorageMode>('supabase');
   const { toast, showToast, hideToast } = useToast();
+  const [searchState, setSearchState] = useState<SearchState>({
+    status: 'idle',
+    query: '',
+    answer: '',
+    relevantClips: [],
+  });
+  const [activeClip, setActiveClip] = useState<VideoClip | null>(null);
+
+  // Check backend connection after the authenticated app is available.
+  useEffect(() => {
+    if (authLoading) return;
+    if (isSupabaseAuth && !user) return;
+
+    checkBackendHealth().then(({ connected, hasServerKey }) => {
+      setIsBackendConnected(connected);
+      setHasServerKey(hasServerKey);
+    });
+    fetchAppConfig().then((config) => {
+      setHasServerKey(config.hasServerKey);
+      setAllowUserKeys(config.allowUserKeys);
+      setStorageMode(config.storage);
+    });
+  }, [authLoading, user]);
+
+  // Close the mobile menu on Escape.
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [mobileMenuOpen]);
 
   // Auth gate
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-[#f8f9fa] flex items-center justify-center">
-        <div className="text-[#5f6368] text-sm">Loading...</div>
+      <div className="min-h-screen bg-cream flex items-center justify-center">
+        <div className="card animate-pulse px-6 py-4 text-sm font-medium text-bark">
+          Loading {PRODUCT_NAME}...
+        </div>
       </div>
     );
   }
 
   if (isSupabaseAuth && !user) {
-    return <LoginPage />;
+    return <LandingPage />;
   }
 
   // Copy shareable link to clipboard
@@ -44,113 +95,79 @@ const App: React.FC = () => {
     }
   };
 
-  // Search State
-  const [query, setQuery] = useState('');
-  const [searchState, setSearchState] = useState<SearchState>({
-    status: 'idle',
-    query: '',
-    answer: '',
-    relevantClips: []
-  });
-  const [activeClip, setActiveClip] = useState<VideoClip | null>(null);
-  const [resultLimit, setResultLimit] = useState(5);  // User-configurable result count
-
-  // Check backend connection once on mount (no polling)
-  useEffect(() => {
-    checkBackendHealth().then(({ connected, hasServerKey }) => {
-      setIsBackendConnected(connected);
-      setHasServerKey(hasServerKey);
-    });
-    fetchAppConfig().then((config) => {
-      setHasServerKey(config.hasServerKey);
-      setAllowUserKeys(config.allowUserKeys);
-    });
-  }, []);
-
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!query.trim()) return;
-
-    setSearchState(prev => ({ ...prev, status: 'searching', query, error: undefined }));
-    setActiveClip(null);
-
-    try {
-      const { answer, relevantClips } = await searchVideoClips(query, resultLimit);
-
-      setSearchState(prev => ({
-        ...prev,
-        status: 'complete',
-        answer,
-        relevantClips
-      }));
-
-      if (relevantClips.length > 0) setActiveClip(relevantClips[0]);
-
-    } catch (err) {
-      setSearchState(prev => ({
-        ...prev,
-        status: 'error',
-        error: "Could not connect to Python backend. Is 'server.py' running?"
-      }));
-    }
-  };
-
   const handleCitationClick = (clip: VideoClip) => {
     setActiveClip(clip);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const showJobs = isSupabaseAuth || storageMode === 'supabase';
+
+  const selectMode = (next: AppMode) => {
+    setMode(next);
+    setMobileMenuOpen(false);
+  };
+
+  const navItems: Array<{ label: string; target: AppMode; isActive: boolean }> = [
+    { label: 'Workbench', target: 'unified', isActive: mode === 'unified' || mode === 'search' },
+    { label: 'Library', target: 'library', isActive: mode === 'library' },
+    ...(showJobs ? [{ label: 'Jobs', target: 'jobs' as AppMode, isActive: mode === 'jobs' }] : []),
+  ];
+
   return (
-    <div className="min-h-screen bg-[#f8f9fa] text-[#202124] flex flex-col font-['Google_Sans',system-ui,sans-serif]">
-      {/* Header - Google Style */}
-      <header className="bg-white border-b border-[#dadce0] sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center justify-between">
-          <div
-            className="flex items-center gap-3 cursor-pointer"
-            onClick={() => setMode('unified')}
+    <div className="min-h-screen bg-cream text-ink flex flex-col font-sans">
+      <header className="sticky top-0 z-50 border-b border-ink/10 bg-surface/90 backdrop-blur">
+        <div className="max-w-7xl mx-auto px-5 h-16 flex items-center justify-between">
+          <button
+            className="flex items-center gap-3"
+            onClick={() => selectMode('unified')}
+            aria-label={`${PRODUCT_NAME} home`}
           >
-            {/* Google-style logo */}
-            <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none">
-              <circle cx="11" cy="11" r="7" stroke="#ea4335" strokeWidth="2.5" />
-              <path d="M16 16l5 5" stroke="#4285f4" strokeWidth="2.5" strokeLinecap="round" />
-            </svg>
-            <span className="font-medium text-lg text-[#5f6368]">SearchTube</span>
-          </div>
+            <BrandLogo size="sm" />
+          </button>
 
-          <div className="flex items-center gap-4">
-            {/* Navigation Tabs */}
-            <div className="flex gap-1">
-              <button
-                onClick={() => setMode('unified')}
-                className={`text-sm px-3 py-2 rounded-md transition-colors font-medium ${mode === 'unified' || mode === 'search' ? 'bg-[#e8f0fe] text-[#1a73e8]' : 'text-[#5f6368] hover:bg-[#f1f3f4]'
+          <div className="flex items-center gap-3">
+            <nav
+              className="hidden items-center gap-1 rounded-full border border-ink/10 bg-cream p-1 md:flex"
+              aria-label="Main navigation"
+            >
+              {navItems.map((item) => (
+                <button
+                  key={item.label}
+                  onClick={() => selectMode(item.target)}
+                  className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
+                    item.isActive ? 'bg-surface text-ink shadow-soft' : 'text-bark hover:text-ink'
                   }`}
-              >
-                Home
-              </button>
-              <button
-                onClick={() => setMode('library')}
-                className={`text-sm px-3 py-2 rounded-md transition-colors font-medium ${mode === 'library' ? 'bg-[#e8f0fe] text-[#1a73e8]' : 'text-[#5f6368] hover:bg-[#f1f3f4]'
-                  }`}
-              >
-                Library
-              </button>
-            </div>
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
 
-            {/* Settings Button */}
             <button
               onClick={() => setSettingsOpen(true)}
-              className="p-2 text-[#5f6368] hover:bg-[#f1f3f4] rounded-full transition-colors"
+              className="btn btn-ghost h-10 min-h-0 w-10 rounded-full p-0"
               title="Settings"
+              aria-label="Settings"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                />
               </svg>
             </button>
 
             {/* User avatar + sign out */}
             {isSupabaseAuth && user && (
-              <div className="flex items-center gap-2">
+              <div className="hidden items-center gap-2 md:flex">
                 {user.user_metadata?.avatar_url && (
                   <img
                     src={user.user_metadata.avatar_url}
@@ -160,48 +177,125 @@ const App: React.FC = () => {
                 )}
                 <button
                   onClick={signOut}
-                  className="text-xs text-[#5f6368] hover:text-[#202124] transition-colors"
+                  className="text-xs font-medium text-bark transition-colors hover:text-ink"
                 >
                   Sign out
                 </button>
               </div>
             )}
+
+            {/* Mobile menu toggle */}
+            <button
+              onClick={() => setMobileMenuOpen((open) => !open)}
+              className="btn btn-ghost h-10 min-h-0 w-10 rounded-full p-0 md:hidden"
+              aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={mobileMenuOpen}
+              aria-controls="mobile-menu"
+            >
+              {mobileMenuOpen ? (
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              ) : (
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 7h16M4 12h16M4 17h16"
+                  />
+                </svg>
+              )}
+            </button>
           </div>
         </div>
+
+        {/* Mobile menu */}
+        {mobileMenuOpen && (
+          <nav
+            id="mobile-menu"
+            aria-label="Mobile navigation"
+            className="border-t border-ink/10 bg-surface px-5 py-4 shadow-soft md:hidden"
+          >
+            <div className="flex flex-col gap-1">
+              {navItems.map((item) => (
+                <button
+                  key={item.label}
+                  onClick={() => selectMode(item.target)}
+                  className={`rounded-xl px-4 py-3 text-left text-sm font-medium transition-colors ${
+                    item.isActive ? 'bg-cream text-ink' : 'text-bark hover:bg-cream/60'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+              <button
+                onClick={() => selectMode('about')}
+                className="rounded-xl px-4 py-3 text-left text-sm font-medium text-bark transition-colors hover:bg-cream/60"
+              >
+                About
+              </button>
+              <button
+                onClick={() => selectMode('contact')}
+                className="rounded-xl px-4 py-3 text-left text-sm font-medium text-bark transition-colors hover:bg-cream/60"
+              >
+                Contact
+              </button>
+              {isSupabaseAuth && user && (
+                <button
+                  onClick={signOut}
+                  className="mt-1 rounded-xl border-t border-ink/10 px-4 py-3 text-left text-sm font-medium text-bark transition-colors hover:bg-cream/60"
+                >
+                  Sign out
+                </button>
+              )}
+            </div>
+          </nav>
+        )}
       </header>
 
       {/* Settings Modal */}
       <SettingsModal
         isOpen={settingsOpen}
-        onClose={() => { setSettingsOpen(false); setHasApiKey(!!getStoredApiKey()); }}
+        onClose={() => {
+          setSettingsOpen(false);
+          setHasApiKey(!!getStoredApiKey());
+        }}
         hasServerKey={hasServerKey}
         allowUserKeys={allowUserKeys}
       />
 
       {/* Main Content */}
-      <main className="flex-1 w-full max-w-6xl mx-auto px-4 py-8">
-
+      <main className="flex-1 w-full max-w-7xl mx-auto px-5 py-8">
         {mode === 'unified' ? (
-          <div className="py-8">
-            <UnifiedSearchView
+          <div className="py-4">
+            <ProductDashboard
               onSearchComplete={(clips, answer, active) => {
                 setSearchState({
                   status: 'complete',
                   query: '',
                   answer,
-                  relevantClips: clips
+                  relevantClips: clips,
                 });
                 // Only set activeClip if it has a valid videoId
                 setActiveClip(active?.videoId ? active : null);
                 setMode('search'); // Switch to show results
               }}
+              onOpenLibrary={() => setMode('library')}
+              onOpenJobs={() => setMode('jobs')}
               onIndexComplete={() => {
-                // Navigate to library after indexing completes
                 setMode('library');
               }}
               isBackendConnected={isBackendConnected}
               hasApiKey={hasApiKey}
               hasServerKey={hasServerKey}
+              allowUserKeys={allowUserKeys}
+              showLocalBackendHelp={!isSupabaseAuth}
               onOpenSettings={() => setSettingsOpen(true)}
             />
           </div>
@@ -209,75 +303,63 @@ const App: React.FC = () => {
           <div className="py-8">
             <LibraryView onIndexMore={() => setMode('unified')} />
           </div>
+        ) : mode === 'jobs' ? (
+          <div className="py-8">
+            <IngestionJobsView />
+          </div>
         ) : mode === 'about' ? (
           <div className="py-8 max-w-2xl mx-auto">
             <button
               onClick={() => setMode('unified')}
-              className="text-sm text-[#1a73e8] hover:text-[#1557b0] flex items-center gap-1 mb-6"
+              className="link-quiet mb-6 flex items-center gap-1 text-sm"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 19l-7-7 7-7"
+                />
               </svg>
               Back
             </button>
-            <div className="bg-white rounded-lg border border-[#dadce0] p-8">
-              <div className="flex items-center justify-between mb-6">
-                <h1 className="text-2xl font-normal text-[#202124]">About SearchTube</h1>
-                <div className="flex items-center gap-4">
-                  <a
-                    href="https://linkedin.com/in/cadecrussell"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[#5f6368] hover:text-[#0A66C2] transition-colors"
-                    title="LinkedIn"
-                  >
-                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
-                    </svg>
-                  </a>
-                  <a
-                    href="https://github.com/ghostpeony"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[#5f6368] hover:text-[#24292f] transition-colors"
-                    title="GitHub"
-                  >
-                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
-                    </svg>
-                  </a>
-                  <a
-                    href="https://www.ghostpeony.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[#5f6368] hover:text-[#1a73e8] transition-colors"
-                    title="Ghost Peony"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
-                    </svg>
-                  </a>
-                </div>
+            <div className="card p-8">
+              <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <h1 className="font-serif text-4xl font-medium text-ink">About {PRODUCT_NAME}</h1>
+                <SocialLinks compact />
               </div>
-              <div className="text-[#5f6368] space-y-4 text-sm leading-relaxed">
+              <div className="space-y-4 text-sm leading-7 text-bark">
                 <p>
-                  You remember saying something great — but where? SearchTube indexes your YouTube
-                  channels, making every word searchable. Just describe what you're looking for in
-                  plain English, and we'll find the exact moment.
+                  You remember a moment, a quote, or the shape of an idea. {PRODUCT_NAME} indexes
+                  YouTube transcripts so you can find the exact timestamp and verify it before
+                  embedding or sharing it.
                 </p>
                 <p>
                   Built for creators with hours of talk-heavy content: podcasters finding quotable
                   moments, commentary channels, educational creators, and anyone who needs to mine
                   their videos for clips without scrubbing through endless footage.
                 </p>
-                <h2 className="text-lg font-medium text-[#202124] pt-4">Why SearchTube?</h2>
+                <h2 className="pt-4 font-serif text-2xl font-medium text-ink">
+                  Why {PRODUCT_NAME}?
+                </h2>
                 <ul className="list-disc list-inside space-y-2">
-                  <li><strong>Semantic search</strong> — Find by meaning, not just keywords</li>
-                  <li><strong>You control the search</strong> — Find what you're looking for, not AI-guessed "viral moments"</li>
-                  <li><strong>Works with talk-heavy content</strong> — Podcasts, commentary, reviews, educational videos</li>
-                  <li><strong>Full channel support</strong> — Index entire channels, playlists, or individual videos</li>
+                  <li>
+                    <strong>Semantic search</strong> - Find by meaning, not just keywords
+                  </li>
+                  <li>
+                    <strong>You control the search</strong> - Find what you're looking for, not
+                    AI-guessed "viral moments"
+                  </li>
+                  <li>
+                    <strong>Works with talk-heavy content</strong> - Podcasts, commentary, reviews,
+                    educational videos
+                  </li>
+                  <li>
+                    <strong>Full channel support</strong> - Index entire channels, playlists, or
+                    individual videos
+                  </li>
                 </ul>
-                <h2 className="text-lg font-medium text-[#202124] pt-4">How It Works</h2>
+                <h2 className="pt-4 font-serif text-2xl font-medium text-ink">How it works</h2>
                 <ol className="list-decimal list-inside space-y-2">
                   <li>Paste any YouTube URL (video, playlist, or channel)</li>
                   <li>We extract and chunk the transcript into searchable segments</li>
@@ -292,40 +374,50 @@ const App: React.FC = () => {
           <div className="py-8 max-w-2xl mx-auto">
             <button
               onClick={() => setMode('unified')}
-              className="text-sm text-[#1a73e8] hover:text-[#1557b0] flex items-center gap-1 mb-6"
+              className="link-quiet mb-6 flex items-center gap-1 text-sm"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 19l-7-7 7-7"
+                />
               </svg>
               Back
             </button>
-            <div className="bg-white rounded-lg border border-[#dadce0] p-8">
-              <h1 className="text-2xl font-normal text-[#202124] mb-4">Contact</h1>
-              <div className="text-[#5f6368] space-y-4 text-sm leading-relaxed">
-                <p>
-                  Have questions, feedback, or found a bug? We'd love to hear from you.
-                </p>
-                <div className="bg-[#f8f9fa] rounded-lg p-4 space-y-3">
-                  <div className="flex items-center gap-3">
-                    <svg className="w-5 h-5 text-[#5f6368]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                    </svg>
-                    <a href="mailto:cade@ghostpeony.com" className="text-[#1a73e8] hover:underline">
-                      cade@ghostpeony.com
-                    </a>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <svg className="w-5 h-5 text-[#5f6368]" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-                    </svg>
-                    <a href="https://github.com/ghostpeony" target="_blank" rel="noopener noreferrer" className="text-[#1a73e8] hover:underline">
-                      github.com/ghostpeony
-                    </a>
-                  </div>
+            <div className="card p-8">
+              <h1 className="mb-4 font-serif text-4xl font-medium text-ink">Contact</h1>
+              <div className="space-y-4 text-sm leading-7 text-bark">
+                <p>Have questions, feedback, or found a bug? We'd love to hear from you.</p>
+                <div className="space-y-3 rounded-xl bg-cream p-5">
+                  <a
+                    href={`mailto:${CONTACT_EMAIL}`}
+                    className="block font-semibold text-violet-deep underline decoration-2 underline-offset-4"
+                  >
+                    {CONTACT_EMAIL}
+                  </a>
+                  <a
+                    href={GHOST_PEONY_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block font-semibold text-violet-deep underline decoration-2 underline-offset-4"
+                  >
+                    ghostpeony.com
+                  </a>
+                  <a
+                    href={GHOST_PEONY_GITHUB_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block font-semibold text-violet-deep underline decoration-2 underline-offset-4"
+                  >
+                    github.com/GhostPeony
+                  </a>
+                  <SocialLinks className="pt-2" />
                 </div>
                 <p className="pt-2">
-                  SearchTube is an open-source project. Contributions, issues, and feature requests
-                  are welcome on GitHub.
+                  {PRODUCT_NAME} is a {GHOST_PEONY_NAME} product for finding exact moments in
+                  YouTube transcripts. The production home is {PRODUCT_DOMAIN}.
                 </p>
               </div>
             </div>
@@ -341,157 +433,246 @@ const App: React.FC = () => {
                   setActiveClip(null);
                   setMode('unified');
                 }}
-                className="text-sm text-[#1a73e8] hover:text-[#1557b0] flex items-center gap-1"
+                className="link-quiet flex items-center gap-1 text-sm"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M15 19l-7-7 7-7"
+                  />
                 </svg>
                 New Search
               </button>
             </div>
 
+            {/* Zero-results state */}
+            {searchState.status === 'complete' && searchState.relevantClips.length === 0 && (
+              <div className="card mx-auto max-w-xl p-8 text-center">
+                <h2 className="font-serif text-3xl font-medium text-ink">No moments found</h2>
+                <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-bark">
+                  Nothing in your library matched that description. Try different wording, or index
+                  more videos to widen the search.
+                </p>
+                <button onClick={() => setMode('unified')} className="btn btn-primary mt-6">
+                  Try another search
+                </button>
+              </div>
+            )}
+
             {/* Results Area - YouTube-style layout */}
-            {searchState.status !== 'idle' && !searchState.error && (
-              <div className="flex gap-4 -mx-4 px-4">
-                {/* Left Sidebar: Sources */}
-                {searchState.relevantClips.length > 0 && (
-                  <div className="w-48 flex-shrink-0">
-                    <div className="sticky top-20">
-                      <h3 className="text-xs font-medium text-[#5f6368] uppercase tracking-wide mb-3">
+            {searchState.status !== 'idle' &&
+              !searchState.error &&
+              searchState.relevantClips.length > 0 && (
+                <div className="flex flex-col-reverse gap-6 md:flex-row">
+                  {/* Sources grouped by video: sidebar on desktop, strip below player on mobile */}
+                  <div className="w-full flex-shrink-0 md:w-56">
+                    <div className="md:sticky md:top-20">
+                      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
                         Clips
                       </h3>
-                      <div className="space-y-3">
-                        {searchState.relevantClips.map((clip) => (
+                      <div className="flex gap-3 overflow-x-auto pb-2 md:block md:space-y-3 md:overflow-visible md:pb-0">
+                        {groupClipsByVideo(searchState.relevantClips).map((group) => (
                           <div
-                            key={clip.id}
-                            className={`group/clip relative cursor-pointer transition-colors rounded-lg p-1.5 ${activeClip?.id === clip.id
-                              ? 'bg-[#e8f0fe]'
-                              : 'hover:bg-[#f1f3f4]'
-                              }`}
+                            key={group.videoId}
+                            className="card w-56 flex-shrink-0 overflow-hidden p-2 md:w-auto"
                           >
-                            <div onClick={() => handleCitationClick(clip)}>
-                              {clip.thumbnailUrl && (
-                                <img src={clip.thumbnailUrl} className="w-full h-auto rounded" alt="" />
-                              )}
-                              <p className="text-xs text-[#202124] font-medium line-clamp-2 mt-1">{clip.title}</p>
-                              <p className="text-xs text-[#1a73e8]">{formatTime(clip.startSeconds)}</p>
-                            </div>
-                            {/* Copy button */}
                             <button
-                              onClick={(e) => { e.stopPropagation(); copyClipLink(clip); }}
-                              className="absolute top-2 right-2 p-1 bg-black/60 hover:bg-black/80 text-white rounded opacity-0 group-hover/clip:opacity-100 transition-opacity"
-                              title="Copy link"
+                              onClick={() => handleCitationClick(group.clips[0])}
+                              className="block w-full text-left"
                             >
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                              </svg>
+                              {group.thumbnailUrl && (
+                                <img
+                                  src={group.thumbnailUrl}
+                                  className="h-auto w-full rounded-lg"
+                                  alt=""
+                                />
+                              )}
+                              <p className="mt-2 line-clamp-2 text-xs font-semibold text-ink">
+                                {group.title}
+                              </p>
                             </button>
+                            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                              {group.clips.map((clip) => (
+                                <button
+                                  key={clip.id}
+                                  onClick={() => handleCitationClick(clip)}
+                                  className={`rounded-full px-2 py-0.5 font-mono text-xs font-medium transition-colors ${
+                                    activeClip?.id === clip.id
+                                      ? 'bg-rose-deep text-cream'
+                                      : 'bg-petal/60 text-rose-deep hover:bg-petal'
+                                  }`}
+                                >
+                                  {formatTime(clip.startSeconds)}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         ))}
                       </div>
                     </div>
                   </div>
-                )}
 
-                {/* Main Content: Video + Transcript */}
-                <div className="flex-1 max-w-4xl">
-                  {/* Video Player */}
-                  <div>
-                    {activeClip ? (
-                      <div className="bg-white rounded-lg shadow-sm border border-[#dadce0] overflow-hidden">
-                        <VideoPlayer
-                          key={activeClip.id}
-                          videoId={activeClip.videoId}
-                          startSeconds={activeClip.startSeconds}
-                          autoplay={true}
+                  {/* Main Content: Answer + Video + Transcript */}
+                  <div className="flex-1 max-w-4xl">
+                    {/* Cited answer */}
+                    {searchState.answer && (
+                      <div className="mb-5">
+                        <AnswerSection
+                          answer={searchState.answer}
+                          clips={searchState.relevantClips}
+                          onCitationClick={handleCitationClick}
                         />
-                        <div className="p-4">
-                          <h3 className="font-medium text-[#202124] text-lg">{activeClip.title}</h3>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-[#606368] text-sm">{activeClip.channelName}</span>
-                            <span className="text-[#9aa0a6]">•</span>
-                            <span className="text-[#1a73e8] text-sm font-medium">{formatTime(activeClip.startSeconds)}</span>
-                            <span className="text-[#9aa0a6]">•</span>
-                            <a
-                              href={`https://youtube.com/watch?v=${activeClip.videoId}&t=${activeClip.startSeconds}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-[#5f6368] text-sm hover:text-[#1a73e8]"
-                            >
-                              Watch on YouTube ↗
-                            </a>
-                            <span className="text-[#9aa0a6]">•</span>
-                            <button
-                              onClick={() => copyClipLink(activeClip)}
-                              className="text-[#5f6368] text-sm hover:text-[#1a73e8] flex items-center gap-1"
-                              title="Copy shareable link"
-                            >
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                              </svg>
-                              Copy Link
-                            </button>
+                      </div>
+                    )}
+                    {/* Video Player */}
+                    <div>
+                      {activeClip ? (
+                        <div className="card overflow-hidden">
+                          <VideoPlayer
+                            key={activeClip.id}
+                            videoId={activeClip.videoId}
+                            startSeconds={activeClip.startSeconds}
+                            autoplay={true}
+                          />
+                          <div className="p-5">
+                            <h3 className="font-serif text-2xl font-medium text-ink">
+                              {activeClip.title}
+                            </h3>
+                            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <span className="text-sm text-bark">{activeClip.channelName}</span>
+                              <span className="text-muted">-</span>
+                              <span className="font-mono text-sm font-medium text-rose-deep">
+                                {formatTime(activeClip.startSeconds)}
+                              </span>
+                              <span className="text-muted">-</span>
+                              <a
+                                href={`https://youtube.com/watch?v=${activeClip.videoId}&t=${activeClip.startSeconds}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sm font-medium text-muted hover:text-violet-deep"
+                              >
+                                Watch on YouTube
+                              </a>
+                              <span className="text-muted">-</span>
+                              <button
+                                onClick={() => copyClipLink(activeClip)}
+                                className="flex items-center gap-1 text-sm font-medium text-muted hover:text-rose-deep"
+                                title="Copy shareable link"
+                              >
+                                <svg
+                                  className="w-4 h-4"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"
+                                  />
+                                </svg>
+                                Copy Link
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ) : (
-                      <div className="aspect-video bg-white rounded-lg border border-[#dadce0] flex items-center justify-center text-[#5f6368]">
-                        <div className="text-center">
-                          <svg className="w-12 h-12 mx-auto mb-2 text-[#dadce0]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          <p className="text-sm">Select a source to play</p>
+                      ) : (
+                        <div className="card flex aspect-video items-center justify-center text-bark">
+                          <div className="text-center">
+                            <svg
+                              className="mx-auto mb-2 h-12 w-12 text-muted"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={1.5}
+                                d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
+                              />
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={1.5}
+                                d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                              />
+                            </svg>
+                            <p className="text-sm">Select a source to play</p>
+                          </div>
                         </div>
+                      )}
+                    </div>
+
+                    {/* Transcript below video */}
+                    {activeClip && (
+                      <div className="card mt-5 p-6">
+                        <div className="flex items-center gap-2 mb-3">
+                          <svg
+                            className="h-5 w-5 text-violet-deep"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                            />
+                          </svg>
+                          <h2 className="font-serif text-2xl font-medium text-ink">Transcript</h2>
+                          <span className="font-mono text-xs font-medium text-muted">
+                            {formatTime(activeClip.startSeconds)} -{' '}
+                            {formatTime(activeClip.endSeconds)}
+                          </span>
+                        </div>
+                        <p className="whitespace-pre-wrap text-sm leading-7 text-bark">
+                          {activeClip.content}
+                        </p>
+                        {activeClip.relevanceReason && (
+                          <p className="mt-3 border-l-4 border-rose pl-3 text-xs font-medium text-muted">
+                            {activeClip.relevanceReason}
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>
-
-                  {/* Transcript below video */}
-                  {activeClip && (
-                    <div className="bg-white rounded-lg border border-[#dadce0] p-5 mt-4">
-                      <div className="flex items-center gap-2 mb-3">
-                        <svg className="w-5 h-5 text-[#1a73e8]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                        <h2 className="text-sm font-medium text-[#202124]">Transcript</h2>
-                        <span className="text-xs text-[#5f6368]">
-                          {formatTime(activeClip.startSeconds)} - {formatTime(activeClip.endSeconds)}
-                        </span>
-                      </div>
-                      <p className="text-[#3c4043] text-sm leading-relaxed whitespace-pre-wrap">
-                        {activeClip.content}
-                      </p>
-                      {activeClip.relevanceReason && (
-                        <p className="mt-3 text-xs text-[#5f6368]">
-                          {activeClip.relevanceReason}
-                        </p>
-                      )}
-                    </div>
-                  )}
                 </div>
-              </div>
-            )}
+              )}
           </div>
         )}
       </main>
 
-      <footer className="py-4 text-center text-[#70757a] text-xs border-t border-[#dadce0] bg-[#f8f9fa]">
-        <div className="flex items-center justify-center gap-4">
-          <span>Powered by Ghost Peony</span>
-          <span className="text-[#dadce0]">|</span>
-          <button
-            onClick={() => setMode('about')}
-            className="hover:text-[#1a73e8] transition-colors"
-          >
-            About
-          </button>
-          <button
-            onClick={() => setMode('contact')}
-            className="hover:text-[#1a73e8] transition-colors"
-          >
-            Contact
-          </button>
+      <footer className="bg-ink px-5 py-6 text-xs text-cream">
+        <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 md:flex-row">
+          <div className="flex flex-wrap items-center justify-center gap-4">
+            <a
+              href={GHOST_PEONY_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium underline decoration-rose decoration-2 underline-offset-4 transition-colors hover:text-cream/80"
+            >
+              {GHOST_PEONY_FOOTER_LINE}
+            </a>
+            <span className="text-cream/30">|</span>
+            <button
+              onClick={() => setMode('about')}
+              className="transition-colors hover:text-cream/80"
+            >
+              About
+            </button>
+            <button
+              onClick={() => setMode('contact')}
+              className="transition-colors hover:text-cream/80"
+            >
+              Contact
+            </button>
+          </div>
+          <SocialLinks compact tone="light" />
         </div>
       </footer>
 
