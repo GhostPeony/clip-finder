@@ -49,3 +49,11 @@ def test_returns_empty_string_on_llm_failure(monkeypatch):
 
 def test_returns_empty_string_for_no_clips():
     assert answers.generate_answer("q", [], api_key="k") == ""
+
+
+def test_handles_content_block_lists(monkeypatch):
+    # langchain-google-genai v4 returns content as a list of typed blocks
+    fake = FakeLLM([{"type": "text", "text": "Answer [[clip_0]]. ", "extras": {"signature": "x"}}])
+    monkeypatch.setattr(answers, "_get_llm", lambda api_key: fake)
+    result = answers.generate_answer("q", [make_clip(0)], api_key="k")
+    assert result == "Answer [[clip_0]]."

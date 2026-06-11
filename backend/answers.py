@@ -48,6 +48,21 @@ def _get_llm(api_key: Optional[str]) -> ChatGoogleGenerativeAI:
     )
 
 
+def _content_to_text(content) -> str:
+    """Normalize LLM message content: v4 SDKs may return a list of content blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "".join(parts)
+    return ""
+
+
 def generate_answer(query: str, clips: list[dict], api_key: Optional[str] = None) -> str:
     """Generate a short cited answer from selected clips. Returns "" on any failure."""
     if not clips:
@@ -65,7 +80,7 @@ def generate_answer(query: str, clips: list[dict], api_key: Optional[str] = None
     try:
         llm = _get_llm(api_key)
         response = llm.invoke(prompt)
-        return (response.content or "").strip()
+        return _content_to_text(response.content).strip()
     except Exception as exc:  # noqa: BLE001 — answer must never break search
         print(f"[ANSWERS] Generation failed, returning clips only: {exc}")
         return ""
