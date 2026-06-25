@@ -7,20 +7,78 @@ from backend.youtube_utils import (
 )
 
 
-def test_detect_url_type_prefers_playlist_for_watch_playlist_urls():
+def test_detect_url_type_handles_video_urls_with_timestamps():
+    samples = [
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=123s",
+        "https://www.youtube.com/watch?t=1m2s&v=dQw4w9WgXcQ",
+        "https://youtu.be/dQw4w9WgXcQ?t=42",
+        "https://m.youtube.com/watch?v=dQw4w9WgXcQ&start=90",
+        "www.youtube.com/watch?v=dQw4w9WgXcQ&t=123",
+    ]
+
+    for sample in samples:
+        assert detect_url_type(sample) == ("video", "dQw4w9WgXcQ")
+
+
+def test_detect_url_type_prefers_video_for_watch_playlist_context_urls():
     url_type, extracted = detect_url_type(
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLabc123"
     )
+
+    assert url_type == "video"
+    assert extracted == "dQw4w9WgXcQ"
+
+
+def test_detect_url_type_handles_explicit_playlist_urls():
+    url_type, extracted = detect_url_type("https://www.youtube.com/playlist?list=PLabc123")
 
     assert url_type == "playlist"
     assert extracted == "PLabc123"
 
 
-def test_detect_url_type_handles_shorts():
-    url_type, extracted = detect_url_type("https://youtube.com/shorts/dQw4w9WgXcQ")
+def test_detect_url_type_handles_path_video_urls_with_extra_context():
+    samples = [
+        "https://youtube.com/shorts/dQw4w9WgXcQ?si=abc123",
+        "https://www.youtube.com/live/dQw4w9WgXcQ?feature=share&t=10",
+        "https://www.youtube.com/embed/dQw4w9WgXcQ?start=30",
+        "youtube.com/v/dQw4w9WgXcQ?version=3",
+    ]
 
-    assert url_type == "video"
-    assert extracted == "dQw4w9WgXcQ"
+    for sample in samples:
+        assert detect_url_type(sample) == ("video", "dQw4w9WgXcQ")
+
+
+def test_detect_url_type_handles_channel_url_variants():
+    samples = [
+        (
+            "https://www.youtube.com/@Some.Channel/videos",
+            "https://www.youtube.com/@Some.Channel/videos",
+        ),
+        (
+            "youtube.com/@SomeChannel/streams?view=0",
+            "https://youtube.com/@SomeChannel/streams?view=0",
+        ),
+        ("@SomeChannel", "https://www.youtube.com/@SomeChannel"),
+        (
+            "https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw?sub_confirmation=1",
+            "https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw?sub_confirmation=1",
+        ),
+        (
+            "https://www.youtube.com/c/GoogleDevelopers",
+            "https://www.youtube.com/c/GoogleDevelopers",
+        ),
+        (
+            "https://www.youtube.com/user/GoogleDevelopers",
+            "https://www.youtube.com/user/GoogleDevelopers",
+        ),
+    ]
+
+    for sample, expected in samples:
+        assert detect_url_type(sample) == ("channel", expected)
+
+
+def test_channel_detection_returns_unknown_for_non_youtube_urls():
+    assert detect_url_type("https://example.com/watch?v=dQw4w9WgXcQ") == ("unknown", None)
 
 
 def test_get_transcript_chunks_adds_overlap_after_closed_chunk(monkeypatch):

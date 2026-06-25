@@ -1,4 +1,4 @@
--- SearchTube Multi-User Schema
+-- Memexai Multi-User Schema
 -- Run in Supabase SQL Editor after enabling pgvector
 
 -- Enable pgvector

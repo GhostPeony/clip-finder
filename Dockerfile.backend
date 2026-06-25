@@ -1,4 +1,4 @@
-# Backend Dockerfile for SearchTube
+# Backend Dockerfile for Memexai
 # Connects to Supabase (hosted) — no local DB needed
 FROM python:3.12-slim
 

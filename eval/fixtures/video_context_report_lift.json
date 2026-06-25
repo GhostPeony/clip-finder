@@ -1,0 +1,110 @@
+{
+  "fixtureVersion": 1,
+  "name": "video_context_report_lift",
+  "purpose": "Compare agent navigation through Memexai structured video context against scanning raw transcript chunks.",
+  "video": {
+    "youtubeVideoId": "fixture-agent-report",
+    "title": "Building Production AI Agent Workflows",
+    "url": "https://www.youtube.com/watch?v=fixture-agent-report",
+    "notes": "Synthetic fixture for eval mechanics. It does not store or quote a real YouTube transcript."
+  },
+  "rawTranscriptChunks": [
+    {
+      "id": "chunk-opening",
+      "start_seconds": 0,
+      "end_seconds": 58,
+      "text": "The speaker opens by saying teams often make AI agents too complicated because they confuse impressive demos with durable production behavior. The useful lesson is that a production workflow should have a small number of explicit steps, clear handoffs, and a way for a human or another system to inspect what happened after each tool call.",
+      "evidence": ["simple_agents", "workflow_boundaries"]
+    },
+    {
+      "id": "chunk-retry",
+      "start_seconds": 180,
+      "end_seconds": 245,
+      "text": "Later the speaker explains that retries should be bounded and observable. If an agent can call tools forever, latency and cost become unpredictable, so the workflow needs a retry budget, a timeout, and a fallback path that records why the agent stopped.",
+      "evidence": ["latency_cost", "workflow_boundaries"]
+    },
+    {
+      "id": "chunk-eval",
+      "start_seconds": 420,
+      "end_seconds": 495,
+      "text": "The strongest implementation advice is to treat evals as part of the product loop. Every workflow change should create traces, expected outputs, and regression checks so the team can see whether the agent improved or merely became more verbose.",
+      "evidence": ["eval_harness", "traceability"]
+    },
+    {
+      "id": "chunk-product",
+      "start_seconds": 720,
+      "end_seconds": 790,
+      "text": "The product lesson is that agent design starts with the customer job, not the model. The speaker says a good agent workflow should make the next action obvious, expose uncertainty, and avoid hiding decisions behind a conversational answer when a structured state would be safer.",
+      "evidence": ["product_lesson", "workflow_boundaries"]
+    }
+  ],
+  "memexaiContext": {
+    "sourceConcepts": [
+      {
+        "id": "concept-simple-agents",
+        "name": "Simple agents survive production better than demo agents",
+        "concept_type": "claim",
+        "summary": "The video argues that durable agent workflows are usually smaller and more explicit than impressive demos. The useful production move is to define the workflow steps, make each tool call inspectable, and keep the agent from hiding state behind a fluent answer.",
+        "source_refs": [{ "start_seconds": 0, "end_seconds": 58 }],
+        "evidence": ["simple_agents", "workflow_boundaries"]
+      },
+      {
+        "id": "concept-latency-cost",
+        "name": "Latency and cost need bounded retry budgets",
+        "concept_type": "pitfall",
+        "summary": "The report calls out runaway retries as a production failure mode. Agents should have timeout limits, retry budgets, and fallback paths that record why the workflow stopped, because unbounded tool loops make latency, cost, and user trust unpredictable.",
+        "source_refs": [{ "start_seconds": 180, "end_seconds": 245 }],
+        "evidence": ["latency_cost", "workflow_boundaries"]
+      },
+      {
+        "id": "concept-eval-harness",
+        "name": "Eval harness as the product feedback loop",
+        "concept_type": "method",
+        "summary": "The video treats evals as an operational product system, not a one-time benchmark. Each workflow change should produce traces, expected outputs, and regression checks so the team can tell whether behavior improved or just became longer.",
+        "source_refs": [{ "start_seconds": 420, "end_seconds": 495 }],
+        "evidence": ["eval_harness", "traceability"]
+      }
+    ],
+    "reportSections": [
+      {
+        "id": "report-one-page-synthesis",
+        "heading": "One Page Synthesis",
+        "text": "This video is useful because it reframes production AI agents as inspectable workflows rather than autonomous personalities. The central lesson is that reliable agent systems come from explicit steps, bounded tool use, traceable state, and evals that are wired into the product loop. A human or downstream agent should leave with a concrete implementation posture: design the customer job first, give the agent narrow responsibilities, record each tool call, cap retries and latency, and use regression checks before expanding scope.",
+        "source_refs": [
+          { "start_seconds": 0, "end_seconds": 58 },
+          { "start_seconds": 180, "end_seconds": 245 },
+          { "start_seconds": 420, "end_seconds": 495 }
+        ],
+        "evidence": ["simple_agents", "workflow_boundaries", "latency_cost", "eval_harness"]
+      },
+      {
+        "id": "report-lessons",
+        "heading": "Lessons For Agent Builders",
+        "text": "Lesson one: make the workflow inspectable before making it more autonomous. Lesson two: bound retries and tool calls so cost and latency stay predictable. Lesson three: treat traces and evals as product artifacts, because they are what let the team compare behavior over time. Lesson four: expose uncertainty and state transitions instead of burying decisions in a polished answer.",
+        "source_refs": [
+          { "start_seconds": 180, "end_seconds": 245 },
+          { "start_seconds": 420, "end_seconds": 495 },
+          { "start_seconds": 720, "end_seconds": 790 }
+        ],
+        "evidence": ["latency_cost", "eval_harness", "traceability", "product_lesson"]
+      }
+    ]
+  },
+  "queries": [
+    {
+      "id": "production_agent_shape",
+      "query": "what is the proper report-level lesson for building production AI agent workflows",
+      "expectedEvidence": ["simple_agents", "workflow_boundaries", "eval_harness"]
+    },
+    {
+      "id": "latency_cost_controls",
+      "query": "how should an agent workflow control latency cost retries and fallback paths",
+      "expectedEvidence": ["latency_cost", "workflow_boundaries"]
+    },
+    {
+      "id": "eval_harness_lessons",
+      "query": "what lessons does the video provide about eval harness traces and regression checks",
+      "expectedEvidence": ["eval_harness", "traceability"]
+    }
+  ]
+}

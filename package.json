@@ -1,8 +1,8 @@
 {
-  "name": "embed-moments",
+  "name": "memexai",
   "private": false,
   "version": "1.0.0",
-  "description": "Hosted transcript search for finding exact YouTube moments with timestamp citations",
+  "description": "Hosted YouTube context engine with timestamp citations and agent-ready MCP access",
   "license": "MIT",
   "author": "Ghost Peony",
   "keywords": [
@@ -14,21 +14,22 @@
     "langchain",
     "video",
     "transcript",
-    "embed-moments"
+    "memexai"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/GhostPeony/embed-moments.git"
+    "url": "https://github.com/GhostPeony/memexai.git"
   },
-  "homepage": "https://embedmoments.com",
+  "homepage": "https://memexai.xyz",
   "bugs": {
-    "url": "https://github.com/GhostPeony/embed-moments/issues"
+    "url": "https://github.com/GhostPeony/memexai/issues"
   },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "deploy:pages": "npm run build && wrangler pages deploy dist --project-name embed-moments --branch main --commit-dirty=true",
+    "deploy:api": "wrangler deploy --config wrangler.api.toml --containers-rollout=immediate",
+    "deploy:pages": "node scripts/deploy-pages.mjs",
     "preview": "vite preview",
     "screenshots": "node scripts/screenshots.mjs",
     "test": "vitest run",
@@ -40,6 +41,8 @@
     "py:lint": "python -m ruff check .",
     "py:format": "python -m ruff format .",
     "py:security": "python -m ruff check --select S --ignore S104,S310 backend scripts",
+    "smoke:hosted": "python scripts/smoke_hosted_mode.py",
+    "eval:video-retrieval": "python scripts/evaluate_video_retrieval.py",
     "supabase:projects": "supabase projects list",
     "supabase:link": "supabase link --project-ref favppxodzkmnjvhlrpbq",
     "supabase:migrations": "supabase migration list",
@@ -48,6 +51,7 @@
     "verify": "npm run lint && npm run format:check && npm run typecheck && npm run build && npm test && npm run py:security && npm audit --audit-level=moderate"
   },
   "dependencies": {
+    "@cloudflare/containers": "^0.3.7",
     "@supabase/supabase-js": "^2.98.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"

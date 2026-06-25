@@ -5,12 +5,6 @@ import { ingestChannel, searchVideoClips, saveSearchToHistory } from '../service
 interface UnifiedSearchViewProps {
   onSearchComplete: (clips: VideoClip[], answer: string, activeClip: VideoClip | null) => void;
   onIndexComplete: () => void; // Called when indexing completes without a search
-  isBackendConnected: boolean;
-  hasApiKey: boolean;
-  hasServerKey: boolean;
-  allowUserKeys: boolean;
-  showLocalBackendHelp: boolean;
-  onOpenSettings: () => void;
   maxSearchResults?: number | null;
 }
 
@@ -20,12 +14,6 @@ type WorkbenchMode = 'index' | 'library';
 export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
   onSearchComplete,
   onIndexComplete,
-  isBackendConnected,
-  hasApiKey,
-  hasServerKey,
-  allowUserKeys,
-  showLocalBackendHelp,
-  onOpenSettings,
   maxSearchResults = 5,
 }) => {
   const [message, setMessage] = useState('');
@@ -78,7 +66,7 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
 
     // Need either URLs to ingest or library mode selected.
     if (!hasUrls && workbenchMode === 'index') {
-      setError('Paste a YouTube URL, or switch to Search library for existing videos.');
+      setError('Paste a YouTube URL, or switch to Search library.');
       return;
     }
 
@@ -162,9 +150,7 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
   const urls = extractUrls(message);
   const queryText = getQueryText(message);
   const hasQuery = queryText.length > 0;
-  const shouldShowApiKeySetup = allowUserKeys && !hasApiKey && !hasServerKey;
-  const canSubmit =
-    isBackendConnected && message.trim() && (urls.length > 0 || workbenchMode === 'library');
+  const canSubmit = message.trim() && (urls.length > 0 || workbenchMode === 'library');
   const resultOptions = [1, 3, 5, 10].filter(
     (option) => !maxSearchResults || option <= maxSearchResults,
   );
@@ -174,85 +160,37 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
     if (urls.length > 0 && (hasQuery || workbenchMode === 'library')) {
       return 'Index and search';
     } else if (urls.length > 0) {
-      return 'Index source';
+      return 'Add videos';
     } else if (workbenchMode === 'index') {
-      return 'Index source';
+      return 'Add videos';
     } else {
       return 'Search library';
     }
   };
 
   return (
-    <div className="mx-auto w-full max-w-3xl">
-      <div className="mb-6">
-        <p className="eyebrow mb-2">Workbench</p>
-        <h2 className="font-serif text-4xl font-medium text-ink">Find a moment.</h2>
-        <p className="mt-2 text-sm leading-6 text-bark">
-          Index a new YouTube source, search your existing library, or do both in one request.
-        </p>
-      </div>
-
-      {/* API Key Warning */}
-      {shouldShowApiKeySetup && (
-        <div className="mb-6 flex items-center gap-3 rounded-xl bg-sun/25 p-4 text-ink">
-          <svg className="w-6 h-6 flex-shrink-0 text-bark" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
-          </svg>
-          <div className="flex-1">
-            <p className="font-medium">API key needed for local mode</p>
-            <p className="text-sm">Add a Gemini API key to use this self-hosted setup.</p>
-          </div>
-          <button onClick={onOpenSettings} className="btn btn-secondary whitespace-nowrap">
-            Add API Key
-          </button>
-        </div>
-      )}
-
-      {/* Main Card */}
-      <div className="rounded-2xl bg-cream">
+    <div className="min-w-0 w-full">
+      <div className="min-w-0 overflow-hidden rounded-2xl bg-cream">
         {!isWorking ? (
-          <form onSubmit={handleSubmit} className="p-6">
-            {/* Single Message Input */}
+          <form onSubmit={handleSubmit} className="p-4 sm:p-5 md:p-6">
             <div className="mb-5">
-              <div className="mb-4 grid gap-2 sm:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => setWorkbenchMode('index')}
-                  aria-pressed={workbenchMode === 'index'}
-                  className={`rounded-xl border p-4 text-left transition-all ${
-                    workbenchMode === 'index'
-                      ? 'border-rose-deep bg-petal/40 shadow-soft'
-                      : 'border-ink/10 bg-surface hover:border-ink/25'
-                  }`}
-                >
-                  <span className="block text-sm font-semibold text-ink">Index source</span>
-                  <span className="mt-1 block text-xs text-bark">
-                    Add a video, playlist, or channel.
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setWorkbenchMode('library')}
-                  aria-pressed={workbenchMode === 'library'}
-                  className={`rounded-xl border p-4 text-left transition-all ${
-                    workbenchMode === 'library'
-                      ? 'border-rose-deep bg-petal/40 shadow-soft'
-                      : 'border-ink/10 bg-surface hover:border-ink/25'
-                  }`}
-                >
-                  <span className="block text-sm font-semibold text-ink">Search library</span>
-                  <span className="mt-1 block text-xs text-bark">
-                    Search sources you already indexed.
-                  </span>
-                </button>
-              </div>
+              <h1 className="font-serif text-3xl font-medium text-ink md:text-4xl">
+                Add YouTube videos
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-bark">
+                Paste a video, playlist, or channel. Add a question if you want results after
+                indexing.
+              </p>
+            </div>
+
+            <div className="mb-4">
               <label
                 htmlFor="message"
                 className="mb-2 block text-xs font-semibold uppercase tracking-wide text-muted"
               >
                 {workbenchMode === 'library'
-                  ? 'Describe the moment'
-                  : 'Paste source and optional query'}
+                  ? 'Search query'
+                  : 'Paste YouTube link and optional query'}
               </label>
               <textarea
                 id="message"
@@ -261,11 +199,10 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
                 placeholder={
                   workbenchMode === 'library'
                     ? 'Example: the part where they explain why pricing objections are really uncertainty'
-                    : 'Example: https://youtube.com/@channel\nOptional: find the section about pricing objections'
+                    : 'Paste a YouTube video, playlist, or channel URL\nOptional: add what you want Memexai to find after indexing'
                 }
-                disabled={!isBackendConnected}
-                rows={3}
-                className="input w-full resize-none px-4 py-3 text-sm disabled:cursor-not-allowed disabled:bg-petal/50"
+                rows={7}
+                className="input w-full resize-none px-4 py-3 text-sm"
               />
               {urls.length > 0 && (
                 <p className="mt-2 text-xs font-medium text-teal-deep">
@@ -281,66 +218,64 @@ export const UnifiedSearchView: React.FC<UnifiedSearchViewProps> = ({
               </div>
             )}
 
-            {/* Submit Row */}
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="inline-flex w-full min-w-0 rounded-xl border border-ink/10 bg-surface p-1 sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => setWorkbenchMode('index')}
+                    aria-pressed={workbenchMode === 'index'}
+                    aria-label="Switch to add videos"
+                    className={`min-w-0 flex-1 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold transition-all sm:flex-none ${
+                      workbenchMode === 'index'
+                        ? 'bg-petal text-ink shadow-soft'
+                        : 'text-bark hover:text-ink'
+                    }`}
+                  >
+                    Add videos
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWorkbenchMode('library')}
+                    aria-pressed={workbenchMode === 'library'}
+                    aria-label="Switch to search library"
+                    className={`min-w-0 flex-1 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-semibold transition-all sm:flex-none ${
+                      workbenchMode === 'library'
+                        ? 'bg-petal text-ink shadow-soft'
+                        : 'text-bark hover:text-ink'
+                    }`}
+                  >
+                    Search library
+                  </button>
+                </div>
+
+                <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                  Results
+                  <select
+                    value={resultLimit}
+                    onChange={(e) => setResultLimit(Number(e.target.value))}
+                    className="input cursor-pointer px-3 py-2 text-sm normal-case tracking-normal"
+                  >
+                    {resultOptions.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
               <button
                 type="submit"
                 disabled={!canSubmit}
-                className="btn btn-primary whitespace-nowrap"
+                className="btn btn-primary w-full whitespace-nowrap lg:min-w-40 lg:w-auto"
               >
                 {getButtonLabel()}
               </button>
-
-              <label className="text-xs font-medium uppercase tracking-wide text-muted">
-                Results:
-              </label>
-              <select
-                value={resultLimit}
-                onChange={(e) => setResultLimit(Number(e.target.value))}
-                className="input cursor-pointer px-3 py-2 text-sm"
-              >
-                {resultOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
             </div>
-
-            {/* Backend Unavailable Warning */}
-            {!isBackendConnected && (
-              <div className="mt-4 rounded-xl border border-ink/10 bg-surface p-4">
-                <div className="flex gap-3">
-                  <svg
-                    className="mt-0.5 h-5 w-5 flex-shrink-0 text-teal-deep"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                    />
-                  </svg>
-                  <div className="text-sm text-ink">
-                    <p className="font-semibold">Service is not connected</p>
-                    <p className="mt-1 text-bark">
-                      Search and indexing will be available once the backend is online.
-                    </p>
-                    {showLocalBackendHelp && (
-                      <code className="mt-2 block rounded-lg bg-ink p-2.5 font-mono text-xs text-cream">
-                        pip install -r requirements.txt && python backend/server.py
-                      </code>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
           </form>
         ) : (
-          /* Working State - Agent-style Progress */
+          /* Working State */
           <div className="p-6">
             <div className="flex flex-col items-center justify-center py-12">
               {/* Spinning Circle */}

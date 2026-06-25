@@ -1,6 +1,6 @@
 """Shared clip ranking: soft intro filter + near-duplicate suppression.
 
-Both storage modes build raw candidate clips (similarity-ordered) and call
+Supabase pgvector search builds raw candidate clips in similarity order and calls
 select_clips() to pick the final result set. Post-intro clips are preferred,
 but intro clips backfill when there are not enough later matches — a short
 video must never produce zero results.

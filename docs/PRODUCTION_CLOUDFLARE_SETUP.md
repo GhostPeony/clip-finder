@@ -29,7 +29,7 @@ Why staged:
 We can prepare everything locally without logging into Cloudflare:
 
 - Create a production branch.
-- Strip or ignore open-source/local mode surfaces.
+- Strip open-source/local mode surfaces from the hosted fork.
 - Add production env templates.
 - Add hosted readiness checks.
 - Add Cloudflare Pages static routing/security files.
@@ -51,22 +51,32 @@ Before any hosted smoke test, run:
 
 ```bash
 python scripts/check_hosted_readiness.py
+npm run smoke:hosted
 ```
 
-The script reports missing or placeholder env values without printing secrets.
+The readiness script reports missing or placeholder env values without printing secrets. The
+hosted smoke command then checks local public API surfaces, linked Supabase schema, and whether
+Google OAuth is enabled. If it reports `Unsupported provider: provider is not enabled`, finish the
+Supabase Google provider setup before marking auth e2e complete.
 
 ## Cloudflare Account Tasks For Later
 
-Current Wrangler token auth has been tested against:
+Current Wrangler browser OAuth has been tested against:
 
 ```text
-Account: Cade@ghostpeony.com's Account
-Account ID: 7d58001c6a1b56b22eb2a763e9481cb2
-Pages project: searchtube-hosted-preview
-Pages URL: https://searchtube-hosted-preview.pages.dev
+Account: Cadecr@gmail.com's Account
+Account ID: be6a1a2d9e66b8adb63d22c1c01f8369
+Production domain target: https://memexai.xyz
+API domain target: https://api.memexai.xyz
+Pages project: memexai
+Pages production URL: https://memexai.pages.dev
+Latest deployment URL: https://6a5fbfd9.memexai.pages.dev
+Ingestion queue: memexai-ingestion
+Ingestion queue ID: bcbdf5e8c0224328a0cd37a39ad545b0
 ```
 
-The API token used for this test was pasted into chat, so rotate it after the deployment test.
+An older Cloudflare API token used during deployment testing was pasted into chat, so rotate it if
+it still exists. The current personal-account Wrangler session is browser OAuth.
 
 When you are ready to authenticate with browser OAuth instead of a token:
 
@@ -85,6 +95,17 @@ When you are ready to authenticate with browser OAuth instead of a token:
    VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
    ```
 5. Add custom domain after the app name is chosen.
+
+Current personal-account deploy status:
+
+- `memexai` Cloudflare Pages project exists and serves `https://memexai.pages.dev`.
+- The frontend was built with `VITE_API_URL=https://api.memexai.xyz`.
+- `api.memexai.xyz` does not resolve yet; deploy the FastAPI runtime and attach DNS before app API calls work in production.
+- `memexai.xyz` and `www.memexai.xyz` still need to be attached as Pages custom domains.
+- `memexai-orchestrator` dry-runs with Queue/Workflow bindings, but publishing is blocked until the account has a `workers.dev` subdomain or a custom Worker route.
+- `WORKFLOW_INTERNAL_SECRET`, `MEMEXAI_WORKFLOW_SECRET`, and `ORCHESTRATOR_SHARED_SECRET` must be set consistently before enabling Cloudflare Workflow triggers.
+- `API_KEY_ENCRYPTION_KEY` must be set in the backend runtime before Connect YouTube or BYOK settings are tested.
+- `MEMEXAI_APP_URL=https://memexai.xyz` must be set in the backend runtime before MCP OAuth approval redirects are tested.
 
 ## Track A: Fastest Production Launch On Cloudflare Edge
 
@@ -106,7 +127,7 @@ Hosted setup work:
 - Keep `SEARCHTUBE_API_KEY_MODE=hybrid` when BYOK is enabled for beta users.
 - Set `SEARCHTUBE_ALLOWED_ORIGINS` to the Cloudflare Pages production and preview domains.
 - Set `SUPABASE_ANON_KEY` in the backend runtime so bearer tokens can be validated through Supabase Auth.
-- Use Google OAuth for beta auth; Google should request only sign-in scopes, not YouTube scopes.
+- Use Google OAuth for beta auth. Base sign-in uses `openid`, `email`, and `profile`; playlist capture sync requests `https://www.googleapis.com/auth/youtube.readonly` when the user connects YouTube.
 - Allow BYOK for AI requests, while keeping hosted indexing/storage caps in place.
 - Add durable ingestion jobs before public launch.
 - Use `GET /api/ingestion-jobs` and `GET /api/ingestion-jobs/{job_id}` for hosted progress/history.
@@ -134,7 +155,7 @@ Options:
 
 ### Python Workers/FastAPI
 
-Cloudflare now supports FastAPI in Python Workers. This is attractive for lightweight API routes, but must be validated against SearchTube's dependencies:
+Cloudflare now supports FastAPI in Python Workers. This is attractive for lightweight API routes, but must be validated against Memexai's ingestion dependencies:
 
 - `youtube-transcript-api`
 - `scrapetube`
@@ -177,13 +198,128 @@ Best fit:
 
 - User submits index request.
 - API inserts `ingestion_jobs` row.
-- API enqueues work.
+- API dispatches work through `backend.queue_dispatch`.
+- In local/current mode, dispatch uses FastAPI `BackgroundTasks`.
+- In Cloudflare mode, dispatch publishes a versioned message to the Cloudflare Queues HTTP Push API.
+- A pull consumer can run the existing Python ingestion runtime from the backend container image.
 - Consumer processes videos, updates progress, stores chunks.
+
+Producer env:
+
+```bash
+INGESTION_DISPATCH_MODE=cloudflare_queue
+CLOUDFLARE_ACCOUNT_ID=...
+CLOUDFLARE_INGESTION_QUEUE_ID=...
+CLOUDFLARE_QUEUES_API_TOKEN=...
+```
+
+Optional producer override:
+
+```bash
+CLOUDFLARE_INGESTION_QUEUE_API_URL=https://api.cloudflare.com/client/v4/accounts/.../queues/.../messages
+```
+
+Pull consumer command:
+
+```bash
+python -m backend.queue_consumer
+```
+
+Useful consumer env:
+
+```bash
+INGESTION_QUEUE_PULL_BATCH_SIZE=1
+INGESTION_QUEUE_VISIBILITY_TIMEOUT_MS=3600000
+INGESTION_QUEUE_IDLE_SLEEP_SECONDS=5
+INGESTION_QUEUE_ERROR_SLEEP_SECONDS=10
+INGESTION_QUEUE_MAX_CONSECUTIVE_ERRORS=10
+```
+
+For smoke tests:
+
+```bash
+python -m backend.queue_consumer --healthcheck
+python -m backend.queue_consumer --once --batch-size 1
+```
+
+Dedicated container image:
+
+```bash
+docker build -f Dockerfile.queue-consumer -t memexai-queue-consumer .
+docker run --env-file .env.local memexai-queue-consumer
+```
+
+Local compose profile:
+
+```bash
+docker compose --profile queue up queue-consumer
+```
+
+Cloudflare HTTP pull setup:
+
+```bash
+npx wrangler queues consumer http add memexai-ingestion
+```
+
+Cloudflare's current pull-consumer setup is CLI/dashboard driven. Do not add a
+`[[queues.consumer]] type = "http_pull"` block to Wrangler config; keep the
+worker producer binding and enable HTTP pull on the queue itself.
 
 Risk:
 
-- Requires Cloudflare account setup and queue bindings.
-- In local dev, we need a fallback runner.
+- Requires Cloudflare account setup and a token with Queues Edit permission.
+- The pull consumer must be supervised by the chosen container host.
+- Keep the local fallback runner for development and tests.
+
+### Cloudflare Workflows
+
+Workflows are the right primitive for durable coordination around queue work,
+especially capture-source sync, ingestion release, agent briefs, and eval runs.
+
+Prototype now lives at:
+
+```text
+workers/orchestrator
+```
+
+Current flows:
+
+- `CapturePlaylistSyncWorkflow`: creates a Cloudflare Workflow instance, then
+  calls the hosted FastAPI bridge `POST /internal/workflows/capture-sync`.
+- `VideoIngestionWorkflow`: accepts an already-created ingestion job envelope
+  and sends a versioned `ingestion_job.process` message to Cloudflare Queues.
+
+Backend env:
+
+```bash
+WORKFLOW_INTERNAL_SECRET=...
+```
+
+Worker secrets:
+
+```bash
+npx wrangler secret put ORCHESTRATOR_SHARED_SECRET -c workers/orchestrator/wrangler.toml
+npx wrangler secret put MEMEXAI_WORKFLOW_SECRET -c workers/orchestrator/wrangler.toml
+```
+
+`MEMEXAI_WORKFLOW_SECRET` must equal backend `WORKFLOW_INTERNAL_SECRET`.
+Do not put either secret in `wrangler.toml`; only `MEMEXAI_API_URL` belongs
+in checked-in Worker vars.
+
+Deploy only after the production account and queue are confirmed:
+
+```bash
+npx wrangler deploy -c workers/orchestrator/wrangler.toml
+```
+
+Risk:
+
+- The Worker trigger routes must stay protected by `ORCHESTRATOR_SHARED_SECRET`
+  or Cloudflare Access.
+- The hosted backend remains the source of truth for user scoping, quota checks,
+  Supabase writes, and MCP-readable workflow status.
+- This is an orchestration layer, not a replacement for the Python ingestion
+  runtime yet.
 
 ### Cloudflare Vectorize
 
@@ -230,7 +366,7 @@ Before a public hosted beta:
 2. Rename product/brand only after name is chosen.
 3. Add production-only docs/config under a hosted repo or hosted branch.
 4. Implement durable ingestion jobs while still running locally.
-5. Run `python scripts/check_hosted_readiness.py`, then verify Supabase hosted mode end-to-end locally.
+5. Run `python scripts/check_hosted_readiness.py` and `npm run smoke:hosted`, then verify Supabase hosted mode end-to-end locally.
 6. Then authenticate Cloudflare and deploy the frontend.
 7. Move backend to Cloudflare Containers only after the hosted beta works on the container-hosted backend.
 
@@ -239,5 +375,6 @@ Before a public hosted beta:
 - Cloudflare Pages supports Vite static deployments through the Workers & Pages flow.
 - Cloudflare Python Workers support FastAPI through the Workers runtime ASGI server: https://developers.cloudflare.com/workers/languages/python/packages/fastapi/
 - Cloudflare Containers can run arbitrary runtime/Docker workloads behind Workers: https://developers.cloudflare.com/containers/
+- Cloudflare Workflows provide durable step orchestration from Workers: https://developers.cloudflare.com/workflows/build/workers-api/
 - Cloudflare Queues provide durable producer/consumer message queues for async work: https://developers.cloudflare.com/queues/get-started/
 - Cloudflare Pages supports Wrangler config and static build output configuration: https://developers.cloudflare.com/pages/functions/wrangler-configuration/

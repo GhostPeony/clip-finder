@@ -5,6 +5,35 @@ from fastapi.testclient import TestClient
 from backend import config, db, ingest, jobs, server
 
 
+def free_billing_context(searches=0, indexed_seconds=0, indexed_videos=0):
+    return {
+        "entitlements": {
+            "planKey": "free",
+            "billingStatus": "free",
+            "monthlyIndexedTranscriptSeconds": 18000,
+            "libraryTranscriptSeconds": 18000,
+            "indexedVideosTotal": 15,
+            "monthlyRetrievalCalls": 100,
+            "maxImportVideos": 10,
+            "maxSearchResults": 5,
+            "maxActiveIngestionJobs": 1,
+            "deepTranscriptSeconds": 0,
+            "priorityQueue": False,
+            "usagePackSecondsBalance": 0,
+            "periodStart": "2026-06-01T00:00:00+00:00",
+            "periodEnd": "2026-07-01T00:00:00+00:00",
+        },
+        "usage": {
+            "retrievalCalls": searches,
+            "indexedTranscriptSeconds": indexed_seconds,
+            "deepIndexedTranscriptSeconds": 0,
+            "ingestionJobsStarted": 0,
+            "indexedVideosAdded": indexed_videos,
+        },
+        "billingProfile": None,
+    }
+
+
 def test_free_tier_config_defaults_and_env(monkeypatch):
     monkeypatch.delenv("FREE_SEARCHES_PER_MONTH", raising=False)
     monkeypatch.setenv("FREE_INDEXED_VIDEOS_TOTAL", "7")
@@ -21,7 +50,7 @@ def test_free_tier_config_defaults_and_env(monkeypatch):
         raise AssertionError("invalid free-tier config should fail")
 
 
-def test_quota_helpers_respect_byok_for_search_only(monkeypatch):
+def test_quota_helpers_do_not_let_byok_bypass_hosted_plan_quotas(monkeypatch):
     monkeypatch.setenv("FREE_SEARCHES_PER_MONTH", "100")
     monkeypatch.setenv("FREE_INDEXED_VIDEOS_TOTAL", "15")
     monkeypatch.setenv("FREE_INDEXED_TRANSCRIPT_SECONDS_TOTAL", "18000")
@@ -33,7 +62,7 @@ def test_quota_helpers_respect_byok_for_search_only(monkeypatch):
         "free_indexed_seconds_total": 0,
     }
 
-    assert db.check_search_quota(exhausted, used_own_key=True)
+    assert not db.check_search_quota(exhausted, used_own_key=True)
     assert not db.check_search_quota(exhausted, used_own_key=False)
     assert not db.check_index_quota(exhausted, 1, 0)
 
@@ -100,6 +129,7 @@ def test_single_video_stops_when_transcript_hour_quota_is_exhausted(monkeypatch)
     )
     monkeypatch.setattr(ingest, "ensure_user_channel_subscription", lambda *_args: None)
     monkeypatch.setattr(ingest, "get_indexed_video_ids_pg", lambda supabase, channel_id: set())
+    monkeypatch.setattr(ingest, "get_indexed_video_pg", lambda supabase, video_id: None)
     monkeypatch.setattr(
         ingest,
         "get_user_profile",
@@ -126,7 +156,7 @@ def test_single_video_stops_when_transcript_hour_quota_is_exhausted(monkeypatch)
 
     messages = list(ingest.ingest_single_video_pg("video123", "user123"))
 
-    assert messages[-1].startswith("Free transcript-hour limit reached")
+    assert messages[-1].startswith("Free total library limit reached")
 
 
 def test_channel_import_truncates_to_free_import_cap(monkeypatch):
@@ -146,6 +176,7 @@ def test_channel_import_truncates_to_free_import_cap(monkeypatch):
     )
     monkeypatch.setattr(ingest, "ensure_user_channel_subscription", lambda *_args: None)
     monkeypatch.setattr(ingest, "get_indexed_video_ids_pg", lambda supabase, channel_id: set())
+    monkeypatch.setattr(ingest, "get_indexed_video_pg", lambda supabase, video_id: None)
     monkeypatch.setattr(
         ingest,
         "get_user_profile",
@@ -226,7 +257,7 @@ def test_existing_channel_subscription_claims_quota_before_insert(monkeypatch):
 
     message = ingest.ensure_user_channel_subscription(supabase, {"id": "channel-id"}, "user123")
 
-    assert message.startswith("Free indexing limit reached")
+    assert message.startswith("Free video limit reached")
     assert supabase.inserts == []
 
 
@@ -244,6 +275,15 @@ def test_usage_endpoint_returns_new_free_tier_shape(monkeypatch):
             "free_indexed_videos_total": 2,
             "free_indexed_seconds_total": 7200,
         },
+    )
+    monkeypatch.setattr(
+        server,
+        "resolve_user_entitlements",
+        lambda supabase, user_id, profile=None: free_billing_context(
+            searches=4,
+            indexed_seconds=7200,
+            indexed_videos=2,
+        ),
     )
 
     try:
@@ -275,6 +315,11 @@ def test_search_endpoint_rejects_free_result_limit(monkeypatch):
     )
     monkeypatch.setattr(
         server,
+        "resolve_user_entitlements",
+        lambda supabase, user_id, profile=None: free_billing_context(searches=0),
+    )
+    monkeypatch.setattr(
+        server,
         "search",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("search should not run")),
     )
@@ -303,6 +348,11 @@ def test_search_endpoint_returns_monthly_quota_429(monkeypatch):
     )
     monkeypatch.setattr(
         server,
+        "resolve_user_entitlements",
+        lambda supabase, user_id, profile=None: free_billing_context(searches=100),
+    )
+    monkeypatch.setattr(
+        server,
         "search",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("search should not run")),
     )
@@ -313,7 +363,7 @@ def test_search_endpoint_returns_monthly_quota_429(monkeypatch):
         app.dependency_overrides.clear()
 
     assert response.status_code == 429
-    assert response.json()["detail"].startswith("Monthly hosted search limit reached")
+    assert response.json()["detail"].startswith("Free monthly search limit reached")
 
 
 def test_ingest_endpoint_rejects_active_job_conflict(monkeypatch):
@@ -325,6 +375,11 @@ def test_ingest_endpoint_rejects_active_job_conflict(monkeypatch):
     monkeypatch.setattr(
         server, "resolve_api_key", lambda profile=None, x_api_key=None: ("key", False)
     )
+    monkeypatch.setattr(
+        server,
+        "resolve_user_entitlements",
+        lambda supabase, user_id, profile=None: free_billing_context(),
+    )
     monkeypatch.setattr(server, "count_active_ingestion_jobs", lambda supabase, user_id: 1)
 
     try:
@@ -333,7 +388,70 @@ def test_ingest_endpoint_rejects_active_job_conflict(monkeypatch):
         app.dependency_overrides.clear()
 
     assert response.status_code == 409
-    assert response.json()["detail"].startswith("You already have an import running")
+    assert response.json()["detail"].startswith("You already have the maximum number of imports")
+
+
+def test_ingest_endpoint_treats_watch_url_with_playlist_context_as_video(monkeypatch):
+    app = server.app
+    app.dependency_overrides[server.get_request_user] = lambda: {"sub": "user-1"}
+    created_jobs = []
+
+    monkeypatch.setattr(server, "is_supabase_mode", lambda: True)
+    monkeypatch.setattr(server, "get_supabase", lambda: object())
+    monkeypatch.setattr(server, "get_user_profile", lambda supabase, user_id: {})
+    monkeypatch.setattr(
+        server, "resolve_api_key", lambda profile=None, x_api_key=None: ("key", False)
+    )
+    monkeypatch.setattr(
+        server,
+        "resolve_user_entitlements",
+        lambda supabase, user_id, profile=None: free_billing_context(),
+    )
+    monkeypatch.setattr(server, "count_active_ingestion_jobs", lambda supabase, user_id: 0)
+    monkeypatch.setattr(
+        server,
+        "build_ingestion_cost_estimate",
+        lambda supabase, user_id, source_url, source_type, digest_depth="standard": {
+            "sourceType": source_type
+        },
+    )
+
+    def fake_create_job(supabase, user_id, source_url, source_type, cost_estimate=None):
+        job = {
+            "id": "job-1",
+            "user_id": user_id,
+            "source_url": source_url,
+            "source_type": source_type,
+            "cost_estimate": cost_estimate,
+        }
+        created_jobs.append(job)
+        return job
+
+    monkeypatch.setattr(server, "create_ingestion_job", fake_create_job)
+    monkeypatch.setattr(server, "update_ingestion_job", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(server, "record_ingestion_job_event", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        server,
+        "ingest_url",
+        lambda *_args, **_kwargs: iter(["Detected URL type: VIDEO", "Complete!"]),
+    )
+
+    try:
+        response = TestClient(app).post(
+            "/api/ingest",
+            json={
+                "url": (
+                    "https://www.youtube.com/watch?v=6nyJ8y8ghsE"
+                    "&list=PLL1tdVxB1CpVpEtMHxwuR4ul4Lxjw0O_y"
+                )
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert created_jobs[0]["source_type"] == "video"
+    assert created_jobs[0]["cost_estimate"] == {"sourceType": "video"}
 
 
 def test_count_active_ingestion_jobs_uses_queued_and_running_statuses():

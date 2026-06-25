@@ -1,31 +1,71 @@
-import { VideoClip, LibraryData, SearchHistoryEntry, IngestionJob } from '../types';
+import {
+  VideoClip,
+  LibraryData,
+  LibraryComponentSearchData,
+  LibraryComponentType,
+  LibraryGraphNode,
+  LibrarySourceGraphData,
+  SearchHistoryEntry,
+  IngestionJob,
+  McpTokenRecord,
+  CreatedMcpToken,
+  CaptureSource,
+  CaptureSourceSyncResult,
+  OnboardingStatus,
+  SaveYoutubeOAuthConnectionRequest,
+  YoutubeOAuthStatus,
+} from '../types';
 import { supabase } from '../lib/supabase';
 import { AppConfig, isSupabaseAuth } from '../config';
 
-// Use environment variable for production, fallback to localhost for dev
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+// Use the hosted API by default; local dev can override with VITE_API_URL.
+const API_BASE = import.meta.env.VITE_API_URL || 'https://api.memexai.xyz';
 const API_URL = `${API_BASE}/api`;
+const LIBRARY_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+const LIBRARY_GRAPH_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+const INGESTION_JOBS_CACHE_MAX_AGE_MS = 15 * 1000;
+const LIBRARY_CACHE_PREFIX = 'memexai:library-cache:v1';
+
+interface AuthContext {
+  headers: Record<string, string>;
+  cacheScope: string;
+}
+
+interface JsonCacheEnvelope<T> {
+  scope: string;
+  storedAt: number;
+  data: T;
+}
 
 // Get auth headers from Supabase session
-async function getAuthHeaders(): Promise<Record<string, string>> {
+async function getAuthContext(): Promise<AuthContext> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
+  let cacheScope = 'anonymous';
 
   if (isSupabaseAuth) {
     const {
       data: { session },
     } = await supabase.auth.getSession();
-    if (!session?.access_token) return headers;
+    if (!session?.access_token) return { headers, cacheScope };
     headers['Authorization'] = `Bearer ${session.access_token}`;
+    cacheScope = session.user?.id
+      ? `supabase:${session.user.id}`
+      : `supabase-token:${fingerprintString(session.access_token)}`;
   }
 
   const apiKey = isSupabaseAuth ? null : getStoredLocalApiKey();
   if (apiKey) {
     headers['X-API-Key'] = apiKey;
+    cacheScope = `local-api-key:${fingerprintString(apiKey)}`;
   }
 
-  return headers;
+  return { headers, cacheScope };
+}
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  return (await getAuthContext()).headers;
 }
 
 const LOCAL_API_KEY = 'searchtube_local_api_key';
@@ -41,6 +81,94 @@ export const saveStoredLocalApiKey = (apiKey: string): void => {
 
 export const deleteStoredLocalApiKey = (): void => {
   localStorage.removeItem(LOCAL_API_KEY);
+};
+
+function fingerprintString(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(31, hash) + value.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function getSessionCacheStorage(): Storage | null {
+  if (typeof sessionStorage === 'undefined') return null;
+  return sessionStorage;
+}
+
+function cacheKey(name: string, suffix?: string | number): string {
+  return `${LIBRARY_CACHE_PREFIX}:${name}${suffix === undefined ? '' : `:${suffix}`}`;
+}
+
+function readJsonCache<T>(key: string, scope: string, maxAgeMs: number): T | null {
+  try {
+    const storage = getSessionCacheStorage();
+    if (!storage) return null;
+    const raw = storage.getItem(key);
+    if (!raw) return null;
+    const envelope = JSON.parse(raw) as JsonCacheEnvelope<T>;
+    if (envelope.scope !== scope) return null;
+    if (!envelope.storedAt || Date.now() - envelope.storedAt > maxAgeMs) return null;
+    return envelope.data;
+  } catch {
+    return null;
+  }
+}
+
+function writeJsonCache<T>(key: string, scope: string, data: T): void {
+  try {
+    const storage = getSessionCacheStorage();
+    if (!storage) return;
+    const envelope: JsonCacheEnvelope<T> = {
+      scope,
+      storedAt: Date.now(),
+      data,
+    };
+    storage.setItem(key, JSON.stringify(envelope));
+  } catch {
+    // Storage can be unavailable in privacy modes; the network path remains authoritative.
+  }
+}
+
+export const invalidateLibraryCaches = (): void => {
+  try {
+    const storage = getSessionCacheStorage();
+    if (!storage) return;
+    const keysToRemove: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key?.startsWith(LIBRARY_CACHE_PREFIX)) keysToRemove.push(key);
+    }
+    keysToRemove.forEach((key) => storage.removeItem(key));
+  } catch {
+    // Cache invalidation is a best-effort UI optimization.
+  }
+};
+
+export const getCachedLibrary = async (): Promise<LibraryData | null> => {
+  const { cacheScope } = await getAuthContext();
+  return readJsonCache<LibraryData>(cacheKey('library'), cacheScope, LIBRARY_CACHE_MAX_AGE_MS);
+};
+
+export const getCachedLibraryGraph = async (
+  limit: number = 50,
+): Promise<LibrarySourceGraphData | null> => {
+  const { cacheScope } = await getAuthContext();
+  return readJsonCache<LibrarySourceGraphData>(
+    cacheKey('library-graph', limit),
+    cacheScope,
+    LIBRARY_GRAPH_CACHE_MAX_AGE_MS,
+  );
+};
+
+export const getCachedIngestionJobs = async (): Promise<IngestionJob[] | null> => {
+  const { cacheScope } = await getAuthContext();
+  return readJsonCache<IngestionJob[]>(
+    cacheKey('ingestion-jobs'),
+    cacheScope,
+    INGESTION_JOBS_CACHE_MAX_AGE_MS,
+  );
 };
 
 export const fetchAppConfig = async (): Promise<AppConfig> => {
@@ -76,16 +204,127 @@ export const checkBackendHealth = async (): Promise<{
 };
 
 export const fetchLibrary = async (): Promise<LibraryData> => {
+  const { headers, cacheScope } = await getAuthContext();
+  const response = await fetch(`${API_URL}/library`, { headers });
+  if (!response.ok) {
+    throw new Error(`Backend Error: ${response.statusText}`);
+  }
+  const data = await response.json();
+  writeJsonCache(cacheKey('library'), cacheScope, data);
+  return data;
+};
+
+const emptyLibraryGraph = (): LibrarySourceGraphData => ({
+  version: 'memexai-library-source-graph-v1',
+  limit: 50,
+  accessModel: {
+    scope: 'current_user_grants',
+    visibilityGrants: ['user_videos', 'user_channels'],
+    sourceTruth: 'read_only',
+    provenanceFields: ['accessScope', 'accessSource', 'accessReason'],
+  },
+  videos: [],
+  componentCounts: {
+    videos: 0,
+    channels: 0,
+    sourceLabels: 0,
+    sourceConcepts: 0,
+    sourceEdges: 0,
+    knowledgeArtifacts: 0,
+    transcriptChunksSampled: 0,
+    agentNotes: 0,
+    personalConcepts: 0,
+    reviewFlags: 0,
+  },
+  graph: {
+    nodes: [],
+    edges: [],
+    selectedNodeId: null,
+  },
+  reviewFlags: [],
+  edgeCaseHandling: [],
+  guidance: '',
+});
+
+export const fetchLibraryGraph = async (limit: number = 50): Promise<LibrarySourceGraphData> => {
+  try {
+    const { headers, cacheScope } = await getAuthContext();
+    const params = new URLSearchParams({ limit: String(limit) });
+    const response = await fetch(`${API_URL}/library/graph?${params.toString()}`, { headers });
+    if (!response.ok) {
+      throw new Error(`Backend Error: ${response.statusText}`);
+    }
+    const data = await response.json();
+    writeJsonCache(cacheKey('library-graph', limit), cacheScope, data);
+    return data;
+  } catch (error) {
+    console.warn('Error fetching library graph:', error);
+    return emptyLibraryGraph();
+  }
+};
+
+export const fetchLibraryArtifact = async (
+  artifactId: string,
+): Promise<LibraryGraphNode | null> => {
   try {
     const headers = await getAuthHeaders();
-    const response = await fetch(`${API_URL}/library`, { headers });
+    const normalizedId = artifactId.replace(/^artifact:/, '');
+    const response = await fetch(
+      `${API_URL}/library/artifacts/${encodeURIComponent(normalizedId)}`,
+      {
+        headers,
+      },
+    );
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.warn('Error fetching library artifact:', error);
+    return null;
+  }
+};
+
+export const searchLibraryComponents = async (
+  query: string,
+  limit: number = 20,
+  componentTypes?: LibraryComponentType[],
+): Promise<LibraryComponentSearchData> => {
+  try {
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(limit),
+    });
+    if (componentTypes && componentTypes.length > 0) {
+      params.set('component_types', componentTypes.join(','));
+    }
+    const response = await fetch(`${API_URL}/library/components/search?${params.toString()}`, {
+      headers,
+    });
     if (!response.ok) {
       throw new Error(`Backend Error: ${response.statusText}`);
     }
     return await response.json();
   } catch (error) {
-    console.warn('Error fetching library:', error);
-    return { channels: [], totalVideos: 0, totalClips: 0 };
+    console.warn('Error searching library components:', error);
+    return {
+      query,
+      retrievalMode: 'component_keyword',
+      results: [],
+      componentTypes: componentTypes || [],
+      accessModel: {
+        scope: 'current_user_grants',
+        embeddingUsed: false,
+        llmAnswerUsed: false,
+      },
+      retrievalBudget: {
+        embeddingCalls: 0,
+        llmCalls: 0,
+        maxResults: limit,
+        searchedVideos: 0,
+        returnedResults: 0,
+      },
+      guidance: '',
+    };
   }
 };
 
@@ -101,7 +340,9 @@ export const deleteVideo = async (
     if (!response.ok) {
       throw new Error(`Backend Error: ${response.statusText}`);
     }
-    return await response.json();
+    const data = await response.json();
+    if (data.success) invalidateLibraryCaches();
+    return data;
   } catch (error) {
     console.warn('Error deleting video:', error);
     return { success: false, deletedClips: 0, error: String(error) };
@@ -112,13 +353,14 @@ export const ingestChannel = async (
   url: string,
   onLog: (msg: string) => void,
   onComplete: () => void,
+  digestDepth: 'none' | 'basic' | 'standard' | 'deep' = 'standard',
 ) => {
   try {
     const headers = await getAuthHeaders();
     const response = await fetch(`${API_URL}/ingest`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({ url, digest_depth: digestDepth }),
     });
 
     if (!response.ok) throw new Error('Failed to start ingestion');
@@ -138,6 +380,7 @@ export const ingestChannel = async (
         if (line.startsWith('data: ')) {
           const msg = line.replace('data: ', '');
           if (msg === '[DONE]') {
+            invalidateLibraryCaches();
             onComplete();
             return;
           }
@@ -154,6 +397,8 @@ export const ingestChannel = async (
 export const searchVideoClips = async (
   query: string,
   limit: number = 5,
+  categoryFilters?: Record<string, string | string[]>,
+  retrievalMode: 'hybrid' | 'semantic' | 'keyword' = 'hybrid',
 ): Promise<{ answer: string; relevantClips: VideoClip[] }> => {
   const headers = await getAuthHeaders();
 
@@ -161,7 +406,12 @@ export const searchVideoClips = async (
     const response = await fetch(`${API_URL}/search`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ query, limit }),
+      body: JSON.stringify({
+        query,
+        limit,
+        category_filters: categoryFilters,
+        retrieval_mode: retrievalMode,
+      }),
     });
 
     if (!response.ok) {
@@ -178,7 +428,21 @@ export const searchVideoClips = async (
 
 // Usage quota
 export interface UsageInfo {
-  plan: 'free' | 'local';
+  plan: 'free' | 'plus' | 'pro' | 'local';
+  planKey?: 'free' | 'plus' | 'pro' | 'local';
+  billingStatus?:
+    | 'free'
+    | 'trialing'
+    | 'active'
+    | 'past_due'
+    | 'canceled'
+    | 'incomplete'
+    | 'incomplete_expired'
+    | 'unpaid'
+    | 'local';
+  currentPeriodStart?: string | null;
+  currentPeriodEnd?: string | null;
+  cancelAtPeriodEnd?: boolean;
   searchesUsedToday: number;
   searchesUsedThisMonth: number;
   searchLimit: number | null;
@@ -189,13 +453,41 @@ export interface UsageInfo {
   indexedVideoLimit: number | null;
   indexedSecondsUsed: number;
   indexedSecondsLimit: number | null;
+  monthlyIndexedSecondsUsed?: number;
+  monthlyIndexedSecondsLimit?: number | null;
+  deepIndexedSecondsUsed?: number;
+  deepIndexedSecondsLimit?: number | null;
   maxImportVideos: number | null;
   maxSearchResults: number | null;
+  maxActiveIngestionJobs?: number | null;
+  usagePackSecondsBalance?: number;
+  priorityQueue?: boolean;
   hasOwnKey: boolean;
   hasServerKey?: boolean;
   apiKeyMode?: 'server' | 'byok' | 'hybrid';
   allowUserKeys?: boolean;
 }
+
+export interface BillingStatus {
+  planKey: 'free' | 'plus' | 'pro' | 'local';
+  billingStatus: NonNullable<UsageInfo['billingStatus']>;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  entitlements: Record<string, unknown> | null;
+  usage: Record<string, unknown> | null;
+  hasStripeCustomer: boolean;
+}
+
+const readResponseError = async (response: Response, fallback: string): Promise<string> => {
+  try {
+    const data = (await response.json()) as { detail?: unknown };
+    if (typeof data.detail === 'string' && data.detail.trim()) return data.detail;
+  } catch {
+    // Some infrastructure errors are plain text or empty; fall back to status context.
+  }
+  return `${fallback} (${response.status})`;
+};
 
 export const fetchUsage = async (): Promise<UsageInfo | null> => {
   try {
@@ -208,13 +500,120 @@ export const fetchUsage = async (): Promise<UsageInfo | null> => {
   }
 };
 
-export const fetchIngestionJobs = async (): Promise<IngestionJob[]> => {
+export const fetchBillingStatus = async (): Promise<BillingStatus | null> => {
   try {
     const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/billing/status`, { headers });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+};
+
+export const createBillingCheckout = async (lookupKey: string): Promise<string> => {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_URL}/billing/checkout`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ lookupKey }),
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, 'Could not create Stripe Checkout'));
+  }
+  const data = (await response.json()) as { url?: string };
+  if (!data.url) throw new Error('Stripe Checkout did not return a redirect URL.');
+  return data.url;
+};
+
+export const createBillingPortal = async (): Promise<string> => {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_URL}/billing/portal`, {
+    method: 'POST',
+    headers,
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, 'Could not open Stripe billing portal'));
+  }
+  const data = (await response.json()) as { url?: string };
+  if (!data.url) throw new Error('Stripe billing portal did not return a redirect URL.');
+  return data.url;
+};
+
+export const getMcpServerUrl = (): string => {
+  return `${API_BASE}/mcp`;
+};
+
+export const getMcpManifestUrl = (): string => {
+  return `${API_BASE}/mcp.json`;
+};
+
+export const getAgentGuideUrl = (): string => {
+  return `${API_BASE}/llms.txt`;
+};
+
+export const getAgentFullGuideUrl = (): string => {
+  return `${API_BASE}/llms-full.txt`;
+};
+
+export const fetchMcpTokens = async (): Promise<McpTokenRecord[]> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/mcp/tokens`, { headers });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.tokens || [];
+  } catch (error) {
+    console.warn('Error fetching MCP tokens:', error);
+    return [];
+  }
+};
+
+export const createMcpToken = async (
+  name: string,
+  scopes: string[] = ['context:read', 'overlay:write'],
+): Promise<CreatedMcpToken | null> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/mcp/tokens`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        name,
+        scopes,
+      }),
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.warn('Error creating MCP token:', error);
+    return null;
+  }
+};
+
+export const revokeMcpToken = async (tokenId: string): Promise<boolean> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/mcp/tokens/${tokenId}`, {
+      method: 'DELETE',
+      headers,
+    });
+    return response.ok;
+  } catch (error) {
+    console.warn('Error revoking MCP token:', error);
+    return false;
+  }
+};
+
+export const fetchIngestionJobs = async (): Promise<IngestionJob[]> => {
+  try {
+    const { headers, cacheScope } = await getAuthContext();
     const response = await fetch(`${API_URL}/ingestion-jobs`, { headers });
     if (!response.ok) throw new Error(`Backend Error: ${response.statusText}`);
     const data = await response.json();
-    return data.jobs || [];
+    const jobs = data.jobs || [];
+    writeJsonCache(cacheKey('ingestion-jobs'), cacheScope, jobs);
+    return jobs;
   } catch (error) {
     console.warn('Error fetching ingestion jobs:', error);
     return [];
@@ -229,6 +628,223 @@ export const fetchIngestionJob = async (jobId: string): Promise<IngestionJob | n
     return await response.json();
   } catch (error) {
     console.warn('Error fetching ingestion job:', error);
+    return null;
+  }
+};
+
+export const clearIngestionJobHistory = async (): Promise<number> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/ingestion-jobs/history`, {
+      method: 'DELETE',
+      headers,
+    });
+    if (!response.ok) return 0;
+    const data = await response.json();
+    invalidateLibraryCaches();
+    return data.deletedCount || 0;
+  } catch (error) {
+    console.warn('Error clearing ingestion job history:', error);
+    return 0;
+  }
+};
+
+export const fetchCaptureSources = async (): Promise<CaptureSource[]> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/capture/sources`, { headers });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.captureSources || [];
+  } catch (error) {
+    console.warn('Error fetching capture sources:', error);
+    return [];
+  }
+};
+
+export const createCaptureSource = async (
+  playlistUrl: string,
+  title: string = '',
+): Promise<CaptureSource | null> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/capture/sources`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        playlist_url: playlistUrl,
+        title,
+        created_by: 'user',
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.captureSource || null;
+  } catch (error) {
+    console.warn('Error creating capture source:', error);
+    return null;
+  }
+};
+
+export const syncCaptureSource = async (
+  sourceId: string,
+  maxJobs: number = 1,
+): Promise<CaptureSourceSyncResult | null> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/capture/sources/${sourceId}/sync`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        max_jobs: maxJobs,
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    invalidateLibraryCaches();
+    return data;
+  } catch (error) {
+    console.warn('Error syncing capture source:', error);
+    return null;
+  }
+};
+
+const disconnectedYoutubeStatus = (): YoutubeOAuthStatus => ({
+  connected: false,
+  needsReconnect: false,
+  youtubeReadonlyGranted: false,
+  hasRefreshToken: false,
+  scopes: [],
+  expiresAt: null,
+  connectedAt: null,
+  updatedAt: null,
+  lastError: null,
+});
+
+export const fetchYoutubeOAuthStatus = async (): Promise<YoutubeOAuthStatus> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/youtube/oauth/status`, { headers });
+    if (!response.ok) return disconnectedYoutubeStatus();
+    return await response.json();
+  } catch (error) {
+    console.warn('Error fetching YouTube connection status:', error);
+    return disconnectedYoutubeStatus();
+  }
+};
+
+export const saveYoutubeOAuthConnection = async (
+  payload: SaveYoutubeOAuthConnectionRequest,
+): Promise<YoutubeOAuthStatus | null> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/youtube/oauth/connection`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.warn('Error saving YouTube connection:', error);
+    return null;
+  }
+};
+
+export const disconnectYoutubeOAuth = async (): Promise<YoutubeOAuthStatus> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/youtube/oauth/connection`, {
+      method: 'DELETE',
+      headers,
+    });
+    if (!response.ok) return disconnectedYoutubeStatus();
+    return await response.json();
+  } catch (error) {
+    console.warn('Error disconnecting YouTube:', error);
+    return disconnectedYoutubeStatus();
+  }
+};
+
+const completedOnboardingStatus = (): OnboardingStatus => ({
+  step: 'done',
+  state: {},
+  completedAt: null,
+  skippedAt: null,
+  explicitCompleted: true,
+  explicitSkipped: false,
+  derived: {
+    youtubeConnected: false,
+    hasCaptureSource: false,
+    hasGrantedVideo: false,
+    hasQueuedOrIndexedJob: false,
+    hasMcpToken: false,
+    hasSearchUsage: false,
+    activationComplete: true,
+  },
+  nextSteps: [],
+});
+
+export const fetchOnboardingStatus = async (): Promise<OnboardingStatus> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/onboarding/status`, { headers });
+    if (!response.ok) return completedOnboardingStatus();
+    return await response.json();
+  } catch (error) {
+    console.warn('Error fetching onboarding status:', error);
+    return completedOnboardingStatus();
+  }
+};
+
+export const updateOnboardingStatus = async (
+  payload: Partial<{
+    onboarding_step: OnboardingStatus['step'];
+    onboarding_state: Record<string, unknown>;
+    complete: boolean;
+    skip: boolean;
+  }>,
+): Promise<OnboardingStatus | null> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/onboarding/status`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.warn('Error updating onboarding status:', error);
+    return null;
+  }
+};
+
+export interface ApproveMcpOAuthRequest {
+  response_type: string;
+  client_id: string;
+  redirect_uri: string;
+  code_challenge: string;
+  code_challenge_method?: string;
+  scope?: string;
+  state?: string | null;
+  resource?: string | null;
+}
+
+export const approveMcpOAuthAuthorization = async (
+  payload: ApproveMcpOAuthRequest,
+): Promise<{ redirectUrl: string } | null> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/mcp/oauth/approve`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.warn('Error approving MCP OAuth request:', error);
     return null;
   }
 };

@@ -6,3 +6,4 @@ backend/channel_chroma_db
 data
 package-lock.json
 supabase/.temp
+workers/**/*.toml

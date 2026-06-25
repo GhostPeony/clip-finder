@@ -16,6 +16,7 @@ def test_ingest_single_video_pg_stops_when_index_quota_is_exhausted(monkeypatch)
     from backend import ingest
 
     monkeypatch.setattr(ingest, "get_supabase", lambda: object())
+    monkeypatch.setattr(ingest, "get_indexed_video_pg", lambda supabase, video_id: None)
     monkeypatch.setattr(ingest, "fetch_video_metadata", lambda video_id: ("Title", "Channel"))
     monkeypatch.setattr(
         ingest,
@@ -35,6 +36,110 @@ def test_ingest_single_video_pg_stops_when_index_quota_is_exhausted(monkeypatch)
     messages = list(ingest.ingest_single_video_pg("video123", "user123"))
 
     assert messages[-1].startswith("Free indexing limit reached")
+
+
+def test_get_or_create_channel_refetches_when_insert_returns_no_body():
+    from backend import ingest
+
+    class Result:
+        def __init__(self, data):
+            self.data = data
+
+    class Query:
+        def __init__(self, supabase, table_name):
+            self.supabase = supabase
+            self.table_name = table_name
+            self.operation = "select"
+
+        def select(self, *_args, **_kwargs):
+            self.operation = "select"
+            return self
+
+        def insert(self, payload):
+            self.operation = "insert"
+            self.supabase.inserts.append(payload)
+            return self
+
+        def eq(self, *_args, **_kwargs):
+            return self
+
+        def maybe_single(self):
+            return self
+
+        def execute(self):
+            if self.table_name == "channels" and self.operation == "insert":
+                return None
+            self.supabase.select_count += 1
+            if self.supabase.select_count == 1:
+                return Result(None)
+            return Result({"id": "channel-id", "youtube_handle": "@Channel"})
+
+    class Supabase:
+        def __init__(self):
+            self.inserts = []
+            self.select_count = 0
+
+        def table(self, table_name):
+            return Query(self, table_name)
+
+    channel = ingest.get_or_create_channel(Supabase(), "@Channel", "Channel", "user-1")
+
+    assert channel["id"] == "channel-id"
+
+
+def test_channel_subscription_tolerates_empty_supabase_response():
+    from backend import ingest
+
+    class Result:
+        def __init__(self, data):
+            self.data = data
+
+    class Query:
+        def __init__(self, supabase, table_name):
+            self.supabase = supabase
+            self.table_name = table_name
+            self.operation = "select"
+
+        def select(self, *_args, **_kwargs):
+            self.operation = "select"
+            return self
+
+        def insert(self, payload):
+            self.operation = "insert"
+            self.supabase.inserts.append((self.table_name, payload))
+            return self
+
+        def eq(self, *_args, **_kwargs):
+            return self
+
+        def match(self, *_args, **_kwargs):
+            return self
+
+        def maybe_single(self):
+            return self
+
+        def execute(self):
+            if self.table_name == "user_channels" and self.operation == "select":
+                return None
+            if self.table_name == "videos":
+                return Result([])
+            return Result(None)
+
+    class Supabase:
+        def __init__(self):
+            self.inserts = []
+
+        def table(self, table_name):
+            return Query(self, table_name)
+
+    supabase = Supabase()
+
+    message = ingest.ensure_user_channel_subscription(supabase, {"id": "channel-id"}, "user-1")
+
+    assert message is None
+    assert supabase.inserts == [
+        ("user_channels", {"user_id": "user-1", "channel_id": "channel-id"})
+    ]
 
 
 def test_transcript_export_requires_channel_subscription(monkeypatch):
@@ -68,6 +173,8 @@ def test_transcript_export_requires_channel_subscription(monkeypatch):
                 return Result({"id": "video-db-id", "channel_id": "channel-id"})
             if self.table == "user_channels":
                 return Result(None)
+            if self.table == "user_videos":
+                return Result(None)
             raise AssertionError("chunks should not be queried for unsubscribed users")
 
     class Supabase:
@@ -78,7 +185,7 @@ def test_transcript_export_requires_channel_subscription(monkeypatch):
     monkeypatch.setattr(rag, "get_supabase", lambda: Supabase())
 
     assert rag.get_video_transcript_pg("yt-id", "other-user") == []
-    assert calls == ["videos", "user_channels"]
+    assert calls == ["videos", "user_channels", "user_videos"]
 
 
 def test_get_current_user_prefers_supabase_auth_server(monkeypatch):

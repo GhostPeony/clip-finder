@@ -1,0 +1,24 @@
+name = "memexai-orchestrator"
+main = "src/index.ts"
+compatibility_date = "2026-06-22"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[vars]
+MEMEXAI_API_URL = "https://api.memexai.xyz"
+
+[[workflows]]
+name = "capture-playlist-sync"
+binding = "CAPTURE_SYNC_WORKFLOW"
+class_name = "CapturePlaylistSyncWorkflow"
+
+[[workflows]]
+name = "video-ingestion"
+binding = "VIDEO_INGESTION_WORKFLOW"
+class_name = "VideoIngestionWorkflow"
+
+[[queues.producers]]
+binding = "INGESTION_QUEUE"
+queue = "memexai-ingestion"

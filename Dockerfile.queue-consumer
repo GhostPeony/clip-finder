@@ -1,0 +1,19 @@
+# Queue consumer Dockerfile for hosted ingestion workers.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV SEARCHTUBE_STORAGE=supabase
+ENV SEARCHTUBE_AUTH_MODE=supabase
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY backend/ ./backend/
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD python -m backend.queue_consumer --healthcheck || exit 1
+
+CMD ["python", "-m", "backend.queue_consumer"]

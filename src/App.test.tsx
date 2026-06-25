@@ -1,8 +1,13 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { AuthProvider } from './contexts/AuthContext';
+import { AuthProvider, YOUTUBE_READONLY_SCOPE, useAuth } from './contexts/AuthContext';
 import { supabase } from './lib/supabase';
+
+function YouTubeConnectHarness() {
+  const { connectYouTube } = useAuth();
+  return <button onClick={() => void connectYouTube()}>Connect YouTube</button>;
+}
 
 describe('App auth mode', () => {
   beforeEach(() => {
@@ -23,8 +28,8 @@ describe('App auth mode', () => {
       </AuthProvider>,
     );
 
-    expect((await screen.findAllByText('Embed Moments')).length).toBeGreaterThan(0);
-    expect(document.body.textContent).toContain('embedmoments.com');
+    expect((await screen.findAllByText('Memexai')).length).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain('memexai.xyz');
     expect(screen.getAllByText('Use cases').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Login').length).toBeGreaterThan(0);
     expect(screen.queryByText('Email link')).not.toBeInTheDocument();
@@ -52,6 +57,35 @@ describe('App auth mode', () => {
         options: {
           redirectTo: window.location.origin,
           scopes: 'openid email profile',
+        },
+      });
+    });
+  });
+
+  it('starts Google OAuth with YouTube read-only scope and offline consent when connecting YouTube', async () => {
+    const signInSpy = vi.spyOn(supabase.auth, 'signInWithOAuth').mockResolvedValue({
+      data: { provider: 'google', url: 'https://accounts.google.com' },
+      error: null,
+    });
+
+    render(
+      <AuthProvider>
+        <YouTubeConnectHarness />
+      </AuthProvider>,
+    );
+
+    fireEvent.click(await screen.findByText('Connect YouTube'));
+
+    await waitFor(() => {
+      expect(signInSpy).toHaveBeenCalledWith({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}?youtube=connected`,
+          scopes: expect.stringContaining(YOUTUBE_READONLY_SCOPE),
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          },
         },
       });
     });

@@ -1,0 +1,18 @@
+# Example Hermes MCP server configuration for Memexai.
+#
+# Add this under the top-level `mcp_servers:` key in the Hermes config used by
+# the agent process. On this Windows desktop that config is commonly:
+#   C:\Users\Cade\AppData\Local\hermes\config.yaml
+#
+# For the Ponyo/GX10 backend process, configure the remote Hermes config instead:
+#   /home/ponyo/.hermes/config.yaml
+#
+# Do not paste raw tokens into this repo. Store the token in the environment as
+# MEMEXAI_MCP_TOKEN.
+
+memexai:
+  url: 'https://api.memexai.xyz/mcp'
+  headers:
+    Authorization: 'Bearer ${MEMEXAI_MCP_TOKEN}'
+  timeout: 180
+  connect_timeout: 30

@@ -24,12 +24,14 @@ from jose import JWTError, jwt
 from supabase import Client, create_client
 
 try:
+    from .billing import increment_billing_period_usage
     from .config import (
         get_free_indexed_transcript_seconds_total,
         get_free_indexed_videos_total,
         get_free_searches_per_month,
     )
 except ImportError:
+    from billing import increment_billing_period_usage
     from config import (
         get_free_indexed_transcript_seconds_total,
         get_free_indexed_videos_total,
@@ -196,18 +198,51 @@ def get_user_profile(supabase: Client, user_id: str) -> dict:
     return profile
 
 
-def check_search_quota(profile: dict, used_own_key: bool = False) -> bool:
+def check_search_quota(
+    profile: dict,
+    used_own_key: bool = False,
+    entitlements: dict | None = None,
+    period_usage: dict | None = None,
+) -> bool:
     """Check if a user can perform a hosted search."""
-    if used_own_key:
-        return True
+    del used_own_key  # BYOK does not bypass hosted plan quotas in v1.
+    if entitlements:
+        used = int((period_usage or {}).get("retrievalCalls", 0) or 0)
+        return used < int(entitlements.get("monthlyRetrievalCalls", 0) or 0)
     return profile.get("free_searches_this_month", 0) < get_free_searches_per_month()
 
 
-def check_index_quota(profile: dict, video_count: int, transcript_seconds: int = 0) -> bool:
+def check_index_quota(
+    profile: dict,
+    video_count: int,
+    transcript_seconds: int = 0,
+    entitlements: dict | None = None,
+    period_usage: dict | None = None,
+) -> bool:
     """Check if a user can add hosted library/indexing usage."""
-    video_remaining = get_free_indexed_videos_total() - profile.get("free_indexed_videos_total", 0)
-    seconds_remaining = get_free_indexed_transcript_seconds_total() - profile.get(
-        "free_indexed_seconds_total", 0
+    entitlements = entitlements or profile.get("_entitlements")
+    period_usage = period_usage or profile.get("_period_usage") or {}
+    if entitlements:
+        video_remaining = int(entitlements.get("indexedVideosTotal", 0) or 0) - int(
+            profile.get("free_indexed_videos_total", 0) or 0
+        )
+        library_seconds_remaining = int(entitlements.get("libraryTranscriptSeconds", 0) or 0) - int(
+            profile.get("free_indexed_seconds_total", 0) or 0
+        )
+        monthly_seconds_remaining = int(
+            entitlements.get("monthlyIndexedTranscriptSeconds", 0) or 0
+        ) - int(period_usage.get("indexedTranscriptSeconds", 0) or 0)
+        return (
+            video_remaining >= video_count
+            and library_seconds_remaining >= transcript_seconds
+            and monthly_seconds_remaining >= transcript_seconds
+        )
+
+    video_remaining = get_free_indexed_videos_total() - int(
+        profile.get("free_indexed_videos_total", 0) or 0
+    )
+    seconds_remaining = get_free_indexed_transcript_seconds_total() - int(
+        profile.get("free_indexed_seconds_total", 0) or 0
     )
     return video_remaining >= video_count and seconds_remaining >= transcript_seconds
 
@@ -219,18 +254,22 @@ def increment_search_usage(
     result_limit: int | None = None,
 ):
     """Increment search counter and log usage."""
-    if not used_own_key:
-        profile = (
-            supabase.table("profiles")
-            .select("free_searches_this_month")
-            .eq("id", user_id)
-            .single()
-            .execute()
-        )
-        current = profile.data.get("free_searches_this_month", 0) if profile.data else 0
-        supabase.table("profiles").update({"free_searches_this_month": current + 1}).eq(
-            "id", user_id
-        ).execute()
+    profile = (
+        supabase.table("profiles")
+        .select("free_searches_this_month")
+        .eq("id", user_id)
+        .single()
+        .execute()
+    )
+    current = profile.data.get("free_searches_this_month", 0) if profile.data else 0
+    supabase.table("profiles").update({"free_searches_this_month": current + 1}).eq(
+        "id", user_id
+    ).execute()
+
+    try:
+        increment_billing_period_usage(supabase, user_id, retrieval_calls=1)
+    except Exception as exc:  # noqa: BLE001 - usage logs should not break searches.
+        print(f"[WARN] Failed to increment billing retrieval usage: {exc}")
 
     log_payload = {"user_id": user_id, "action": "search", "used_own_key": used_own_key}
     if result_limit is not None:
@@ -273,6 +312,16 @@ def increment_index_usage(
             "used_own_key": used_own_key,
         }
     ).execute()
+
+    try:
+        increment_billing_period_usage(
+            supabase,
+            user_id,
+            indexed_transcript_seconds=transcript_seconds,
+            indexed_videos_added=video_count,
+        )
+    except Exception as exc:  # noqa: BLE001 - legacy usage logs remain source fallback.
+        print(f"[WARN] Failed to increment billing index usage: {exc}")
 
 
 def get_user_api_key(supabase: Client, user_id: str) -> Optional[str]:

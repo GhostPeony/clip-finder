@@ -1,0 +1,116 @@
+{
+  "name": "source_knowledge_discoverability",
+  "version": "memexai-source-knowledge-discoverability-v1",
+  "description": "Offline fixture for checking whether agents can find generated source knowledge objects without scanning a transcript.",
+  "passingBar": {
+    "objectRecallAt5": 0.85,
+    "videoRecallAt5": 0.9,
+    "timestampHitRate": 0.75,
+    "maxWrongVideoRate": 0.2,
+    "minTranscriptAvoidanceRate": 0.9
+  },
+  "videos": [
+    {
+      "videoId": "yt-agent-harness",
+      "title": "Building Reliable AI Agent Harnesses",
+      "channelName": "Agent Engineering"
+    },
+    {
+      "videoId": "yt-billing",
+      "title": "Pricing SaaS Compute Without Burning Margin",
+      "channelName": "Startup Ops"
+    }
+  ],
+  "sourceKnowledge": [
+    {
+      "id": "concept-verify-step",
+      "videoId": "yt-agent-harness",
+      "resultType": "source_concept",
+      "title": "Verification step",
+      "body": "A production agent harness needs a verify step that checks whether the task was actually completed before the workflow reports success. This is the guard against prompt-only reliability.",
+      "aliases": ["task completion check", "done verifier", "verify task completed"],
+      "sourceRefs": [
+        { "youtube_video_id": "yt-agent-harness", "start_seconds": 348, "end_seconds": 405 }
+      ]
+    },
+    {
+      "id": "section-black-box",
+      "videoId": "yt-agent-harness",
+      "resultType": "report_section",
+      "title": "Black Box Variables",
+      "body": "The report identifies hidden workflow variables: tool behavior, retries, context compression, state handoff, and final verification. These are the places an agent harness must make observable instead of trusting one LLM call.",
+      "aliases": ["black box variables", "hidden workflow variables", "observable harness"],
+      "sourceRefs": [
+        { "youtube_video_id": "yt-agent-harness", "start_seconds": 92, "end_seconds": 158 }
+      ]
+    },
+    {
+      "id": "section-context-compression",
+      "videoId": "yt-agent-harness",
+      "resultType": "report_section",
+      "title": "Context Compression Rules",
+      "body": "The source report explains that long agent tasks need programmatic context compression, durable state, and selective evidence retrieval so the model does not lose constraints or repeat stale transcript context.",
+      "aliases": ["context compressor", "token budget", "durable state"],
+      "sourceRefs": [
+        { "youtube_video_id": "yt-agent-harness", "start_seconds": 515, "end_seconds": 612 }
+      ]
+    },
+    {
+      "id": "concept-tool-registry",
+      "videoId": "yt-agent-harness",
+      "resultType": "source_concept",
+      "title": "Tool registry",
+      "body": "The harness should expose a typed tool registry instead of informal tool prompting, so action boundaries, allowed inputs, and failure states are inspectable.",
+      "aliases": ["typed tools", "tool boundary", "registered tools"],
+      "sourceRefs": [
+        { "youtube_video_id": "yt-agent-harness", "start_seconds": 250, "end_seconds": 330 }
+      ]
+    },
+    {
+      "id": "section-pricing-unit",
+      "videoId": "yt-billing",
+      "resultType": "report_section",
+      "title": "Transcript-Hour Pricing Unit",
+      "body": "The billing report argues that plans should be priced around transcript hours and ingestion compute, not raw saved-video count, because video duration is the strongest cost driver.",
+      "aliases": ["transcript hours", "ingestion compute", "duration pricing"],
+      "sourceRefs": [{ "youtube_video_id": "yt-billing", "start_seconds": 140, "end_seconds": 230 }]
+    }
+  ],
+  "queries": [
+    {
+      "id": "completion_check",
+      "query": "how does the harness know the task is actually completed",
+      "expectedObjectIds": ["concept-verify-step"],
+      "expectedVideoIds": ["yt-agent-harness"],
+      "expectedTimestampRanges": [{ "videoId": "yt-agent-harness", "start": 330, "end": 430 }]
+    },
+    {
+      "id": "hidden_variables",
+      "query": "black box variables in an agent workflow",
+      "expectedObjectIds": ["section-black-box"],
+      "expectedVideoIds": ["yt-agent-harness"],
+      "expectedTimestampRanges": [{ "videoId": "yt-agent-harness", "start": 80, "end": 170 }]
+    },
+    {
+      "id": "context_compressor",
+      "query": "token budget context compressor durable state",
+      "expectedObjectIds": ["section-context-compression"],
+      "expectedVideoIds": ["yt-agent-harness"],
+      "expectedTimestampRanges": [{ "videoId": "yt-agent-harness", "start": 500, "end": 630 }]
+    },
+    {
+      "id": "typed_tools",
+      "query": "typed tool registry action boundaries",
+      "expectedObjectIds": ["concept-tool-registry"],
+      "expectedVideoIds": ["yt-agent-harness"],
+      "expectedTimestampRanges": [{ "videoId": "yt-agent-harness", "start": 240, "end": 345 }]
+    },
+    {
+      "id": "pricing_unit",
+      "query": "pricing should use transcript hours rather than video count",
+      "expectedObjectIds": ["section-pricing-unit"],
+      "expectedVideoIds": ["yt-billing"],
+      "expectedTimestampRanges": [{ "videoId": "yt-billing", "start": 120, "end": 250 }]
+    }
+  ]
+}

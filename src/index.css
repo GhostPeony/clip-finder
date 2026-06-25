@@ -221,6 +221,28 @@ body {
   .link-quiet:hover {
     text-decoration-color: var(--peony-rose-deep);
   }
+
+  .brand-loader-mark {
+    align-items: center;
+    animation: brand-bloom 1.8s ease-in-out infinite;
+    display: inline-flex;
+    justify-content: center;
+    position: relative;
+  }
+
+  .brand-loader-mark::before {
+    animation: brand-ring 1.8s ease-in-out infinite;
+    border: 1px solid rgba(184, 53, 88, 0.26);
+    border-radius: 999px;
+    content: '';
+    inset: -0.35rem;
+    position: absolute;
+  }
+
+  .brand-loader-mark img {
+    position: relative;
+    z-index: 1;
+  }
 }
 
 .glow-wash {
@@ -269,6 +291,28 @@ body {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes brand-bloom {
+  0%,
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+  45% {
+    transform: rotate(10deg) scale(1.05);
+  }
+}
+
+@keyframes brand-ring {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.08);
   }
 }
 

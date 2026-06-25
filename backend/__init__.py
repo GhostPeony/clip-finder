@@ -1,1 +1,1 @@
-"""SearchTube backend package."""
+"""Memexai backend package."""

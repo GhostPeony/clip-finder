@@ -5,7 +5,6 @@ Primary ingestion module using PostgreSQL + pgvector storage.
 Implements shared-on-demand model: channels are indexed once and shared
 across users via the user_channels subscription table.
 
-Reuses YouTube helpers from ingest_chroma.py (scraping, transcripts, URL detection).
 Writes embeddings to Supabase chunks table as vector(768).
 
 Updated: 2026-02-28
@@ -15,12 +14,13 @@ import os
 import re
 import time
 from datetime import datetime, timezone
-from typing import Generator, Optional
+from typing import Any, Generator, Optional
 
 from dotenv import load_dotenv
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 try:
+    from .billing import resolve_user_entitlements
     from .config import (
         get_embedding_dimensions,
         get_embedding_model,
@@ -28,7 +28,21 @@ try:
         get_free_indexed_videos_total,
         get_free_max_import_videos,
     )
-    from .db import check_index_quota, get_supabase, get_user_profile, increment_index_usage
+    from .db import (
+        check_index_quota,
+        get_supabase,
+        increment_index_usage,
+    )
+    from .db import (
+        get_user_profile as get_db_user_profile,
+    )
+    from .digest_depth import DEFAULT_DIGEST_DEPTH, normalize_digest_depth
+    from .jobs import format_ingestion_error
+    from .knowledge import (
+        refresh_existing_video_source_knowledge,
+        source_knowledge_needs_refresh,
+        store_video_knowledge,
+    )
     from .youtube_utils import (
         describe_transcript_skip,
         detect_url_type,
@@ -38,6 +52,7 @@ try:
         fetch_video_metadata,
     )
 except ImportError:
+    from billing import resolve_user_entitlements
     from config import (
         get_embedding_dimensions,
         get_embedding_model,
@@ -45,7 +60,21 @@ except ImportError:
         get_free_indexed_videos_total,
         get_free_max_import_videos,
     )
-    from db import check_index_quota, get_supabase, get_user_profile, increment_index_usage
+    from db import (
+        check_index_quota,
+        get_supabase,
+        increment_index_usage,
+    )
+    from db import (
+        get_user_profile as get_db_user_profile,
+    )
+    from digest_depth import DEFAULT_DIGEST_DEPTH, normalize_digest_depth
+    from jobs import format_ingestion_error
+    from knowledge import (
+        refresh_existing_video_source_knowledge,
+        source_knowledge_needs_refresh,
+        store_video_knowledge,
+    )
     from youtube_utils import (
         describe_transcript_skip,
         detect_url_type,
@@ -64,6 +93,43 @@ EMBEDDING_MODEL = get_embedding_model()
 # Cache for embedding instances keyed by api_key
 _embeddings_cache: dict[str, GoogleGenerativeAIEmbeddings] = {}
 
+USER_VIDEO_ACCESS_SOURCES = frozenset(
+    {"ingest", "channel", "playlist", "capture_sync", "shared_existing", "agent"}
+)
+
+
+def get_user_profile(supabase, user_id: str) -> dict:
+    """Fetch profile plus hosted plan quota context when billing tables exist."""
+    profile = get_db_user_profile(supabase, user_id)
+    try:
+        resolved = resolve_user_entitlements(supabase, user_id, profile)
+        profile["_entitlements"] = resolved["entitlements"]
+        profile["_period_usage"] = resolved["usage"]
+    except Exception as exc:  # noqa: BLE001 - free-tier fallback keeps ingestion usable.
+        print(f"[WARN] Failed to resolve billing entitlements for ingestion: {exc}")
+    return profile
+
+
+def _result_data(result: Any) -> Any:
+    """Return Supabase response data, tolerating empty/None response objects."""
+    return getattr(result, "data", None)
+
+
+def _result_rows(result: Any) -> list[dict]:
+    data = _result_data(result)
+    if data is None:
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return [data]
+    return []
+
+
+def _first_result_row(result: Any) -> dict | None:
+    rows = _result_rows(result)
+    return rows[0] if rows else None
+
 
 def _format_hours(seconds: int) -> str:
     return f"{seconds / 3600:.1f}"
@@ -77,19 +143,35 @@ def transcript_seconds_from_chunks(chunks: list[dict]) -> int:
 
 
 def _index_quota_message(profile: dict, video_count: int, transcript_seconds: int = 0) -> str:
-    video_limit = get_free_indexed_videos_total()
-    seconds_limit = get_free_indexed_transcript_seconds_total()
+    entitlements = profile.get("_entitlements") or {}
+    plan_key = str(entitlements.get("planKey") or "free")
+    plan_label = plan_key.title()
+    video_limit = int(entitlements.get("indexedVideosTotal") or get_free_indexed_videos_total())
+    library_seconds_limit = int(
+        entitlements.get("libraryTranscriptSeconds") or get_free_indexed_transcript_seconds_total()
+    )
+    monthly_seconds_limit = int(
+        entitlements.get("monthlyIndexedTranscriptSeconds") or library_seconds_limit
+    )
+    period_usage = profile.get("_period_usage") or {}
     if profile.get("free_indexed_videos_total", 0) + video_count > video_limit:
         return (
-            f"Free indexing limit reached. Free workspaces can index or access up to "
-            f"{video_limit} videos. Contact us to unlock more capacity."
+            f"{plan_label} video limit reached. This plan can index or access up to "
+            f"{video_limit} videos. Upgrade to unlock more capacity."
         )
-    if profile.get("free_indexed_seconds_total", 0) + transcript_seconds > seconds_limit:
+    if profile.get("free_indexed_seconds_total", 0) + transcript_seconds > library_seconds_limit:
         return (
-            "Free transcript-hour limit reached. Free workspaces can index or access up to "
-            f"{_format_hours(seconds_limit)} transcript-hours. Contact us to unlock more capacity."
+            f"{plan_label} total library limit reached. This plan can store up to "
+            f"{_format_hours(library_seconds_limit)} transcript-hours. Upgrade to unlock more capacity."
         )
-    return "Free indexing limit reached. Contact us to unlock more capacity."
+    if int(period_usage.get("indexedTranscriptSeconds", 0) or 0) + transcript_seconds > (
+        monthly_seconds_limit
+    ):
+        return (
+            f"{plan_label} monthly transcript-hour limit reached. This plan can index "
+            f"{_format_hours(monthly_seconds_limit)} new transcript-hours per billing period."
+        )
+    return f"{plan_label} indexing limit reached. Upgrade to unlock more capacity."
 
 
 def get_embeddings(api_key: Optional[str] = None) -> GoogleGenerativeAIEmbeddings:
@@ -163,8 +245,9 @@ def get_or_create_channel(
         .execute()
     )
 
-    if result.data:
-        channel = result.data
+    existing_channel = _first_result_row(result)
+    if existing_channel:
+        channel = existing_channel
     else:
         # Create new channel
         insert_result = (
@@ -178,7 +261,20 @@ def get_or_create_channel(
             )
             .execute()
         )
-        channel = insert_result.data[0]
+        channel = _first_result_row(insert_result)
+        if not channel:
+            # Some Supabase clients/configurations can return no insert body. Re-read
+            # before failing so duplicate/race-safe channel creation still works.
+            refetch = (
+                supabase.table("channels")
+                .select("*")
+                .eq("youtube_handle", youtube_handle)
+                .maybe_single()
+                .execute()
+            )
+            channel = _first_result_row(refetch)
+        if not channel:
+            raise RuntimeError("Could not create or load the source channel")
 
     return channel
 
@@ -191,7 +287,7 @@ def get_channel_index_usage_pg(supabase, channel_id: str) -> dict:
         .eq("channel_id", channel_id)
         .execute()
     )
-    videos = result.data or []
+    videos = _result_rows(result)
     return {
         "video_count": len(videos),
         "transcript_seconds": sum(int(video.get("transcript_seconds", 0) or 0) for video in videos),
@@ -217,7 +313,7 @@ def ensure_user_channel_subscription(
         .maybe_single()
         .execute()
     )
-    if existing.data:
+    if _result_data(existing):
         return None
 
     usage = get_channel_index_usage_pg(supabase, channel_id)
@@ -253,7 +349,101 @@ def get_indexed_video_ids_pg(supabase, channel_id: str) -> set[str]:
     result = (
         supabase.table("videos").select("youtube_video_id").eq("channel_id", channel_id).execute()
     )
-    return {row["youtube_video_id"] for row in (result.data or [])}
+    return {row["youtube_video_id"] for row in _result_rows(result)}
+
+
+def get_indexed_video_pg(supabase, youtube_video_id: str) -> dict | None:
+    """Return an existing canonical video row by YouTube ID, if already indexed."""
+    result = (
+        supabase.table("videos")
+        .select("id, channel_id, youtube_video_id, title, thumbnail_url, transcript_seconds")
+        .eq("youtube_video_id", youtube_video_id)
+        .maybe_single()
+        .execute()
+    )
+    return _first_result_row(result)
+
+
+def refresh_existing_video_source_context_if_needed(
+    supabase,
+    video: dict,
+    api_key: Optional[str],
+    digest_depth: str,
+    user_id: str,
+) -> str | None:
+    """Regenerate weak canonical source knowledge without re-embedding the video."""
+    try:
+        if not source_knowledge_needs_refresh(supabase, video["id"], digest_depth):
+            return None
+        result = refresh_existing_video_source_knowledge(
+            supabase,
+            video,
+            api_key=api_key,
+            digest_depth=digest_depth,
+            published_for_user_id=user_id,
+        )
+        if result.get("refreshed"):
+            counts = result.get("counts") or {}
+            return (
+                "Updated source report and timestamped topics from the existing transcript "
+                f"({counts.get('knowledge_artifacts', 0)} reports, "
+                f"{counts.get('source_concepts', 0)} topics)."
+            )
+    except Exception as exc:  # noqa: BLE001 - repair should not block library access.
+        print(f"[KNOWLEDGE] Failed to refresh existing source knowledge: {exc}")
+    return None
+
+
+def grant_user_video_access(
+    supabase,
+    user_id: str,
+    video: dict,
+    used_own_key: bool = False,
+    access_source: str = "shared_existing",
+    source_url: str | None = None,
+    charge_usage: bool = True,
+) -> str | None:
+    """
+    Grant a user access to an existing canonical video without re-embedding it.
+
+    Returns a user-visible quota message when the access grant should be blocked.
+    """
+    if access_source not in USER_VIDEO_ACCESS_SOURCES:
+        allowed = ", ".join(sorted(USER_VIDEO_ACCESS_SOURCES))
+        raise ValueError(
+            f"Unsupported user_videos access_source '{access_source}'. Use one of: {allowed}"
+        )
+
+    video_id = video["id"]
+    existing = (
+        supabase.table("user_videos")
+        .select("user_id")
+        .match({"user_id": user_id, "video_id": video_id})
+        .maybe_single()
+        .execute()
+    )
+    if _result_data(existing):
+        return None
+
+    transcript_seconds = int(video.get("transcript_seconds", 0) or 0)
+    if charge_usage:
+        profile = get_user_profile(supabase, user_id)
+        if not check_index_quota(profile, 1, transcript_seconds):
+            return _index_quota_message(profile, 1, transcript_seconds)
+
+    payload = {
+        "user_id": user_id,
+        "video_id": video_id,
+        "access_source": access_source,
+    }
+    if source_url:
+        payload["source_url"] = source_url
+    supabase.table("user_videos").insert(payload).execute()
+
+    if charge_usage:
+        increment_index_usage(supabase, user_id, 1, used_own_key, transcript_seconds)
+
+    return None
 
 
 def index_video_to_pg(
@@ -265,6 +455,8 @@ def index_video_to_pg(
     chunks: list[dict],
     transcript_seconds: int,
     api_key: Optional[str] = None,
+    digest_depth: str = DEFAULT_DIGEST_DEPTH,
+    published_for_user_id: str | None = None,
 ) -> int:
     """
     Embed transcript chunks and write video + chunks to Supabase.
@@ -291,7 +483,13 @@ def index_video_to_pg(
         )
         .execute()
     )
-    db_video_id = video_result.data[0]["id"]
+    video_row = _first_result_row(video_result)
+    if not video_row:
+        existing_video = get_indexed_video_pg(supabase, video_id)
+        video_row = existing_video
+    if not video_row:
+        raise RuntimeError("Could not store video metadata")
+    db_video_id = video_row["id"]
 
     # Build chunk rows
     chunk_rows = []
@@ -312,11 +510,27 @@ def index_video_to_pg(
         batch = chunk_rows[i : i + BATCH_SIZE]
         supabase.table("chunks").insert(batch).execute()
 
+    try:
+        store_video_knowledge(
+            supabase,
+            db_video_id,
+            video_id,
+            title,
+            channel_name,
+            chunks,
+            api_key,
+            normalize_digest_depth(digest_depth),
+            published_for_user_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - source knowledge should not break indexing.
+        print(f"[KNOWLEDGE] Failed to store source knowledge for {video_id}: {exc}")
+
     # Increment channel video count
     current = (
         supabase.table("channels").select("total_videos").eq("id", channel_id).single().execute()
     )
-    new_total = (current.data.get("total_videos", 0) if current.data else 0) + 1
+    current_data = _result_data(current) or {}
+    new_total = (current_data.get("total_videos", 0) if isinstance(current_data, dict) else 0) + 1
     supabase.table("channels").update(
         {
             "total_videos": new_total,
@@ -332,6 +546,7 @@ def ingest_single_video_pg(
     user_id: str,
     api_key: Optional[str] = None,
     used_own_key: bool = False,
+    digest_depth: str = DEFAULT_DIGEST_DEPTH,
 ) -> Generator[str, None, None]:
     """
     Index a single YouTube video into Supabase/pgvector.
@@ -339,8 +554,36 @@ def ingest_single_video_pg(
     Yields progress messages as plain strings.
     """
     supabase = get_supabase()
+    digest_depth = normalize_digest_depth(digest_depth)
 
     yield f"Processing single video: {video_id}"
+    yield f"Digest depth: {digest_depth}"
+
+    existing_video = get_indexed_video_pg(supabase, video_id)
+    if existing_video:
+        quota_message = grant_user_video_access(
+            supabase,
+            user_id,
+            existing_video,
+            used_own_key,
+            access_source="shared_existing",
+            source_url=f"https://www.youtube.com/watch?v={video_id}",
+        )
+        if quota_message:
+            yield quota_message
+            return
+        refresh_message = refresh_existing_video_source_context_if_needed(
+            supabase,
+            existing_video,
+            api_key,
+            digest_depth,
+            user_id,
+        )
+        if refresh_message:
+            yield refresh_message
+        yield "This video is already indexed. Added the existing embeddings to your library."
+        yield "Complete!"
+        return
 
     # Fetch video metadata
     yield "Fetching video info..."
@@ -354,24 +597,9 @@ def ingest_single_video_pg(
     channel = get_or_create_channel(supabase, youtube_handle, channel_name, user_id)
     channel_id = channel["id"]
 
-    # Check if already indexed
-    indexed_ids = get_indexed_video_ids_pg(supabase, channel_id)
-    if video_id in indexed_ids:
-        quota_message = ensure_user_channel_subscription(supabase, channel, user_id, used_own_key)
-        if quota_message:
-            yield quota_message
-            return
-        yield "This video is already indexed!"
-        return
-
     profile = get_user_profile(supabase, user_id)
     if not check_index_quota(profile, 1, 0):
         yield _index_quota_message(profile, 1, 0)
-        return
-
-    quota_message = ensure_user_channel_subscription(supabase, channel, user_id, used_own_key)
-    if quota_message:
-        yield quota_message
         return
 
     # Get transcript chunks
@@ -402,11 +630,28 @@ def ingest_single_video_pg(
             chunks,
             transcript_seconds,
             api_key,
+            digest_depth,
+            published_for_user_id=user_id,
         )
+        indexed_video = get_indexed_video_pg(supabase, video_id)
+        if indexed_video:
+            grant_message = grant_user_video_access(
+                supabase,
+                user_id,
+                indexed_video,
+                used_own_key,
+                access_source="ingest",
+                source_url=f"https://www.youtube.com/watch?v={video_id}",
+                charge_usage=False,
+            )
+            if grant_message:
+                yield grant_message
+                return
         increment_index_usage(supabase, user_id, 1, used_own_key, transcript_seconds)
         yield f"Indexed {count} clips from video"
+        yield "Added video to your library"
     except Exception as e:
-        yield f"Error indexing: {str(e)}"
+        yield f"Error indexing: {format_ingestion_error(e)}"
         return
 
     yield "Complete!"
@@ -417,6 +662,7 @@ def ingest_channel_pg(
     user_id: str,
     api_key: Optional[str] = None,
     used_own_key: bool = False,
+    digest_depth: str = DEFAULT_DIGEST_DEPTH,
 ) -> Generator[str, None, None]:
     """
     Index all videos from a YouTube channel into Supabase/pgvector.
@@ -427,8 +673,10 @@ def ingest_channel_pg(
     import scrapetube
 
     supabase = get_supabase()
+    digest_depth = normalize_digest_depth(digest_depth)
 
     yield "Scanning channel for videos..."
+    yield f"Digest depth: {digest_depth}"
 
     try:
         videos = list(
@@ -477,10 +725,10 @@ def ingest_channel_pg(
         return
 
     profile = get_user_profile(supabase, user_id)
-    video_slots = max(
-        0, get_free_indexed_videos_total() - profile.get("free_indexed_videos_total", 0)
-    )
-    max_import_videos = get_free_max_import_videos()
+    entitlements = profile.get("_entitlements") or {}
+    video_limit = int(entitlements.get("indexedVideosTotal") or get_free_indexed_videos_total())
+    video_slots = max(0, video_limit - profile.get("free_indexed_videos_total", 0))
+    max_import_videos = int(entitlements.get("maxImportVideos") or get_free_max_import_videos())
     allowed_count = min(len(new_videos), video_slots, max_import_videos)
 
     if allowed_count <= 0:
@@ -489,8 +737,9 @@ def ingest_channel_pg(
 
     if allowed_count < len(new_videos):
         yield (
-            f"Free imports process the first {allowed_count} eligible videos "
-            f"(limit: {max_import_videos} per import, {get_free_indexed_videos_total()} total)."
+            f"{str(entitlements.get('planKey') or 'free').title()} imports process the first "
+            f"{allowed_count} eligible videos (limit: {max_import_videos} per import, "
+            f"{video_limit} total)."
         )
         new_videos = new_videos[:allowed_count]
 
@@ -509,6 +758,32 @@ def ingest_channel_pg(
         if not check_index_quota(profile, 1, 0):
             yield _index_quota_message(profile, 1, 0)
             break
+
+        existing_video = get_indexed_video_pg(supabase, vid)
+        if existing_video:
+            quota_message = grant_user_video_access(
+                supabase,
+                user_id,
+                existing_video,
+                used_own_key,
+                access_source="channel",
+                source_url=f"https://www.youtube.com/watch?v={vid}",
+            )
+            if quota_message:
+                yield quota_message
+                break
+            refresh_message = refresh_existing_video_source_context_if_needed(
+                supabase,
+                existing_video,
+                api_key,
+                digest_depth,
+                user_id,
+            )
+            indexed_count += 1
+            if refresh_message:
+                yield f"  {refresh_message}"
+            yield "  Reused existing indexed video (no embedding compute)"
+            continue
 
         transcript_result = fetch_transcript_chunks(vid)
         chunks = transcript_result.chunks
@@ -535,12 +810,14 @@ def ingest_channel_pg(
                 chunks,
                 transcript_seconds,
                 api_key,
+                digest_depth,
+                published_for_user_id=user_id,
             )
             increment_index_usage(supabase, user_id, 1, used_own_key, transcript_seconds)
             indexed_count += 1
             yield f"  Indexed {count} clips"
         except Exception as e:
-            yield f"  Error indexing: {str(e)}"
+            yield f"  Error indexing: {format_ingestion_error(e)}"
             skipped_count += 1
 
         time.sleep(0.5)
@@ -553,6 +830,7 @@ def ingest_playlist_pg(
     user_id: str,
     api_key: Optional[str] = None,
     used_own_key: bool = False,
+    digest_depth: str = DEFAULT_DIGEST_DEPTH,
 ) -> Generator[str, None, None]:
     """
     Index all videos from a YouTube playlist into Supabase/pgvector.
@@ -562,8 +840,10 @@ def ingest_playlist_pg(
     import scrapetube
 
     supabase = get_supabase()
+    digest_depth = normalize_digest_depth(digest_depth)
 
     yield f"Scanning playlist: {playlist_id}"
+    yield f"Digest depth: {digest_depth}"
 
     try:
         videos = list(scrapetube.get_playlist(playlist_id))
@@ -607,10 +887,10 @@ def ingest_playlist_pg(
         return
 
     profile = get_user_profile(supabase, user_id)
-    video_slots = max(
-        0, get_free_indexed_videos_total() - profile.get("free_indexed_videos_total", 0)
-    )
-    max_import_videos = get_free_max_import_videos()
+    entitlements = profile.get("_entitlements") or {}
+    video_limit = int(entitlements.get("indexedVideosTotal") or get_free_indexed_videos_total())
+    video_slots = max(0, video_limit - profile.get("free_indexed_videos_total", 0))
+    max_import_videos = int(entitlements.get("maxImportVideos") or get_free_max_import_videos())
     allowed_count = min(len(new_videos), video_slots, max_import_videos)
 
     if allowed_count <= 0:
@@ -619,8 +899,9 @@ def ingest_playlist_pg(
 
     if allowed_count < len(new_videos):
         yield (
-            f"Free imports process the first {allowed_count} eligible videos "
-            f"(limit: {max_import_videos} per import, {get_free_indexed_videos_total()} total)."
+            f"{str(entitlements.get('planKey') or 'free').title()} imports process the first "
+            f"{allowed_count} eligible videos (limit: {max_import_videos} per import, "
+            f"{video_limit} total)."
         )
         new_videos = new_videos[:allowed_count]
 
@@ -640,6 +921,32 @@ def ingest_playlist_pg(
         if not check_index_quota(profile, 1, 0):
             yield _index_quota_message(profile, 1, 0)
             break
+
+        existing_video = get_indexed_video_pg(supabase, vid)
+        if existing_video:
+            quota_message = grant_user_video_access(
+                supabase,
+                user_id,
+                existing_video,
+                used_own_key,
+                access_source="playlist",
+                source_url=f"https://www.youtube.com/watch?v={vid}",
+            )
+            if quota_message:
+                yield quota_message
+                break
+            refresh_message = refresh_existing_video_source_context_if_needed(
+                supabase,
+                existing_video,
+                api_key,
+                digest_depth,
+                user_id,
+            )
+            indexed_count += 1
+            if refresh_message:
+                yield f"  {refresh_message}"
+            yield "  Reused existing indexed video (no embedding compute)"
+            continue
 
         transcript_result = fetch_transcript_chunks(vid)
         chunks = transcript_result.chunks
@@ -666,12 +973,14 @@ def ingest_playlist_pg(
                 chunks,
                 transcript_seconds,
                 api_key,
+                digest_depth,
+                published_for_user_id=user_id,
             )
             increment_index_usage(supabase, user_id, 1, used_own_key, transcript_seconds)
             indexed_count += 1
             yield f"  Indexed {count} clips"
         except Exception as e:
-            yield f"  Error indexing: {str(e)}"
+            yield f"  Error indexing: {format_ingestion_error(e)}"
             skipped_count += 1
 
         time.sleep(0.5)
@@ -684,6 +993,7 @@ def ingest_url_pg(
     user_id: str,
     api_key: Optional[str] = None,
     used_own_key: bool = False,
+    digest_depth: str = DEFAULT_DIGEST_DEPTH,
 ) -> Generator[str, None, None]:
     """
     Smart dispatcher: detect URL type and route to the correct ingest function.
@@ -691,15 +1001,24 @@ def ingest_url_pg(
     Supports channel, playlist, and single video URLs.
     """
     url_type, extracted_id = detect_url_type(url)
+    digest_depth = normalize_digest_depth(digest_depth)
 
     yield f"Detected URL type: {url_type.upper()}"
 
     if url_type == "channel":
-        yield from ingest_channel_pg(url, user_id, api_key, used_own_key)
+        yield from ingest_channel_pg(
+            extracted_id or url,
+            user_id,
+            api_key,
+            used_own_key,
+            digest_depth,
+        )
     elif url_type == "playlist":
-        yield from ingest_playlist_pg(extracted_id, user_id, api_key, used_own_key)
+        yield from ingest_playlist_pg(extracted_id, user_id, api_key, used_own_key, digest_depth)
     elif url_type == "video":
-        yield from ingest_single_video_pg(extracted_id, user_id, api_key, used_own_key)
+        yield from ingest_single_video_pg(
+            extracted_id, user_id, api_key, used_own_key, digest_depth
+        )
     else:
         yield "Could not detect URL type. Please provide a valid YouTube channel, playlist, or video URL."
         yield "  Examples:"

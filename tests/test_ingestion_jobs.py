@@ -1,9 +1,22 @@
+import re
+from pathlib import Path
+
+import pytest
+
 from backend.jobs import (
+    INGESTION_EVENT_LEVELS,
+    INGESTION_JOB_SOURCE_TYPES,
+    INGESTION_JOB_STATUSES,
     classify_ingestion_event_level,
+    clear_ingestion_job_history,
     create_ingestion_job,
     extract_ingestion_event_reason,
+    failed_ingestion_fields,
+    format_ingestion_error,
     get_ingestion_job,
     list_ingestion_jobs,
+    normalize_ingestion_source_type,
+    record_ingestion_job_event,
     summarize_ingestion_messages,
     update_ingestion_job,
 )
@@ -28,12 +41,20 @@ class Query:
         self.calls.append((self.table_name, "update", payload))
         return self
 
+    def delete(self):
+        self.calls.append((self.table_name, "delete"))
+        return self
+
     def select(self, payload):
         self.calls.append((self.table_name, "select", payload))
         return self
 
     def eq(self, column, value):
         self.calls.append((self.table_name, "eq", column, value))
+        return self
+
+    def in_(self, column, values):
+        self.calls.append((self.table_name, "in", column, values))
         return self
 
     def order(self, column, desc=False):
@@ -80,6 +101,47 @@ def test_create_ingestion_job_inserts_queued_job():
     ) in supabase.calls
 
 
+def test_create_ingestion_job_stores_cost_estimate_when_provided():
+    supabase = Supabase([{"id": "job-1", "status": "queued"}])
+    cost_estimate = {"videosToEmbed": 2, "estimatedEmbeddingTokens": 7200}
+
+    create_ingestion_job(
+        supabase,
+        "user-1",
+        "https://youtube.com/playlist?list=PL12345678901",
+        "playlist",
+        cost_estimate,
+    )
+
+    inserted = [call[2] for call in supabase.calls if call[0] == "ingestion_jobs"][0]
+    assert inserted["cost_estimate"] == cost_estimate
+
+
+def test_create_ingestion_job_normalizes_unknown_source_type():
+    supabase = Supabase([{"id": "job-1", "status": "queued"}])
+
+    create_ingestion_job(supabase, "user-1", "https://example.com", "clip")
+
+    inserted = [call[2] for call in supabase.calls if call[0] == "ingestion_jobs"][0]
+    assert inserted["source_type"] == "unknown"
+
+
+def test_ingestion_job_constants_match_database_constraints():
+    migration_sql = Path("backend/supabase/migrations/002_ingestion_jobs.sql").read_text()
+
+    assert INGESTION_JOB_SOURCE_TYPES == _check_values(migration_sql, "source_type")
+    assert INGESTION_JOB_STATUSES == _check_values(migration_sql, "status")
+    assert INGESTION_EVENT_LEVELS == _check_values(migration_sql, "level")
+
+
+def test_playlist_sync_migration_removes_single_active_job_constraint():
+    migration_sql = Path(
+        "backend/supabase/migrations/023_allow_multiple_queued_ingestion_jobs.sql"
+    ).read_text()
+
+    assert "DROP INDEX IF EXISTS ingestion_jobs_one_active_per_user_idx" in migration_sql
+
+
 def test_list_ingestion_jobs_scopes_to_user():
     supabase = Supabase([{"id": "job-1"}])
 
@@ -100,6 +162,22 @@ def test_get_ingestion_job_scopes_job_and_user():
     assert ("ingestion_jobs", "eq", "user_id", "user-1") in supabase.calls
 
 
+def test_clear_ingestion_job_history_deletes_only_settled_user_jobs():
+    supabase = Supabase([{"id": "job-1"}, {"id": "job-2"}])
+
+    deleted_count = clear_ingestion_job_history(supabase, "user-1")
+
+    assert deleted_count == 2
+    assert ("ingestion_jobs", "delete") in supabase.calls
+    assert ("ingestion_jobs", "eq", "user_id", "user-1") in supabase.calls
+    assert (
+        "ingestion_jobs",
+        "in",
+        "status",
+        ["cancelled", "completed", "failed", "partial"],
+    ) in supabase.calls
+
+
 def test_update_terminal_ingestion_job_sets_completed_at():
     supabase = Supabase([{"id": "job-1", "status": "completed"}])
 
@@ -111,12 +189,48 @@ def test_update_terminal_ingestion_job_sets_completed_at():
     assert "completed_at" in update_calls[0][2]
 
 
+def test_update_ingestion_job_rejects_unknown_status_before_db_write():
+    supabase = Supabase([{"id": "job-1"}])
+
+    with pytest.raises(ValueError, match="Unsupported ingestion job status"):
+        update_ingestion_job(supabase, "job-1", status="done")
+
+    assert not [call for call in supabase.calls if len(call) > 1 and call[1] == "update"]
+
+
+def test_record_ingestion_event_rejects_unknown_level_before_db_write():
+    supabase = Supabase([{"id": "event-1"}])
+
+    with pytest.raises(ValueError, match="Unsupported ingestion event level"):
+        record_ingestion_job_event(supabase, "job-1", "debug", "hello")
+
+    assert not [call for call in supabase.calls if len(call) > 1 and call[1] == "insert"]
+
+
+def test_normalize_ingestion_source_type():
+    assert normalize_ingestion_source_type("VIDEO") == "video"
+    assert normalize_ingestion_source_type("clip") == "unknown"
+
+
+def test_format_ingestion_error_sanitizes_check_constraint_payload():
+    message = format_ingestion_error(
+        {
+            "message": 'new row for relation "user_videos" violates check constraint',
+            "details": "Failing row contains unsupported metadata.",
+        }
+    )
+
+    assert "Database schema rejected" in message
+    assert "new row for relation" not in message
+
+
 def test_ingestion_message_summary_counts_progress():
     summary = summarize_ingestion_messages(
         [
             "Found 3 videos in channel",
             "3 new videos to index",
             "  Indexed 12 clips",
+            "  Reused existing indexed video (no embedding compute)",
             "  Skipped: transcript unavailable",
             "  Error indexing: quota",
         ]
@@ -124,10 +238,23 @@ def test_ingestion_message_summary_counts_progress():
 
     assert summary == {
         "requested_video_count": 3,
-        "indexed_video_count": 1,
+        "indexed_video_count": 2,
         "skipped_video_count": 1,
         "failed_video_count": 1,
         "status": "partial",
+    }
+
+
+def test_failed_ingestion_fields_counts_single_video_pre_progress_failure():
+    assert failed_ingestion_fields({"source_type": "video"}) == {
+        "requested_video_count": 1,
+        "failed_video_count": 1,
+    }
+
+
+def test_failed_ingestion_fields_preserves_existing_failure_count():
+    assert failed_ingestion_fields({"source_type": "channel", "failed_video_count": 3}) == {
+        "failed_video_count": 3,
     }
 
 
@@ -155,10 +282,11 @@ def test_worker_processes_job_and_records_events(monkeypatch):
     from backend import worker
 
     supabase = Supabase([{"id": "job-1"}])
+    sync_events = []
     monkeypatch.setattr(
         worker,
         "ingest_url",
-        lambda source_url, user_id, api_key=None: iter(
+        lambda source_url, user_id, api_key=None, used_own_key=False, digest_depth="standard": iter(
             [
                 "Found 1 videos in channel",
                 "1 new videos to index",
@@ -167,11 +295,17 @@ def test_worker_processes_job_and_records_events(monkeypatch):
             ]
         ),
     )
+    monkeypatch.setattr(
+        worker,
+        "queue_brain_sync_event",
+        lambda *args, **kwargs: sync_events.append((args, kwargs)) or {"queuedCount": 1},
+    )
 
     summary = worker.process_ingestion_job(
         supabase,
         {"id": "job-1", "user_id": "user-1", "source_url": "https://youtube.com/@x"},
         api_key="key",
+        used_own_key=True,
     )
 
     assert summary["status"] == "partial"
@@ -179,9 +313,75 @@ def test_worker_processes_job_and_records_events(monkeypatch):
     assert summary["skipped_video_count"] == 1
     assert any(call[0] == "ingestion_job_events" and call[1] == "insert" for call in supabase.calls)
     assert any(call[0] == "ingestion_jobs" and call[1] == "update" for call in supabase.calls)
+    capture_item_updates = [
+        call[2]
+        for call in supabase.calls
+        if call[0] == "youtube_capture_items" and call[1] == "update"
+    ]
+    assert capture_item_updates
+    assert capture_item_updates[0]["status"] == "indexed"
+    assert capture_item_updates[0]["skip_reason"] is None
     event_inserts = [
         call[2]
         for call in supabase.calls
         if call[0] == "ingestion_job_events" and call[1] == "insert"
     ]
     assert any(event.get("reason") == "captions_unavailable" for event in event_inserts)
+    event_args, event_kwargs = sync_events[0]
+    assert event_args[:3] == (supabase, "user-1", "video.ingested")
+    assert event_kwargs["payload"]["jobId"] == "job-1"
+    assert event_kwargs["payload"]["indexedVideoCount"] == 1
+    assert event_kwargs["payload"]["digestDepth"] == "standard"
+    assert event_kwargs["source_ref"]["source_url"] == "https://youtube.com/@x"
+    assert event_kwargs["idempotency_key"] == "video.ingested:job-1"
+
+
+def test_worker_failure_marks_job_with_failed_video_count(monkeypatch):
+    from backend import worker
+
+    supabase = Supabase([{"id": "job-1"}])
+
+    def fail_ingest(*args, **kwargs):
+        raise RuntimeError("boom")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(worker, "ingest_url", fail_ingest)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        worker.process_ingestion_job(
+            supabase,
+            {
+                "id": "job-1",
+                "user_id": "user-1",
+                "source_url": "https://youtu.be/6nyJ8y8ghsE",
+                "source_type": "video",
+            },
+            api_key="key",
+        )
+
+    failed_updates = [
+        call[2]
+        for call in supabase.calls
+        if call[0] == "ingestion_jobs" and call[1] == "update" and call[2].get("status") == "failed"
+    ]
+    assert failed_updates
+    assert failed_updates[0]["failed_video_count"] == 1
+    assert failed_updates[0]["requested_video_count"] == 1
+    capture_item_updates = [
+        call[2]
+        for call in supabase.calls
+        if call[0] == "youtube_capture_items" and call[1] == "update"
+    ]
+    assert capture_item_updates
+    assert capture_item_updates[0]["status"] == "failed"
+    assert capture_item_updates[0]["skip_reason"] == "ingestion_failed"
+
+
+def _check_values(sql: str, column: str) -> frozenset[str]:
+    match = re.search(
+        rf"CHECK\s*\(\s*{column}\s+IN\s*\((.*?)\)\s*\)",
+        sql,
+        flags=re.DOTALL,
+    )
+    assert match is not None
+    return frozenset(re.findall(r"'([^']+)'", match.group(1)))

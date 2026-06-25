@@ -1,0 +1,97 @@
+{
+  "fixtureVersion": 1,
+  "name": "video_retrieval_queries",
+  "purpose": "Evaluate agent-facing saved-video retrieval across the legacy 30-video corpus and the Sierra harness sample.",
+  "metrics": ["recallAt5", "mrr", "timestampHitRate", "wrongVideoRate"],
+  "queries": [
+    {
+      "id": "legacy_china_open_source_ai",
+      "corpus": "legacy_chroma",
+      "query": "China Robotics Open-Source AI",
+      "expectedVideoIds": ["b0iJZS9HgJA"],
+      "expectedTimestampRanges": [{ "start": 5650, "end": 6220 }],
+      "requiredMatchType": "keyword_or_hybrid",
+      "notes": "Entity-heavy title/query should not return generic AI clips first."
+    },
+    {
+      "id": "legacy_openai_infrastructure_compute",
+      "corpus": "legacy_chroma",
+      "query": "OpenAI infrastructure compute spend",
+      "expectedVideoIds": ["2P27Ef-LLuQ"],
+      "expectedTimestampRanges": [{ "start": 0, "end": 2250 }],
+      "requiredMatchType": "keyword_or_hybrid",
+      "notes": "Exact infrastructure/compute language should beat generic OpenAI podcast clips."
+    },
+    {
+      "id": "legacy_zipline_scaling",
+      "corpus": "legacy_chroma",
+      "query": "Zipline autonomous delivery engineering scaling",
+      "expectedVideoIds": ["fZNLLYzjB2w"],
+      "expectedTimestampRanges": [{ "start": 1500, "end": 3000 }],
+      "requiredMatchType": "keyword_or_hybrid"
+    },
+    {
+      "id": "legacy_gpu_tpu_economics",
+      "corpus": "legacy_chroma",
+      "query": "GPUs TPUs economics of AI explained",
+      "expectedVideoIds": ["cmUo4841KQw"],
+      "expectedTimestampRanges": [{ "start": 0, "end": 3600 }],
+      "requiredMatchType": "title_or_keyword"
+    },
+    {
+      "id": "legacy_base_power_energy_startup",
+      "corpus": "legacy_chroma",
+      "query": "Base Power fastest-growing energy startup",
+      "expectedVideoIds": ["YHx09w151Lc"],
+      "expectedTimestampRanges": [{ "start": 0, "end": 1900 }],
+      "requiredMatchType": "title_or_keyword"
+    },
+    {
+      "id": "legacy_deepmind_future_intelligence",
+      "corpus": "legacy_chroma",
+      "query": "future of intelligence Demis Hassabis DeepMind",
+      "expectedVideoIds": ["PqVbypvxDto"],
+      "expectedTimestampRanges": [{ "start": 0, "end": 3400 }],
+      "requiredMatchType": "title_or_keyword"
+    },
+    {
+      "id": "legacy_mold_toxicity",
+      "corpus": "legacy_chroma",
+      "query": "mold toxicity how to treat it",
+      "expectedVideoIds": ["c_oBTi4foxo"],
+      "expectedTimestampRanges": [{ "start": 0, "end": 3950 }],
+      "requiredMatchType": "title_or_keyword",
+      "notes": "Universal-topic check inside the legacy corpus."
+    },
+    {
+      "id": "legacy_world_conquerors_history",
+      "corpus": "legacy_chroma",
+      "query": "greatest world conquerors history",
+      "expectedVideoIds": ["pFmYF-20jbY"],
+      "expectedTimestampRanges": [{ "start": 0, "end": 5700 }],
+      "requiredMatchType": "title_or_keyword",
+      "notes": "Non-AI history query keeps the eval from overfitting to developer videos."
+    },
+    {
+      "id": "sierra_simple_agents_harness",
+      "corpus": "sierra_sample",
+      "query": "why simpler AI agents are better for production harnesses",
+      "expectedVideoIds": ["uCKhOmth2ms"],
+      "requiredMatchType": "concept_or_artifact"
+    },
+    {
+      "id": "sierra_latency_cost_tradeoffs",
+      "corpus": "sierra_sample",
+      "query": "how Sierra keeps agent latency and cost predictable at scale",
+      "expectedVideoIds": ["uCKhOmth2ms"],
+      "requiredMatchType": "concept_or_artifact"
+    },
+    {
+      "id": "sierra_agent_workflow_design",
+      "corpus": "sierra_sample",
+      "query": "agent workflows structured inspectable easy to iterate",
+      "expectedVideoIds": ["uCKhOmth2ms"],
+      "requiredMatchType": "concept_or_artifact"
+    }
+  ]
+}

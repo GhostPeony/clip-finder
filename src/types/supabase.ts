@@ -33,6 +33,53 @@ export type Database = {
   };
   public: {
     Tables: {
+      agent_notes: {
+        Row: {
+          content: string;
+          created_at: string;
+          created_by: string;
+          created_by_client: string | null;
+          id: string;
+          metadata: Json;
+          source_refs: Json;
+          tags: string[];
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          content: string;
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          id?: string;
+          metadata?: Json;
+          source_refs?: Json;
+          tags?: string[];
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          content?: string;
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          id?: string;
+          metadata?: Json;
+          source_refs?: Json;
+          tags?: string[];
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'agent_notes_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       channels: {
         Row: {
           created_at: string;
@@ -106,6 +153,53 @@ export type Database = {
           },
         ];
       };
+      context_preferences: {
+        Row: {
+          created_at: string;
+          created_by: string;
+          created_by_client: string | null;
+          id: string;
+          metadata: Json;
+          reason: string;
+          relevance: string;
+          source_ref: Json;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          id?: string;
+          metadata?: Json;
+          reason?: string;
+          relevance: string;
+          source_ref: Json;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          id?: string;
+          metadata?: Json;
+          reason?: string;
+          relevance?: string;
+          source_ref?: Json;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'context_preferences_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       ingestion_job_events: {
         Row: {
           created_at: string;
@@ -147,6 +241,7 @@ export type Database = {
       ingestion_jobs: {
         Row: {
           completed_at: string | null;
+          cost_estimate: Json;
           created_at: string;
           error: string | null;
           failed_video_count: number;
@@ -164,6 +259,7 @@ export type Database = {
         };
         Insert: {
           completed_at?: string | null;
+          cost_estimate?: Json;
           created_at?: string;
           error?: string | null;
           failed_video_count?: number;
@@ -181,6 +277,7 @@ export type Database = {
         };
         Update: {
           completed_at?: string | null;
+          cost_estimate?: Json;
           created_at?: string;
           error?: string | null;
           failed_video_count?: number;
@@ -206,51 +303,267 @@ export type Database = {
           },
         ];
       };
+      knowledge_artifacts: {
+        Row: {
+          artifact_type: string;
+          content: string;
+          created_at: string;
+          created_by: string;
+          id: string;
+          metadata: Json;
+          source_refs: Json;
+          summary: string;
+          title: string;
+          updated_at: string;
+          user_id: string | null;
+          video_id: string | null;
+        };
+        Insert: {
+          artifact_type: string;
+          content?: string;
+          created_at?: string;
+          created_by?: string;
+          id?: string;
+          metadata?: Json;
+          source_refs?: Json;
+          summary?: string;
+          title: string;
+          updated_at?: string;
+          user_id?: string | null;
+          video_id?: string | null;
+        };
+        Update: {
+          artifact_type?: string;
+          content?: string;
+          created_at?: string;
+          created_by?: string;
+          id?: string;
+          metadata?: Json;
+          source_refs?: Json;
+          summary?: string;
+          title?: string;
+          updated_at?: string;
+          user_id?: string | null;
+          video_id?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'knowledge_artifacts_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'knowledge_artifacts_video_id_fkey';
+            columns: ['video_id'];
+            isOneToOne: false;
+            referencedRelation: 'videos';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      mcp_tokens: {
+        Row: {
+          created_at: string;
+          expires_at: string | null;
+          id: string;
+          last_used_at: string | null;
+          name: string;
+          revoked_at: string | null;
+          scopes: string[];
+          token_hash: string;
+          token_prefix: string;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          expires_at?: string | null;
+          id?: string;
+          last_used_at?: string | null;
+          name?: string;
+          revoked_at?: string | null;
+          scopes?: string[];
+          token_hash: string;
+          token_prefix: string;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          expires_at?: string | null;
+          id?: string;
+          last_used_at?: string | null;
+          name?: string;
+          revoked_at?: string | null;
+          scopes?: string[];
+          token_hash?: string;
+          token_prefix?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'mcp_tokens_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      personal_concepts: {
+        Row: {
+          created_at: string;
+          created_by: string;
+          created_by_client: string | null;
+          id: string;
+          metadata: Json;
+          name: string;
+          source_refs: Json;
+          status: string;
+          summary: string;
+          updated_at: string;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          id?: string;
+          metadata?: Json;
+          name: string;
+          source_refs?: Json;
+          status?: string;
+          summary?: string;
+          updated_at?: string;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          id?: string;
+          metadata?: Json;
+          name?: string;
+          source_refs?: Json;
+          status?: string;
+          summary?: string;
+          updated_at?: string;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'personal_concepts_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      personal_context_links: {
+        Row: {
+          created_at: string;
+          created_by: string;
+          created_by_client: string | null;
+          from_ref: Json;
+          id: string;
+          metadata: Json;
+          note: string;
+          relation: string;
+          to_ref: Json;
+          user_id: string;
+        };
+        Insert: {
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          from_ref: Json;
+          id?: string;
+          metadata?: Json;
+          note?: string;
+          relation?: string;
+          to_ref: Json;
+          user_id: string;
+        };
+        Update: {
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          from_ref?: Json;
+          id?: string;
+          metadata?: Json;
+          note?: string;
+          relation?: string;
+          to_ref?: Json;
+          user_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'personal_context_links_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       profiles: {
         Row: {
           api_key_enc: string | null;
           avatar_url: string | null;
           created_at: string;
           display_name: string | null;
-          free_indexes_this_month: number;
           free_indexed_seconds_total: number;
           free_indexed_videos_total: number;
+          free_indexes_this_month: number;
           free_searches_this_month: number;
           free_searches_today: number;
           id: string;
           last_index_reset: string;
           last_search_month_reset: string;
           last_search_reset: string;
+          onboarding_completed_at: string | null;
+          onboarding_skipped_at: string | null;
+          onboarding_state: Json;
+          onboarding_step: string;
         };
         Insert: {
           api_key_enc?: string | null;
           avatar_url?: string | null;
           created_at?: string;
           display_name?: string | null;
-          free_indexes_this_month?: number;
           free_indexed_seconds_total?: number;
           free_indexed_videos_total?: number;
+          free_indexes_this_month?: number;
           free_searches_this_month?: number;
           free_searches_today?: number;
           id: string;
           last_index_reset?: string;
           last_search_month_reset?: string;
           last_search_reset?: string;
+          onboarding_completed_at?: string | null;
+          onboarding_skipped_at?: string | null;
+          onboarding_state?: Json;
+          onboarding_step?: string;
         };
         Update: {
           api_key_enc?: string | null;
           avatar_url?: string | null;
           created_at?: string;
           display_name?: string | null;
-          free_indexes_this_month?: number;
           free_indexed_seconds_total?: number;
           free_indexed_videos_total?: number;
+          free_indexes_this_month?: number;
           free_searches_this_month?: number;
           free_searches_today?: number;
           id?: string;
           last_index_reset?: string;
           last_search_month_reset?: string;
           last_search_reset?: string;
+          onboarding_completed_at?: string | null;
+          onboarding_skipped_at?: string | null;
+          onboarding_state?: Json;
+          onboarding_step?: string;
         };
         Relationships: [];
       };
@@ -282,6 +595,179 @@ export type Database = {
             columns: ['user_id'];
             isOneToOne: false;
             referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      source_concepts: {
+        Row: {
+          concept_type: string;
+          created_at: string;
+          id: string;
+          metadata: Json;
+          name: string;
+          source_refs: Json;
+          summary: string;
+          updated_at: string;
+          video_id: string | null;
+        };
+        Insert: {
+          concept_type?: string;
+          created_at?: string;
+          id?: string;
+          metadata?: Json;
+          name: string;
+          source_refs?: Json;
+          summary?: string;
+          updated_at?: string;
+          video_id?: string | null;
+        };
+        Update: {
+          concept_type?: string;
+          created_at?: string;
+          id?: string;
+          metadata?: Json;
+          name?: string;
+          source_refs?: Json;
+          summary?: string;
+          updated_at?: string;
+          video_id?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'source_concepts_video_id_fkey';
+            columns: ['video_id'];
+            isOneToOne: false;
+            referencedRelation: 'videos';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      source_edges: {
+        Row: {
+          created_at: string;
+          evidence_refs: Json;
+          from_ref: Json;
+          id: string;
+          metadata: Json;
+          relation: string;
+          to_ref: Json;
+          video_id: string | null;
+        };
+        Insert: {
+          created_at?: string;
+          evidence_refs?: Json;
+          from_ref: Json;
+          id?: string;
+          metadata?: Json;
+          relation: string;
+          to_ref: Json;
+          video_id?: string | null;
+        };
+        Update: {
+          created_at?: string;
+          evidence_refs?: Json;
+          from_ref?: Json;
+          id?: string;
+          metadata?: Json;
+          relation?: string;
+          to_ref?: Json;
+          video_id?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'source_edges_video_id_fkey';
+            columns: ['video_id'];
+            isOneToOne: false;
+            referencedRelation: 'videos';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      source_labels: {
+        Row: {
+          confidence: number | null;
+          created_at: string;
+          id: string;
+          label: string;
+          label_type: string;
+          metadata: Json;
+          source_refs: Json;
+          updated_at: string;
+          video_id: string;
+        };
+        Insert: {
+          confidence?: number | null;
+          created_at?: string;
+          id?: string;
+          label: string;
+          label_type: string;
+          metadata?: Json;
+          source_refs?: Json;
+          updated_at?: string;
+          video_id: string;
+        };
+        Update: {
+          confidence?: number | null;
+          created_at?: string;
+          id?: string;
+          label?: string;
+          label_type?: string;
+          metadata?: Json;
+          source_refs?: Json;
+          updated_at?: string;
+          video_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'source_labels_video_id_fkey';
+            columns: ['video_id'];
+            isOneToOne: false;
+            referencedRelation: 'videos';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      transcript_lines: {
+        Row: {
+          content: string;
+          created_at: string;
+          end_seconds: number;
+          id: string;
+          language: string | null;
+          metadata: Json;
+          source: string;
+          start_seconds: number;
+          video_id: string;
+        };
+        Insert: {
+          content: string;
+          created_at?: string;
+          end_seconds: number;
+          id?: string;
+          language?: string | null;
+          metadata?: Json;
+          source?: string;
+          start_seconds: number;
+          video_id: string;
+        };
+        Update: {
+          content?: string;
+          created_at?: string;
+          end_seconds?: number;
+          id?: string;
+          language?: string | null;
+          metadata?: Json;
+          source?: string;
+          start_seconds?: number;
+          video_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'transcript_lines_video_id_fkey';
+            columns: ['video_id'];
+            isOneToOne: false;
+            referencedRelation: 'videos';
             referencedColumns: ['id'];
           },
         ];
@@ -360,6 +846,45 @@ export type Database = {
           },
         ];
       };
+      user_videos: {
+        Row: {
+          access_source: string;
+          added_at: string;
+          source_url: string | null;
+          user_id: string;
+          video_id: string;
+        };
+        Insert: {
+          access_source?: string;
+          added_at?: string;
+          source_url?: string | null;
+          user_id: string;
+          video_id: string;
+        };
+        Update: {
+          access_source?: string;
+          added_at?: string;
+          source_url?: string | null;
+          user_id?: string;
+          video_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'user_videos_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'user_videos_video_id_fkey';
+            columns: ['video_id'];
+            isOneToOne: false;
+            referencedRelation: 'videos';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       videos: {
         Row: {
           channel_id: string;
@@ -398,12 +923,414 @@ export type Database = {
           },
         ];
       };
+      workflow_artifacts: {
+        Row: {
+          artifact_type: string;
+          created_at: string;
+          id: string;
+          metadata: Json;
+          payload: Json;
+          source_refs: Json;
+          status: string;
+          title: string;
+          updated_at: string;
+          workflow_instance_id: string;
+        };
+        Insert: {
+          artifact_type: string;
+          created_at?: string;
+          id?: string;
+          metadata?: Json;
+          payload?: Json;
+          source_refs?: Json;
+          status?: string;
+          title?: string;
+          updated_at?: string;
+          workflow_instance_id: string;
+        };
+        Update: {
+          artifact_type?: string;
+          created_at?: string;
+          id?: string;
+          metadata?: Json;
+          payload?: Json;
+          source_refs?: Json;
+          status?: string;
+          title?: string;
+          updated_at?: string;
+          workflow_instance_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'workflow_artifacts_workflow_instance_id_fkey';
+            columns: ['workflow_instance_id'];
+            isOneToOne: false;
+            referencedRelation: 'workflow_instances';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      workflow_definitions: {
+        Row: {
+          created_at: string;
+          created_by: string;
+          created_by_client: string | null;
+          description: string;
+          id: string;
+          key: string;
+          metadata: Json;
+          outputs: Json;
+          policies: Json;
+          status: string;
+          steps: Json;
+          title: string;
+          trigger: string;
+          updated_at: string;
+          user_id: string | null;
+          version: number;
+        };
+        Insert: {
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          description?: string;
+          id?: string;
+          key: string;
+          metadata?: Json;
+          outputs?: Json;
+          policies?: Json;
+          status?: string;
+          steps?: Json;
+          title?: string;
+          trigger?: string;
+          updated_at?: string;
+          user_id?: string | null;
+          version?: number;
+        };
+        Update: {
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          description?: string;
+          id?: string;
+          key?: string;
+          metadata?: Json;
+          outputs?: Json;
+          policies?: Json;
+          status?: string;
+          steps?: Json;
+          title?: string;
+          trigger?: string;
+          updated_at?: string;
+          user_id?: string | null;
+          version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'workflow_definitions_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      workflow_instances: {
+        Row: {
+          completed_at: string | null;
+          cost_estimate: Json;
+          created_at: string;
+          created_by: string;
+          created_by_client: string | null;
+          current_step: string | null;
+          error: string | null;
+          id: string;
+          input: Json;
+          metadata: Json;
+          result: Json;
+          started_at: string | null;
+          status: string;
+          trigger: string;
+          updated_at: string;
+          user_id: string;
+          workflow_definition_id: string | null;
+          workflow_key: string;
+          workflow_version: number;
+        };
+        Insert: {
+          completed_at?: string | null;
+          cost_estimate?: Json;
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          current_step?: string | null;
+          error?: string | null;
+          id?: string;
+          input?: Json;
+          metadata?: Json;
+          result?: Json;
+          started_at?: string | null;
+          status?: string;
+          trigger?: string;
+          updated_at?: string;
+          user_id: string;
+          workflow_definition_id?: string | null;
+          workflow_key: string;
+          workflow_version?: number;
+        };
+        Update: {
+          completed_at?: string | null;
+          cost_estimate?: Json;
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          current_step?: string | null;
+          error?: string | null;
+          id?: string;
+          input?: Json;
+          metadata?: Json;
+          result?: Json;
+          started_at?: string | null;
+          status?: string;
+          trigger?: string;
+          updated_at?: string;
+          user_id?: string;
+          workflow_definition_id?: string | null;
+          workflow_key?: string;
+          workflow_version?: number;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'workflow_instances_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'workflow_instances_workflow_definition_id_fkey';
+            columns: ['workflow_definition_id'];
+            isOneToOne: false;
+            referencedRelation: 'workflow_definitions';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      workflow_steps: {
+        Row: {
+          attempt: number;
+          completed_at: string | null;
+          created_at: string;
+          error: string | null;
+          id: string;
+          input_ref: Json;
+          metrics: Json;
+          output_ref: Json;
+          started_at: string | null;
+          status: string;
+          step_key: string;
+          workflow_instance_id: string;
+        };
+        Insert: {
+          attempt?: number;
+          completed_at?: string | null;
+          created_at?: string;
+          error?: string | null;
+          id?: string;
+          input_ref?: Json;
+          metrics?: Json;
+          output_ref?: Json;
+          started_at?: string | null;
+          status?: string;
+          step_key: string;
+          workflow_instance_id: string;
+        };
+        Update: {
+          attempt?: number;
+          completed_at?: string | null;
+          created_at?: string;
+          error?: string | null;
+          id?: string;
+          input_ref?: Json;
+          metrics?: Json;
+          output_ref?: Json;
+          started_at?: string | null;
+          status?: string;
+          step_key?: string;
+          workflow_instance_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'workflow_steps_workflow_instance_id_fkey';
+            columns: ['workflow_instance_id'];
+            isOneToOne: false;
+            referencedRelation: 'workflow_instances';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      youtube_capture_items: {
+        Row: {
+          capture_source_id: string;
+          discovered_at: string;
+          id: string;
+          ingestion_job_id: string | null;
+          metadata: Json;
+          playlist_item_id: string | null;
+          skip_reason: string | null;
+          source_added_at: string | null;
+          status: string;
+          updated_at: string;
+          user_id: string;
+          youtube_video_id: string;
+        };
+        Insert: {
+          capture_source_id: string;
+          discovered_at?: string;
+          id?: string;
+          ingestion_job_id?: string | null;
+          metadata?: Json;
+          playlist_item_id?: string | null;
+          skip_reason?: string | null;
+          source_added_at?: string | null;
+          status?: string;
+          updated_at?: string;
+          user_id: string;
+          youtube_video_id: string;
+        };
+        Update: {
+          capture_source_id?: string;
+          discovered_at?: string;
+          id?: string;
+          ingestion_job_id?: string | null;
+          metadata?: Json;
+          playlist_item_id?: string | null;
+          skip_reason?: string | null;
+          source_added_at?: string | null;
+          status?: string;
+          updated_at?: string;
+          user_id?: string;
+          youtube_video_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'youtube_capture_items_capture_source_id_fkey';
+            columns: ['capture_source_id'];
+            isOneToOne: false;
+            referencedRelation: 'youtube_capture_sources';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'youtube_capture_items_ingestion_job_id_fkey';
+            columns: ['ingestion_job_id'];
+            isOneToOne: false;
+            referencedRelation: 'ingestion_jobs';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'youtube_capture_items_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      youtube_capture_sources: {
+        Row: {
+          created_at: string;
+          created_by: string;
+          created_by_client: string | null;
+          external_id: string;
+          id: string;
+          last_error: string | null;
+          last_seen_item_at: string | null;
+          last_synced_at: string | null;
+          metadata: Json;
+          source_type: string;
+          source_url: string;
+          status: string;
+          sync_cadence_minutes: number;
+          title: string;
+          updated_at: string;
+          user_id: string;
+          visibility: string;
+        };
+        Insert: {
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          external_id: string;
+          id?: string;
+          last_error?: string | null;
+          last_seen_item_at?: string | null;
+          last_synced_at?: string | null;
+          metadata?: Json;
+          source_type?: string;
+          source_url: string;
+          status?: string;
+          sync_cadence_minutes?: number;
+          title?: string;
+          updated_at?: string;
+          user_id: string;
+          visibility?: string;
+        };
+        Update: {
+          created_at?: string;
+          created_by?: string;
+          created_by_client?: string | null;
+          external_id?: string;
+          id?: string;
+          last_error?: string | null;
+          last_seen_item_at?: string | null;
+          last_synced_at?: string | null;
+          metadata?: Json;
+          source_type?: string;
+          source_url?: string;
+          status?: string;
+          sync_cadence_minutes?: number;
+          title?: string;
+          updated_at?: string;
+          user_id?: string;
+          visibility?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'youtube_capture_sources_user_id_fkey';
+            columns: ['user_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
     };
     Views: {
       [_ in never]: never;
     };
     Functions: {
-      [_ in never]: never;
+      search_chunks: {
+        Args: {
+          category_filters?: Json;
+          match_limit?: number;
+          match_user_id: string;
+          min_start_seconds?: number;
+          query_embedding: string;
+        };
+        Returns: {
+          access_reason: string;
+          access_scope: string;
+          access_source: string;
+          channel_name: string;
+          content: string;
+          end_seconds: number;
+          similarity: number;
+          start_seconds: number;
+          thumbnail_url: string;
+          title: string;
+          youtube_video_id: string;
+        }[];
+      };
     };
     Enums: {
       [_ in never]: never;

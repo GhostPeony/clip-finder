@@ -2,10 +2,6 @@
 line-length = 100
 target-version = "py312"
 extend-exclude = [
-    "channel_chroma_db",
-    "backend/channel_chroma_db",
-    "backend/ingest_chroma.py",
-    "backend/rag_chroma.py",
     "data",
 ]
 

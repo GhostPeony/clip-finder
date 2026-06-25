@@ -1,0 +1,86 @@
+{
+  "fixtureVersion": 1,
+  "name": "universal_video_retrieval",
+  "purpose": "Guard against tuning Memexai only for AI/ML or developer videos.",
+  "documents": [
+    {
+      "id": "clip_sourdough_starter",
+      "domain": "cooking",
+      "title": "Reviving a Weak Sourdough Starter",
+      "text": "If the starter smells acidic but barely rises, discard most of it, feed with equal parts flour and water, keep it warm, and repeat feedings until it doubles predictably."
+    },
+    {
+      "id": "clip_faucet_cartridge",
+      "domain": "home repair",
+      "title": "Fixing a Leaky Faucet Cartridge",
+      "text": "Turn off the water supply, remove the handle set screw, pull the retaining clip, replace the worn cartridge, and test for leaks before reinstalling the trim."
+    },
+    {
+      "id": "clip_meiji_restoration",
+      "domain": "history",
+      "title": "The Causes of the Meiji Restoration",
+      "text": "The Meiji Restoration followed pressure from foreign powers, weakness in the Tokugawa shogunate, samurai political conflict, and a drive to modernize Japan's institutions."
+    },
+    {
+      "id": "clip_guitar_practice",
+      "domain": "music",
+      "title": "Beginner Guitar Practice Routine",
+      "text": "A balanced practice routine starts with slow chord changes, metronome timing, short scale drills, and one song section so the player builds accuracy before speed."
+    },
+    {
+      "id": "clip_knee_rehab",
+      "domain": "fitness",
+      "title": "Knee Rehab Progressions",
+      "text": "Start with pain-free range of motion, add isometric quad holds, progress to controlled step downs, and increase load only when swelling stays calm."
+    },
+    {
+      "id": "clip_camera_buying",
+      "domain": "buying research",
+      "title": "Choosing a Travel Camera",
+      "text": "For travel, prioritize lens size, stabilization, battery life, weather sealing, and whether the camera is comfortable enough that you will actually carry it."
+    },
+    {
+      "id": "clip_ai_harness",
+      "domain": "AI/ML",
+      "title": "Building an Agent Eval Harness",
+      "text": "A useful agent harness stores tasks, expected outcomes, tool traces, failure labels, and regression checks so teams can improve workflows without guessing."
+    }
+  ],
+  "queries": [
+    {
+      "query": "how do I revive a sourdough starter that barely rises",
+      "expected": ["clip_sourdough_starter"],
+      "requiredMatchType": "keyword_or_semantic"
+    },
+    {
+      "query": "what steps fix a leaking faucet cartridge",
+      "expected": ["clip_faucet_cartridge"],
+      "requiredMatchType": "keyword_or_semantic"
+    },
+    {
+      "query": "which lecture explains why the Meiji Restoration happened",
+      "expected": ["clip_meiji_restoration"],
+      "requiredMatchType": "keyword_or_semantic"
+    },
+    {
+      "query": "compare beginner guitar practice routines for chord changes and timing",
+      "expected": ["clip_guitar_practice"],
+      "requiredMatchType": "keyword_or_semantic"
+    },
+    {
+      "query": "knee rehab progression after swelling calms down",
+      "expected": ["clip_knee_rehab"],
+      "requiredMatchType": "keyword_or_semantic"
+    },
+    {
+      "query": "what should I consider when buying a travel camera",
+      "expected": ["clip_camera_buying"],
+      "requiredMatchType": "keyword_or_semantic"
+    },
+    {
+      "query": "agent eval harness tool traces and regression checks",
+      "expected": ["clip_ai_harness"],
+      "requiredMatchType": "keyword_or_semantic"
+    }
+  ]
+}

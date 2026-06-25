@@ -1,0 +1,321 @@
+{
+  "source": "F:\\Projects-Archive\\SearchTube\\backend\\channel_chroma_db\\chroma.sqlite3",
+  "mode": "dry_run",
+  "videoCount": 30,
+  "chunkCount": 3587,
+  "transcriptSeconds": 117986,
+  "transcriptHours": 32.77,
+  "contentChars": 1991014,
+  "approxEmbeddingTokens": 497754,
+  "embeddingBatchSize": 64,
+  "estimatedEmbeddingBatches": 57,
+  "digestLlmCalls": 0,
+  "notes": [
+    "Dry run only; no Supabase rows or embeddings are written.",
+    "Apply mode uses Gemini document embeddings unless the video already exists.",
+    "Source knowledge extraction is intentionally skipped; run a separate digest workflow later.",
+    "Access should be granted with user_videos so shared canonical rows stay user-scoped."
+  ],
+  "videos": [
+    {
+      "youtube_video_id": "ExoQOtqtxX0",
+      "title": "The Story of deel | Shuo Wang",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/ExoQOtqtxX0/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=ExoQOtqtxX0",
+      "transcript_seconds": 6696,
+      "chunk_count": 214,
+      "content_chars": 99891
+    },
+    {
+      "youtube_video_id": "b0iJZS9HgJA",
+      "title": "China, Robotics, & Open-Source AI | Clem Delangue",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/b0iJZS9HgJA/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=b0iJZS9HgJA",
+      "transcript_seconds": 6477,
+      "chunk_count": 206,
+      "content_chars": 87179
+    },
+    {
+      "youtube_video_id": "62X1vm3QBuE",
+      "title": "Why Elon Outcompetes Everyone | Shaun Maguire, Sequoia",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/62X1vm3QBuE/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=62X1vm3QBuE",
+      "transcript_seconds": 6143,
+      "chunk_count": 197,
+      "content_chars": 94862
+    },
+    {
+      "youtube_video_id": "CwaoUyaUM6s",
+      "title": "Bringing Back Supersonic Planes | Ian Brooke, Astro Mechanica",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/CwaoUyaUM6s/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=CwaoUyaUM6s",
+      "transcript_seconds": 5938,
+      "chunk_count": 191,
+      "content_chars": 109867
+    },
+    {
+      "youtube_video_id": "pFmYF-20jbY",
+      "title": "The Greatest World Conquerors In History | Ben Wilson",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/pFmYF-20jbY/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=pFmYF-20jbY",
+      "transcript_seconds": 5658,
+      "chunk_count": 182,
+      "content_chars": 95269
+    },
+    {
+      "youtube_video_id": "aYn8VKW6vXA",
+      "title": "Sam Altman | This Past Weekend w/ Theo Von #599",
+      "channel_name": "Theo Von",
+      "thumbnail_url": "https://img.youtube.com/vi/aYn8VKW6vXA/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=aYn8VKW6vXA",
+      "transcript_seconds": 5600,
+      "chunk_count": 180,
+      "content_chars": 101548
+    },
+    {
+      "youtube_video_id": "cmUo4841KQw",
+      "title": "GPUs, TPUs, & The Economics of AI Explained | Gavin Baker Interview",
+      "channel_name": "Invest Like The Best",
+      "thumbnail_url": "https://img.youtube.com/vi/cmUo4841KQw/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=cmUo4841KQw",
+      "transcript_seconds": 5301,
+      "chunk_count": 171,
+      "content_chars": 92253
+    },
+    {
+      "youtube_video_id": "LImT2qvOFiE",
+      "title": "How To Build A Self-Sustaining City On Mars | Saurav Shroff, Starpath",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/LImT2qvOFiE/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=LImT2qvOFiE",
+      "transcript_seconds": 5151,
+      "chunk_count": 167,
+      "content_chars": 99878
+    },
+    {
+      "youtube_video_id": "AAJbpB9aLfI",
+      "title": "How Land Raising Works | Laurence Allen, Terranova",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/AAJbpB9aLfI/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=AAJbpB9aLfI",
+      "transcript_seconds": 4659,
+      "chunk_count": 151,
+      "content_chars": 85676
+    },
+    {
+      "youtube_video_id": "SfMzG3pg8Kc",
+      "title": "Inversion CEO on Building the Future of Space Delivery | Justin Fiaschetti",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/SfMzG3pg8Kc/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=SfMzG3pg8Kc",
+      "transcript_seconds": 4676,
+      "chunk_count": 150,
+      "content_chars": 73153
+    },
+    {
+      "youtube_video_id": "d95J8yzvjbQ",
+      "title": "The Thinking Game | Full documentary | Tribeca Film Festival official selection",
+      "channel_name": "Google DeepMind",
+      "thumbnail_url": "https://img.youtube.com/vi/d95J8yzvjbQ/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=d95J8yzvjbQ",
+      "transcript_seconds": 4999,
+      "chunk_count": 141,
+      "content_chars": 68549
+    },
+    {
+      "youtube_video_id": "8jN60eJr4Ps",
+      "title": "WTF is happening at xAI | Sulaiman Ghori",
+      "channel_name": "Relentless",
+      "thumbnail_url": "https://img.youtube.com/vi/8jN60eJr4Ps/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=8jN60eJr4Ps",
+      "transcript_seconds": 4298,
+      "chunk_count": 139,
+      "content_chars": 72575
+    },
+    {
+      "youtube_video_id": "SSkyiCwrBtw",
+      "title": "Curing Age-Related Diseases w Epigenetic Medicines | Lada Nuzhna, General Control",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/SSkyiCwrBtw/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=SSkyiCwrBtw",
+      "transcript_seconds": 4066,
+      "chunk_count": 130,
+      "content_chars": 65610
+    },
+    {
+      "youtube_video_id": "CcLHYxPRjDY",
+      "title": "Competing With China In 3D Printing | Max Lobovsky, Formlabs",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/CcLHYxPRjDY/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=CcLHYxPRjDY",
+      "transcript_seconds": 3987,
+      "chunk_count": 128,
+      "content_chars": 63720
+    },
+    {
+      "youtube_video_id": "fZNLLYzjB2w",
+      "title": "How Zipline Scaled to 2 Million Drone Deliveries | Keller Cliffton",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/fZNLLYzjB2w/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=fZNLLYzjB2w",
+      "transcript_seconds": 3964,
+      "chunk_count": 128,
+      "content_chars": 72146
+    },
+    {
+      "youtube_video_id": "c_oBTi4foxo",
+      "title": "Mold Toxicity & How To Treat It | Ariana Thacker, Moldco",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/c_oBTi4foxo/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=c_oBTi4foxo",
+      "transcript_seconds": 3949,
+      "chunk_count": 127,
+      "content_chars": 67247
+    },
+    {
+      "youtube_video_id": "xTKpgrubLao",
+      "title": "The Creator of Onewheel | Kyle Doerksen",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/xTKpgrubLao/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=xTKpgrubLao",
+      "transcript_seconds": 3820,
+      "chunk_count": 123,
+      "content_chars": 70390
+    },
+    {
+      "youtube_video_id": "2P27Ef-LLuQ",
+      "title": "Sam Altman: How OpenAI Wins, ChatGPT\u2019s Future, AI Buildout Logic, IPO in 2026?",
+      "channel_name": "Alex Kantrowitz",
+      "thumbnail_url": "https://img.youtube.com/vi/2P27Ef-LLuQ/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=2P27Ef-LLuQ",
+      "transcript_seconds": 3489,
+      "chunk_count": 112,
+      "content_chars": 56471
+    },
+    {
+      "youtube_video_id": "INCjTTw-rwg",
+      "title": "Fireside Chat w Joshua Browder",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/INCjTTw-rwg/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=INCjTTw-rwg",
+      "transcript_seconds": 3352,
+      "chunk_count": 108,
+      "content_chars": 54871
+    },
+    {
+      "youtube_video_id": "HbPxncZvWk8",
+      "title": "Building Unmanned Cargo Planes | David Zagaynov, Poseidon",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/HbPxncZvWk8/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=HbPxncZvWk8",
+      "transcript_seconds": 3274,
+      "chunk_count": 106,
+      "content_chars": 57914
+    },
+    {
+      "youtube_video_id": "JfE1Wun9xkk",
+      "title": "Sam Altman on Sora, Energy, and Building an AI Empire",
+      "channel_name": "a16z",
+      "thumbnail_url": "https://img.youtube.com/vi/JfE1Wun9xkk/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=JfE1Wun9xkk",
+      "transcript_seconds": 2947,
+      "chunk_count": 94,
+      "content_chars": 48821
+    },
+    {
+      "youtube_video_id": "YHx09w151Lc",
+      "title": "Competing to Build the Fastest-Growing Energy Startup Ever | Base Power, Zach Dell & Justin Lopas",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/YHx09w151Lc/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=YHx09w151Lc",
+      "transcript_seconds": 2616,
+      "chunk_count": 85,
+      "content_chars": 54305
+    },
+    {
+      "youtube_video_id": "sAn5qwkaF8g",
+      "title": "How Shinkei Is Reshoring America's Seafood Supply Chain | Saif Khawaja",
+      "channel_name": "Unknown Channel",
+      "thumbnail_url": "https://img.youtube.com/vi/sAn5qwkaF8g/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=sAn5qwkaF8g",
+      "transcript_seconds": 2165,
+      "chunk_count": 70,
+      "content_chars": 41176
+    },
+    {
+      "youtube_video_id": "hmtuvNfytjM",
+      "title": "Sam Altman Shows Me GPT 5... And What's Next",
+      "channel_name": "Cleo Abram",
+      "thumbnail_url": "https://img.youtube.com/vi/hmtuvNfytjM/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=hmtuvNfytjM",
+      "transcript_seconds": 3898,
+      "chunk_count": 62,
+      "content_chars": 64647
+    },
+    {
+      "youtube_video_id": "ctcMA6chfDY",
+      "title": "OpenAI\u2019s Sam Altman on Building the \u2018Core AI Subscription\u2019 for Your Life",
+      "channel_name": "Sequoia Capital",
+      "thumbnail_url": "https://img.youtube.com/vi/ctcMA6chfDY/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=ctcMA6chfDY",
+      "transcript_seconds": 1915,
+      "chunk_count": 60,
+      "content_chars": 30256
+    },
+    {
+      "youtube_video_id": "PqVbypvxDto",
+      "title": "The future of intelligence | Demis Hassabis (Co-founder and CEO of DeepMind)",
+      "channel_name": "Google DeepMind",
+      "thumbnail_url": "https://img.youtube.com/vi/PqVbypvxDto/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=PqVbypvxDto",
+      "transcript_seconds": 3361,
+      "chunk_count": 55,
+      "content_chars": 57901
+    },
+    {
+      "youtube_video_id": "xWYb7tImErI",
+      "title": "The Only Trait for Success in the AI Era\u2014How to Build It | Carnegie Mellon University Po-Shen Loh",
+      "channel_name": "EO",
+      "thumbnail_url": "https://img.youtube.com/vi/xWYb7tImErI/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=xWYb7tImErI",
+      "transcript_seconds": 1339,
+      "chunk_count": 42,
+      "content_chars": 22506
+    },
+    {
+      "youtube_video_id": "DB9mjd-65gw",
+      "title": "Sam Altman on AGI, GPT-5, and what\u2019s next \u2014 the OpenAI Podcast Ep. 1",
+      "channel_name": "OpenAI",
+      "thumbnail_url": "https://img.youtube.com/vi/DB9mjd-65gw/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=DB9mjd-65gw",
+      "transcript_seconds": 2422,
+      "chunk_count": 36,
+      "content_chars": 47034
+    },
+    {
+      "youtube_video_id": "arj7oStGLkU",
+      "title": "Inside the Mind of a Master Procrastinator | Tim Urban | TED",
+      "channel_name": "TED",
+      "thumbnail_url": "https://img.youtube.com/vi/arj7oStGLkU/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=arj7oStGLkU",
+      "transcript_seconds": 842,
+      "chunk_count": 16,
+      "content_chars": 15927
+    },
+    {
+      "youtube_video_id": "0sHUNil_sLs",
+      "title": "The Vinland Sagas: AoE2 Campaigns vs History",
+      "channel_name": "Spirit Of The Law",
+      "thumbnail_url": "https://img.youtube.com/vi/0sHUNil_sLs/mqdefault.jpg",
+      "source_url": "https://www.youtube.com/watch?v=0sHUNil_sLs",
+      "transcript_seconds": 984,
+      "chunk_count": 16,
+      "content_chars": 19372
+    }
+  ]
+}

@@ -12,12 +12,6 @@ vi.mock('../services/api', () => ({
 const viewProps = {
   onSearchComplete: () => undefined,
   onIndexComplete: () => undefined,
-  isBackendConnected: true,
-  hasApiKey: false,
-  hasServerKey: true,
-  allowUserKeys: true,
-  showLocalBackendHelp: false,
-  onOpenSettings: () => undefined,
 };
 
 describe('UnifiedSearchView', () => {
@@ -36,7 +30,7 @@ describe('UnifiedSearchView', () => {
     render(<UnifiedSearchView {...viewProps} maxSearchResults={5} />);
 
     fireEvent.click(screen.getAllByText('Search library')[0]);
-    fireEvent.change(screen.getByLabelText('Describe the moment'), {
+    fireEvent.change(screen.getByLabelText('Search query'), {
       target: { value: 'pricing objections' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Search library' }));

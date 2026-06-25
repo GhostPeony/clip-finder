@@ -8,71 +8,75 @@ import { SocialLinks } from './SocialLinks';
 const workflowSteps = [
   [
     '01',
-    'Pull the transcript',
-    'Paste a video, playlist, or channel. Embed Moments turns captions into timestamped transcript segments.',
+    'Save the video',
+    'Keep browsing. Save the video to a linked playlist or add the URL to the dashboard, even if you do not have time to watch it yet.',
   ],
   [
     '02',
-    'Embed the memory',
-    'Every segment is embedded for retrieval, so you search by meaning instead of guessing keywords.',
+    'Memexai breaks it down',
+    'Captions become a video breakdown: timestamped moments, key ideas, summaries, and links back to the exact parts of the video.',
   ],
   [
     '03',
-    'Land on the proof',
-    'Answers point back to clips and timestamps you can verify before you quote, clip, or cite.',
+    'Use it as memory',
+    'Search from the dashboard, read TLDRs and reports, or let an agent work from the same structured video context.',
   ],
 ];
 
 const useCases = [
   [
-    'Ask instead of watching',
-    'No time for a 90-minute video? Drop it in and ask questions. Get a sourced answer with exact timestamps — no scrubbing.',
+    'Learn from chosen sources',
+    'For online lectures, podcasts you love, tutorials, or any channel you follow, start from videos you saved instead of sending an agent into a broad web search.',
   ],
-  ['Embed a quote', 'Find the exact timestamp for an article, launch page, newsletter, or lesson.'],
-  ['Clip a short', 'Turn long interviews and commentary into source-backed short-form candidates.'],
-  ['Recover a claim', 'Search for the story, objection, demo, or answer you half-remember.'],
   [
-    'Build a memory bank',
-    'Keep channels, talks, demos, and references searchable as a private library.',
+    'Catch up later',
+    'Turn a backlog of promising videos into TLDRs, source-backed notes, and questions to revisit when you have time.',
+  ],
+  [
+    'Connect your agent',
+    'Use MCP when you want Claude, Codex, Hermes, or any agent to search concepts, summaries, notes, and timestamped clips.',
+  ],
+  [
+    'Read source reports',
+    'Turn lectures, explainers, tutorials, interviews, and talks into TLDRs, timestamped topics, and source-backed reports without filling your session context.',
+  ],
+  [
+    'Draft from video context',
+    'Pull product ideas, workflows, implementation notes, research concepts, or daily reports from the videos you already selected.',
   ],
 ];
+
+interface LandingPageProps {
+  onOpenDashboard?: () => void;
+}
 
 function MomentVignette() {
   return (
     <div className="card p-6 sm:p-8" aria-hidden="true">
-      <p className="eyebrow">Answer with receipts</p>
-      <p className="mt-4 font-serif text-xl text-ink sm:text-2xl">
-        &ldquo;Where did she explain why the pricing changed?&rdquo;
+      <p className="font-serif text-2xl font-medium text-ink">
+        Saved video becomes structured knowledge
       </p>
-      <div className="mt-5 rounded-xl bg-cream p-4 sm:p-5">
-        <p className="text-sm leading-6 text-bark">
-          The pricing change comes up twice. The full reasoning — moving from seats to usage so
-          small teams aren&rsquo;t penalized — is laid out in the Q2 roadmap review.
-        </p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <span className="chip">
-            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-            Roadmap review <span className="font-mono">14:32</span>
-          </span>
-          <span className="chip chip-violet">
-            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-            Community Q&amp;A <span className="font-mono">41:07</span>
-          </span>
-        </div>
+      <div className="mt-5 space-y-3">
+        {[
+          ['Source-linked clips', 'Important ideas stay tied to the exact part of the video.'],
+          [
+            'Timestamped topics',
+            'Concepts, claims, people, tools, and methods link back to evidence.',
+          ],
+          ['Reports', 'TLDRs, source reports, briefs, and personal notes build on the source.'],
+        ].map(([title, body]) => (
+          <div key={title} className="rounded-xl bg-cream p-4">
+            <p className="text-sm font-semibold text-ink">{title}</p>
+            <p className="mt-1 text-xs leading-5 text-bark">{body}</p>
+          </div>
+        ))}
       </div>
-      <p className="mt-4 text-xs text-muted">
-        Click a citation, land on the exact second it happens.
-      </p>
     </div>
   );
 }
 
-export function LandingPage() {
-  const { signInWithGoogle } = useAuth();
+export function LandingPage({ onOpenDashboard }: LandingPageProps = {}) {
+  const { signInWithGoogle, user } = useAuth();
   const [googleLoading, setGoogleLoading] = useState(false);
   const [authError, setAuthError] = useState('');
 
@@ -102,7 +106,20 @@ export function LandingPage() {
     return () => observer.disconnect();
   }, []);
 
-  const handleGoogleSignIn = async () => {
+  const openDashboard = () => {
+    setAuthError('');
+    if (onOpenDashboard) {
+      onOpenDashboard();
+      return;
+    }
+    window.location.assign('/');
+  };
+
+  const handlePrimaryAction = async () => {
+    if (user) {
+      openDashboard();
+      return;
+    }
     setGoogleLoading(true);
     setAuthError('');
     const { error } = await signInWithGoogle();
@@ -112,6 +129,10 @@ export function LandingPage() {
     }
   };
 
+  const primaryLabel = user ? 'Open dashboard' : googleLoading ? 'Redirecting...' : 'Start free';
+  const headerLabel = user ? 'Dashboard' : googleLoading ? 'Redirecting...' : 'Login';
+  const primaryDisabled = !user && googleLoading;
+
   return (
     <div className="landing-page min-h-screen overflow-hidden bg-cream text-ink">
       <header className="landing-reveal fixed top-0 z-50 w-full border-b border-ink/10 bg-cream/85 backdrop-blur">
@@ -119,18 +140,21 @@ export function LandingPage() {
           <BrandLogo size="sm" />
           <nav className="hidden items-center gap-8 text-sm font-medium text-bark md:flex">
             <a href="#workflow" className="transition-colors hover:text-ink">
-              Workflow
+              How it works
+            </a>
+            <a href="#proof" className="transition-colors hover:text-ink">
+              Tools
             </a>
             <a href="#use-cases" className="transition-colors hover:text-ink">
               Use cases
             </a>
           </nav>
           <button
-            onClick={handleGoogleSignIn}
-            disabled={googleLoading}
+            onClick={handlePrimaryAction}
+            disabled={primaryDisabled}
             className="btn btn-primary min-h-10 whitespace-nowrap px-4 py-2 text-sm sm:px-6"
           >
-            {googleLoading ? 'Redirecting...' : 'Login'}
+            {headerLabel}
           </button>
         </div>
       </header>
@@ -143,26 +167,25 @@ export function LandingPage() {
                 className="landing-reveal font-serif text-5xl font-medium leading-[1.02] tracking-tight sm:text-7xl md:text-8xl"
                 style={{ '--reveal-delay': '0.1s' } as CSSProperties}
               >
-                A searchable <em className="italic text-rose-deep">memory</em> for everything you
-                watch.
+                Video memory for you and your agent .
               </h1>
               <p
                 className="landing-reveal mt-8 max-w-2xl text-lg leading-8 text-bark md:text-xl"
                 style={{ '--reveal-delay': '0.3s' } as CSSProperties}
               >
-                You half-remember a quote, a claim, a moment. Index any YouTube channel, playlist,
-                or video — then ask, and land on the exact second it happens.
+                Link a YouTube playlist, save videos as you browse. Memexai turns them into a
+                private, searchable context library for you and your agent.
               </p>
               <div
                 className="landing-reveal mt-10 flex flex-col items-start gap-5 sm:flex-row sm:items-center"
                 style={{ '--reveal-delay': '0.5s' } as CSSProperties}
               >
                 <button
-                  onClick={handleGoogleSignIn}
-                  disabled={googleLoading}
+                  onClick={handlePrimaryAction}
+                  disabled={primaryDisabled}
                   className="btn btn-primary px-8 py-3 text-base"
                 >
-                  {googleLoading ? 'Redirecting...' : 'Start free'}
+                  {primaryLabel}
                 </button>
                 <a href="#workflow" className="link-quiet text-sm">
                   See how it works
@@ -185,11 +208,11 @@ export function LandingPage() {
           <div className="mx-auto max-w-6xl px-5 py-20 md:py-28">
             <div className="mb-14 grid gap-6 md:grid-cols-[1.1fr_0.9fr] md:items-end">
               <h2 className="font-serif text-4xl font-medium tracking-tight md:text-6xl">
-                Search video like memory, not metadata.
+                Turn video content into a useful video breakdown.
               </h2>
               <p className="max-w-xl text-base leading-7 text-bark">
-                You don&rsquo;t need the title, the channel, or the timestamp. Describe the moment
-                you&rsquo;re after and land on the exact second it happens.
+                Memexai turns videos into timestamped moments, topics, reports, notes, and timestamp
+                links so your agent can pull from videos you already chose.
               </p>
             </div>
             <div className="grid gap-6 md:grid-cols-3">
@@ -212,11 +235,12 @@ export function LandingPage() {
           <div className="mx-auto grid max-w-6xl gap-12 px-5 py-20 md:grid-cols-[0.85fr_1.15fr] md:items-center md:py-28">
             <div>
               <h2 className="font-serif text-4xl font-medium tracking-tight md:text-6xl">
-                Long videos, exact moments.
+                Your saved videos are the research corpus.
               </h2>
               <p className="mt-6 max-w-md text-base leading-7 text-bark">
-                Ask a question across everything you&rsquo;ve indexed. Every answer cites the clips
-                it came from, so you verify before you publish — no scrubbing, no guessing.
+                When a topic matters, web search can be too broad and a pasted YouTube link makes
+                every agent start over. Memexai keeps the useful videos you picked ready for search,
+                summaries, prompts, briefs, and lessons.
               </p>
             </div>
             <div className="scroll-reveal" style={{ '--scroll-delay': '0.15s' } as CSSProperties}>
@@ -229,7 +253,7 @@ export function LandingPage() {
           <div className="mx-auto max-w-6xl px-5 py-20 md:py-28">
             <div className="grid gap-10 md:grid-cols-[0.85fr_1.15fr] md:items-start">
               <h2 className="font-serif text-4xl font-medium tracking-tight md:text-6xl">
-                Put everything you&rsquo;ve watched to work.
+                Put everything you save to work.
               </h2>
               <div className="grid gap-5 sm:grid-cols-2">
                 {useCases.map(([title, body], index) => (
@@ -250,18 +274,19 @@ export function LandingPage() {
         <section className="scroll-reveal glow-wash">
           <div className="mx-auto max-w-6xl px-5 py-24 text-center md:py-32">
             <h2 className="font-serif text-4xl font-medium tracking-tight md:text-7xl">
-              Stop scrubbing. Start asking.
+              Ingest the video once. Stop pasting it into your AI chatbox.
             </h2>
             <p className="mx-auto mt-6 max-w-xl text-base leading-7 text-bark md:text-lg">
-              Free to start — index a channel and find your first moment in minutes.
+              Free to start. Link a playlist, add videos, and give yourself a video memory your
+              agent can actually use.
             </p>
             <div className="mt-10 flex justify-center">
               <button
-                onClick={handleGoogleSignIn}
-                disabled={googleLoading}
+                onClick={handlePrimaryAction}
+                disabled={primaryDisabled}
                 className="btn btn-primary px-8 py-3 text-base"
               >
-                {googleLoading ? 'Redirecting...' : 'Start free'}
+                {primaryLabel}
               </button>
             </div>
           </div>
@@ -273,7 +298,7 @@ export function LandingPage() {
           <div>
             <span className="font-serif text-3xl">{PRODUCT_NAME}</span>
             <p className="mt-3 max-w-xl leading-6 text-cream/75">
-              A searchable memory for everything you watch. Built by{' '}
+              A searchable memory for saved YouTube videos, timestamps, ideas, and notes. Built by{' '}
               <a
                 href={GHOST_PEONY_URL}
                 target="_blank"

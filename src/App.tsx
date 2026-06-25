@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { SearchState, VideoClip, AppMode } from './types';
-import { checkBackendHealth, fetchAppConfig } from './services/api';
+import { fetchAppConfig } from './services/api';
 import { groupClipsByVideo } from './lib/clips';
 import { AnswerSection } from './components/AnswerSection';
 import { VideoPlayer } from './components/VideoPlayer';
 import { LibraryView } from './components/LibraryView';
 import { IngestionJobsView } from './components/IngestionJobsView';
-import { SettingsModal, getStoredApiKey } from './components/SettingsModal';
+import { SettingsModal } from './components/SettingsModal';
 import { Toast, useToast } from './components/Toast';
 import { LandingPage } from './components/LandingPage';
 import { ProductDashboard } from './components/ProductDashboard';
+import { McpAuthorizePage } from './components/McpAuthorizePage';
 import { BrandLogo } from './components/BrandLogo';
 import { SocialLinks } from './components/SocialLinks';
 import { useAuth } from './contexts/AuthContext';
@@ -25,13 +26,12 @@ import {
 } from './brand';
 
 const App: React.FC = () => {
-  const { user, loading: authLoading, signOut } = useAuth();
-  const [mode, setMode] = useState<AppMode>('unified');
-  const [isBackendConnected, setIsBackendConnected] = useState(false);
+  const { user, loading: authLoading, signOut, connectYouTube } = useAuth();
+  const [mode, setMode] = useState<AppMode>(() =>
+    typeof window !== 'undefined' && window.location.pathname === '/home' ? 'home' : 'unified',
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [hasApiKey, setHasApiKey] = useState(false);
-  const [hasServerKey, setHasServerKey] = useState(false); // Server has .env key
   const [allowUserKeys, setAllowUserKeys] = useState(false);
   const [storageMode, setStorageMode] = useState<StorageMode>('supabase');
   const { toast, showToast, hideToast } = useToast();
@@ -43,17 +43,12 @@ const App: React.FC = () => {
   });
   const [activeClip, setActiveClip] = useState<VideoClip | null>(null);
 
-  // Check backend connection after the authenticated app is available.
+  // Load hosted runtime configuration after the authenticated app is available.
   useEffect(() => {
     if (authLoading) return;
     if (isSupabaseAuth && !user) return;
 
-    checkBackendHealth().then(({ connected, hasServerKey }) => {
-      setIsBackendConnected(connected);
-      setHasServerKey(hasServerKey);
-    });
     fetchAppConfig().then((config) => {
-      setHasServerKey(config.hasServerKey);
       setAllowUserKeys(config.allowUserKeys);
       setStorageMode(config.storage);
     });
@@ -69,6 +64,14 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [mobileMenuOpen]);
 
+  useEffect(() => {
+    const onPopState = () => {
+      setMode(window.location.pathname === '/home' ? 'home' : 'unified');
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
   // Auth gate
   if (authLoading) {
     return (
@@ -80,9 +83,20 @@ const App: React.FC = () => {
     );
   }
 
+  if (window.location.pathname === '/mcp/authorize') {
+    return <McpAuthorizePage />;
+  }
+
   if (isSupabaseAuth && !user) {
     return <LandingPage />;
   }
+
+  const openDashboard = () => {
+    if (window.location.pathname === '/home') {
+      window.history.pushState({}, '', '/');
+    }
+    setMode('unified');
+  };
 
   // Copy shareable link to clipboard
   const copyClipLink = async (clip: VideoClip) => {
@@ -103,15 +117,25 @@ const App: React.FC = () => {
   const showJobs = isSupabaseAuth || storageMode === 'supabase';
 
   const selectMode = (next: AppMode) => {
+    if (next === 'home' && window.location.pathname !== '/home') {
+      window.history.pushState({}, '', '/home');
+    } else if (next !== 'home' && window.location.pathname === '/home') {
+      window.history.pushState({}, '', '/');
+    }
     setMode(next);
     setMobileMenuOpen(false);
   };
 
   const navItems: Array<{ label: string; target: AppMode; isActive: boolean }> = [
-    { label: 'Workbench', target: 'unified', isActive: mode === 'unified' || mode === 'search' },
+    { label: 'Home', target: 'home', isActive: mode === 'home' },
+    { label: 'Dashboard', target: 'unified', isActive: mode === 'unified' || mode === 'search' },
     { label: 'Library', target: 'library', isActive: mode === 'library' },
     ...(showJobs ? [{ label: 'Jobs', target: 'jobs' as AppMode, isActive: mode === 'jobs' }] : []),
   ];
+
+  if (mode === 'home') {
+    return <LandingPage onOpenDashboard={openDashboard} />;
+  }
 
   return (
     <div className="min-h-screen bg-cream text-ink flex flex-col font-sans">
@@ -262,12 +286,9 @@ const App: React.FC = () => {
       {/* Settings Modal */}
       <SettingsModal
         isOpen={settingsOpen}
-        onClose={() => {
-          setSettingsOpen(false);
-          setHasApiKey(!!getStoredApiKey());
-        }}
-        hasServerKey={hasServerKey}
+        onClose={() => setSettingsOpen(false)}
         allowUserKeys={allowUserKeys}
+        onConnectYouTube={connectYouTube}
       />
 
       {/* Main Content */}
@@ -288,14 +309,10 @@ const App: React.FC = () => {
               }}
               onOpenLibrary={() => setMode('library')}
               onOpenJobs={() => setMode('jobs')}
+              onConnectYouTube={connectYouTube}
               onIndexComplete={() => {
                 setMode('library');
               }}
-              isBackendConnected={isBackendConnected}
-              hasApiKey={hasApiKey}
-              hasServerKey={hasServerKey}
-              allowUserKeys={allowUserKeys}
-              showLocalBackendHelp={!isSupabaseAuth}
               onOpenSettings={() => setSettingsOpen(true)}
             />
           </div>
@@ -330,14 +347,12 @@ const App: React.FC = () => {
               </div>
               <div className="space-y-4 text-sm leading-7 text-bark">
                 <p>
-                  You remember a moment, a quote, or the shape of an idea. {PRODUCT_NAME} indexes
-                  YouTube transcripts so you can find the exact timestamp and verify it before
-                  embedding or sharing it.
+                  {PRODUCT_NAME} turns saved YouTube videos into a searchable library with
+                  timestamped clips, transcripts, and notes.
                 </p>
                 <p>
-                  Built for creators with hours of talk-heavy content: podcasters finding quotable
-                  moments, commentary channels, educational creators, and anyone who needs to mine
-                  their videos for clips without scrubbing through endless footage.
+                  Built for people who learn from video and want useful moments to be easy to find
+                  again: researchers, builders, writers, creators, students, and teams.
                 </p>
                 <h2 className="pt-4 font-serif text-2xl font-medium text-ink">
                   Why {PRODUCT_NAME}?
@@ -347,12 +362,11 @@ const App: React.FC = () => {
                     <strong>Semantic search</strong> - Find by meaning, not just keywords
                   </li>
                   <li>
-                    <strong>You control the search</strong> - Find what you're looking for, not
-                    AI-guessed "viral moments"
+                    <strong>Timestamped clips</strong> - Open the exact moment behind an answer
                   </li>
                   <li>
-                    <strong>Works with talk-heavy content</strong> - Podcasts, commentary, reviews,
-                    educational videos
+                    <strong>Capture from YouTube</strong> - Save videos to linked playlists and move
+                    them into your library
                   </li>
                   <li>
                     <strong>Full channel support</strong> - Index entire channels, playlists, or
@@ -362,10 +376,9 @@ const App: React.FC = () => {
                 <h2 className="pt-4 font-serif text-2xl font-medium text-ink">How it works</h2>
                 <ol className="list-decimal list-inside space-y-2">
                   <li>Paste any YouTube URL (video, playlist, or channel)</li>
-                  <li>We extract and chunk the transcript into searchable segments</li>
-                  <li>Segments are embedded using Google's Gemini embedding model</li>
-                  <li>Your questions are matched against the embeddings to find relevant clips</li>
-                  <li>An AI summarizes the findings with clickable timestamp citations</li>
+                  <li>Memexai indexes the available captions and timestamps</li>
+                  <li>Your searches return relevant clips from your saved sources</li>
+                  <li>You can open, copy, or revisit the exact YouTube moment</li>
                 </ol>
               </div>
             </div>
@@ -416,8 +429,8 @@ const App: React.FC = () => {
                   <SocialLinks className="pt-2" />
                 </div>
                 <p className="pt-2">
-                  {PRODUCT_NAME} is a {GHOST_PEONY_NAME} product for finding exact moments in
-                  YouTube transcripts. The production home is {PRODUCT_DOMAIN}.
+                  {PRODUCT_NAME} is a {GHOST_PEONY_NAME} product for turning YouTube videos into a
+                  searchable saved-video library. The production home is {PRODUCT_DOMAIN}.
                 </p>
               </div>
             </div>

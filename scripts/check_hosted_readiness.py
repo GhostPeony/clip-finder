@@ -24,12 +24,25 @@ REQUIRED_BACKEND = [
     "SEARCHTUBE_STORAGE",
     "SEARCHTUBE_AUTH_MODE",
     "SEARCHTUBE_API_KEY_MODE",
-    "SEARCHTUBE_ALLOWED_ORIGINS",
-    "SUPABASE_ANON_KEY",
     "SUPABASE_SERVICE_ROLE_KEY",
-    "SUPABASE_JWT_SECRET",
-    "API_KEY_ENCRYPTION_KEY",
     "GEMINI_API_KEY",
+    "API_KEY_ENCRYPTION_KEY",
+    "MEMEXAI_APP_URL",
+]
+
+PRODUCTION_RECOMMENDED = [
+    "SEARCHTUBE_ALLOWED_ORIGINS",
+    "SUPABASE_JWT_SECRET",
+]
+
+QUEUE_BACKEND = [
+    "CLOUDFLARE_ACCOUNT_ID",
+    "CLOUDFLARE_INGESTION_QUEUE_ID",
+    "CLOUDFLARE_QUEUES_API_TOKEN",
+]
+
+WORKFLOW_BACKEND = [
+    "WORKFLOW_INTERNAL_SECRET",
 ]
 
 PLACEHOLDER_MARKERS = (
@@ -80,6 +93,41 @@ def check_group(title: str, names: list[str], file_values: dict[str, str]) -> li
     return problems
 
 
+def check_alternative(
+    title: str,
+    label: str,
+    names: list[str],
+    file_values: dict[str, str],
+) -> list[str]:
+    print(f"\n{title}")
+    for name in names:
+        value = get_value(name, file_values)
+        if value and not is_placeholder(value):
+            print(f"  [set] {label} via {name}")
+            return []
+        if value:
+            print(f"  [placeholder] {name}")
+        else:
+            print(f"  [missing] {name}")
+    return [f"{label} is missing"]
+
+
+def check_recommended_group(title: str, names: list[str], file_values: dict[str, str]) -> list[str]:
+    warnings: list[str] = []
+    print(f"\n{title}")
+    for name in names:
+        value = get_value(name, file_values)
+        if not value:
+            print(f"  [recommended] {name}")
+            warnings.append(f"{name} is recommended before production deploy")
+        elif is_placeholder(value):
+            print(f"  [placeholder] {name}")
+            warnings.append(f"{name} still has a placeholder value")
+        else:
+            print(f"  [set] {name}")
+    return warnings
+
+
 def main() -> int:
     file_values = load_dotenv_file(ENV_FILE)
 
@@ -87,13 +135,34 @@ def main() -> int:
     print(f"Env file: {ENV_FILE if ENV_FILE.exists() else 'not found'}")
 
     problems = []
+    warnings = []
     problems.extend(check_group("Frontend build env", REQUIRED_FRONTEND, file_values))
     problems.extend(check_group("Backend runtime env", REQUIRED_BACKEND, file_values))
+    problems.extend(
+        check_alternative(
+            "Backend Supabase anon key",
+            "Supabase anon key",
+            ["SUPABASE_ANON_KEY", "VITE_SUPABASE_ANON_KEY"],
+            file_values,
+        )
+    )
 
     storage = get_value("SEARCHTUBE_STORAGE", file_values)
     auth = get_value("SEARCHTUBE_AUTH_MODE", file_values)
     api_key_mode = get_value("SEARCHTUBE_API_KEY_MODE", file_values)
     vite_auth = get_value("VITE_AUTH_MODE", file_values)
+    ingestion_dispatch_mode = get_value("INGESTION_DISPATCH_MODE", file_values) or "background"
+
+    warnings.extend(
+        check_recommended_group("Production hardening env", PRODUCTION_RECOMMENDED, file_values)
+    )
+    if ingestion_dispatch_mode == "cloudflare_queue":
+        problems.extend(check_group("Cloudflare queue env", QUEUE_BACKEND, file_values))
+    elif ingestion_dispatch_mode not in {"background", "cloudflare_queue"}:
+        problems.append("INGESTION_DISPATCH_MODE should be 'background' or 'cloudflare_queue'")
+
+    if get_value("WORKFLOW_INTERNAL_SECRET", file_values):
+        problems.extend(check_group("Workflow bridge env", WORKFLOW_BACKEND, file_values))
 
     expected_values = {
         "SEARCHTUBE_STORAGE": (storage, "supabase"),
@@ -111,7 +180,17 @@ def main() -> int:
             print(f"  - {problem}")
         return 1
 
+    if warnings:
+        print("\nReady for hosted-mode local smoke testing, with production follow-ups:")
+        for warning in warnings:
+            print(f"  - {warning}")
+        print(
+            "  - Complete an interactive Google OAuth sign-in check before calling auth e2e done."
+        )
+        return 0
+
     print("\nReady for hosted-mode local smoke testing.")
+    print("Manual Google OAuth sign-in verification is still required for auth e2e.")
     return 0
 
 

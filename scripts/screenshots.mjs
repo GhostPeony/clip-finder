@@ -15,8 +15,202 @@ const BASE_URL = `http://localhost:${PORT}`;
 const OUT_DIR = path.resolve('screenshots');
 const VIEWPORTS = [
   { name: '1440', width: 1440, height: 900 },
+  { name: '320', width: 320, height: 844 },
   { name: '390', width: 390, height: 844 },
 ];
+
+const busyDashboardFixtures = {
+  usage: {
+    plan: 'pro',
+    planKey: 'pro',
+    billingStatus: 'active',
+    searchesUsedToday: 92,
+    searchesUsedThisMonth: 1827,
+    searchLimit: 5000,
+    searchPeriod: 'month',
+    indexesUsedThisMonth: 21,
+    indexLimit: 80,
+    indexedVideosUsed: 143,
+    indexedVideoLimit: 300,
+    indexedSecondsUsed: 288000,
+    indexedSecondsLimit: 720000,
+    maxImportVideos: 50,
+    maxSearchResults: 10,
+    hasOwnKey: false,
+    hasServerKey: true,
+    allowUserKeys: true,
+    apiKeyMode: 'hybrid',
+  },
+  library: {
+    totalVideos: 143,
+    totalClips: 9842,
+    channels: [
+      {
+        name: 'Extremely Long Client Research Channel Name That Should Truncate Cleanly',
+        videoCount: 88,
+        videos: [],
+      },
+      { name: 'AI Agent Harness Reliability Talks and Workshops', videoCount: 31, videos: [] },
+      { name: 'Founder Calls, Pricing, GTM, and Product Strategy', videoCount: 24, videos: [] },
+    ],
+  },
+  jobs: {
+    jobs: [
+      {
+        id: 'job-1',
+        status: 'running',
+        source_type: 'video',
+        source_url:
+          'https://www.youtube.com/watch?v=veryLongVideoIdentifierWithManyParams&list=PL_long_playlist_context&index=41&t=1234s',
+        indexed_video_count: 2,
+        skipped_video_count: 0,
+        failed_video_count: 0,
+        last_message: 'Generating source report and timestamped topics from transcript evidence...',
+      },
+      {
+        id: 'job-2',
+        status: 'failed',
+        source_type: 'playlist',
+        source_url:
+          'https://www.youtube.com/playlist?list=PL_an_unreasonably_long_capture_playlist_id_for_mobile_testing',
+        indexed_video_count: 0,
+        skipped_video_count: 2,
+        failed_video_count: 1,
+        error: 'Transcript unavailable for one video',
+        last_message: 'Transcript unavailable for one video',
+      },
+    ],
+  },
+  captureSources: {
+    captureSources: [
+      {
+        id: 'source-1',
+        source_type: 'playlist',
+        source_url: 'https://www.youtube.com/playlist?list=PL_long_capture_source_url',
+        external_id: 'PL_long',
+        title: 'Memexai Inbox With A Long Playlist Title For Saved Research Videos',
+        status: 'active',
+        visibility: 'private',
+        last_synced_at: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+        recentItems: [{}, {}, {}, {}, {}],
+      },
+      {
+        id: 'source-2',
+        source_type: 'playlist',
+        source_url: 'https://www.youtube.com/playlist?list=PL_other',
+        external_id: 'PL_other',
+        title: 'Client discovery calls',
+        status: 'paused',
+        visibility: 'private',
+        recentItems: [],
+      },
+    ],
+  },
+  youtubeStatus: {
+    connected: true,
+    needsReconnect: false,
+    youtubeReadonlyGranted: true,
+    hasRefreshToken: true,
+    scopes: ['https://www.googleapis.com/auth/youtube.readonly'],
+    expiresAt: null,
+    connectedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    lastError: null,
+  },
+};
+
+const emptyLibraryGraph = {
+  version: 'memexai-library-source-graph-v1',
+  limit: 50,
+  accessModel: {
+    scope: 'current_user_grants',
+    visibilityGrants: ['user_videos', 'user_channels'],
+    sourceTruth: 'read_only',
+    provenanceFields: ['accessScope', 'accessSource', 'accessReason'],
+  },
+  videos: [],
+  componentCounts: {
+    videos: 0,
+    channels: 0,
+    sourceLabels: 0,
+    sourceConcepts: 0,
+    sourceEdges: 0,
+    knowledgeArtifacts: 0,
+    transcriptChunksSampled: 0,
+    agentNotes: 0,
+    personalConcepts: 0,
+    reviewFlags: 0,
+  },
+  graph: { nodes: [], edges: [], selectedNodeId: null },
+  reviewFlags: [],
+  edgeCaseHandling: [],
+  guidance: '',
+};
+
+function mockApiResponse(pathname, searchParams) {
+  if (pathname.endsWith('/config')) {
+    return {
+      storage: 'supabase',
+      authMode: 'none',
+      hasServerKey: true,
+      apiKeyMode: 'hybrid',
+      allowUserKeys: true,
+    };
+  }
+  if (pathname.endsWith('/library/graph')) return emptyLibraryGraph;
+  if (pathname.endsWith('/library/components/search')) {
+    return {
+      query: searchParams.get('q') || '',
+      retrievalMode: 'component_keyword',
+      results: [],
+      componentTypes: [],
+      accessModel: {
+        scope: 'current_user_grants',
+        embeddingUsed: false,
+        llmAnswerUsed: false,
+      },
+      retrievalBudget: {
+        embeddingCalls: 0,
+        llmCalls: 0,
+        maxResults: 20,
+        searchedVideos: 0,
+        returnedResults: 0,
+      },
+      guidance: '',
+    };
+  }
+  if (pathname.endsWith('/library')) return busyDashboardFixtures.library;
+  if (pathname.endsWith('/usage')) return busyDashboardFixtures.usage;
+  if (pathname.endsWith('/billing/status')) {
+    return {
+      planKey: 'pro',
+      billingStatus: 'active',
+      currentPeriodStart: null,
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+      entitlements: null,
+      usage: null,
+      hasStripeCustomer: true,
+    };
+  }
+  if (pathname.endsWith('/ingestion-jobs')) return busyDashboardFixtures.jobs;
+  if (pathname.endsWith('/capture/sources')) return busyDashboardFixtures.captureSources;
+  if (pathname.endsWith('/youtube/oauth/status')) return busyDashboardFixtures.youtubeStatus;
+  if (pathname.endsWith('/mcp/tokens')) return { tokens: [] };
+  if (pathname.endsWith('/mcp/setup-bundle')) return {};
+  return {};
+}
+
+async function installAppApiMocks(page) {
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(mockApiResponse(url.pathname, url.searchParams)),
+    });
+  });
+}
 
 function startServer(extraEnv) {
   const env = { ...process.env, ...extraEnv };
@@ -79,6 +273,7 @@ async function captureApp(browser) {
       reducedMotion: 'reduce',
     });
     const page = await context.newPage();
+    await installAppApiMocks(page);
     await page.goto(BASE_URL, { waitUntil: 'networkidle' });
     await page.waitForTimeout(800);
     await shoot(page, 'app', 'workbench', vp.name, true);
@@ -175,7 +370,7 @@ try {
   );
   await runPass(
     'landing page (supabase auth, signed out)',
-    { VITE_AUTH_MODE: undefined },
+    { VITE_AUTH_MODE: 'supabase' },
     captureLanding,
     browser,
   );

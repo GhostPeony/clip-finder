@@ -8,6 +8,7 @@ import time
 import urllib.request
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -204,38 +205,91 @@ def get_transcript_chunks(video_id: str) -> list[dict]:
 
 def detect_url_type(url: str) -> tuple[str, Optional[str]]:
     """Detect the type of YouTube URL and extract the relevant ID."""
-    playlist_patterns = [
-        r"[?&]list=([a-zA-Z0-9_-]+)",
-        r"youtube\.com/playlist\?list=([a-zA-Z0-9_-]+)",
-    ]
+    normalized_url = _normalize_youtube_url(url)
+    if _is_channel_handle(normalized_url):
+        return ("channel", f"https://www.youtube.com/{normalized_url}")
 
-    video_patterns = [
-        r"[?&]v=([a-zA-Z0-9_-]{11})",
-        r"youtu\.be/([a-zA-Z0-9_-]{11})",
-        r"youtube\.com/embed/([a-zA-Z0-9_-]{11})",
-        r"youtube\.com/v/([a-zA-Z0-9_-]{11})",
-        r"youtube\.com/shorts/([a-zA-Z0-9_-]{11})",
-    ]
+    parsed = urlparse(normalized_url)
+    hostname = parsed.netloc.lower()
+    path = parsed.path.rstrip("/")
+    query = parse_qs(parsed.query)
+
+    if not _is_supported_youtube_host(hostname):
+        return ("unknown", None)
+
+    video_id = _first_query_value(query, "v")
+    playlist_id = _first_query_value(query, "list")
+    if video_id and _is_youtube_video_id(video_id):
+        return ("video", video_id)
+
+    if _is_youtu_be_host(hostname):
+        short_id = path.strip("/").split("/", 1)[0]
+        if _is_youtube_video_id(short_id):
+            return ("video", short_id)
+
+    path_video_match = re.search(
+        r"^/(?:embed|v|shorts|live)/([a-zA-Z0-9_-]{11})(?:$|/)",
+        path,
+    )
+    if path_video_match:
+        return ("video", path_video_match.group(1))
+
+    if playlist_id and (path == "/playlist" or not _is_youtube_video_id(video_id)):
+        return ("playlist", playlist_id)
 
     channel_patterns = [
-        r"youtube\.com/@([a-zA-Z0-9_.-]+)",
-        r"youtube\.com/channel/([a-zA-Z0-9_-]+)",
-        r"youtube\.com/c/([a-zA-Z0-9_-]+)",
-        r"youtube\.com/user/([a-zA-Z0-9_-]+)",
+        r"^/@[a-zA-Z0-9_.-]+(?:$|/)",
+        r"^/channel/[a-zA-Z0-9_-]+(?:$|/)",
+        r"^/c/[a-zA-Z0-9_-]+(?:$|/)",
+        r"^/user/[a-zA-Z0-9_-]+(?:$|/)",
     ]
-
-    for pattern in playlist_patterns:
-        match = re.search(pattern, url)
-        if match:
-            return ("playlist", match.group(1))
-
-    for pattern in video_patterns:
-        match = re.search(pattern, url)
-        if match:
-            return ("video", match.group(1))
-
     for pattern in channel_patterns:
-        if re.search(pattern, url):
-            return ("channel", url)
+        if re.search(pattern, path):
+            return ("channel", normalized_url)
 
     return ("unknown", None)
+
+
+def _normalize_youtube_url(url: str) -> str:
+    """Add a scheme for common pasted YouTube URLs while leaving other text alone."""
+    stripped = str(url or "").strip()
+    if not stripped:
+        return ""
+    if _is_channel_handle(stripped):
+        return stripped
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", stripped):
+        return stripped
+    if re.match(r"^(?:www\.|m\.|music\.)?youtube\.com(?:/|$)", stripped) or re.match(
+        r"^(?:www\.)?youtu\.be(?:/|$)", stripped
+    ):
+        return f"https://{stripped}"
+    return stripped
+
+
+def _is_supported_youtube_host(hostname: str) -> bool:
+    return _is_youtu_be_host(hostname) or hostname in {
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "music.youtube.com",
+    }
+
+
+def _is_youtu_be_host(hostname: str) -> bool:
+    return hostname in {"youtu.be", "www.youtu.be"}
+
+
+def _is_channel_handle(value: str) -> bool:
+    return bool(re.fullmatch(r"@[a-zA-Z0-9_.-]+", value.strip()))
+
+
+def _first_query_value(query: dict[str, list[str]], key: str) -> str | None:
+    values = query.get(key)
+    if not values:
+        return None
+    value = values[0].strip()
+    return value or None
+
+
+def _is_youtube_video_id(value: str | None) -> bool:
+    return bool(value and re.fullmatch(r"[a-zA-Z0-9_-]{11}", value))

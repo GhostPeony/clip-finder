@@ -1,6 +1,6 @@
-export const PRODUCT_NAME = 'Embed Moments';
-export const PRODUCT_DOMAIN = 'embedmoments.com';
-export const PRODUCT_TAGLINE = 'A searchable memory for everything you watch.';
+export const PRODUCT_NAME = 'Memexai';
+export const PRODUCT_DOMAIN = 'memexai.xyz';
+export const PRODUCT_TAGLINE = 'A YouTube context engine for everything you watch.';
 export const GHOST_PEONY_NAME = 'Ghost Peony LLC';
 export const GHOST_PEONY_URL = 'https://ghostpeony.com';
 export const GHOST_PEONY_GITHUB_URL = 'https://github.com/GhostPeony';

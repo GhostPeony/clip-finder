@@ -1,0 +1,47 @@
+name = "memexai-api"
+main = "workers/api/src/index.ts"
+compatibility_date = "2026-06-24"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[[routes]]
+pattern = "api.memexai.xyz"
+custom_domain = true
+
+[vars]
+SEARCHTUBE_STORAGE = "supabase"
+SEARCHTUBE_AUTH_MODE = "supabase"
+SEARCHTUBE_API_KEY_MODE = "server"
+SEARCHTUBE_ALLOWED_ORIGINS = "https://memexai.xyz,https://www.memexai.xyz,https://memexai.pages.dev"
+MEMEXAI_APP_URL = "https://memexai.xyz"
+INGESTION_DISPATCH_MODE = "background"
+EMBEDDING_MODEL = "models/gemini-embedding-001"
+EMBEDDING_DIMENSIONS = "768"
+LLM_MODEL = "gemini-3.1-flash-lite"
+
+[secrets]
+required = [
+  "API_KEY_ENCRYPTION_KEY",
+  "GEMINI_API_KEY",
+  "VITE_SUPABASE_URL",
+  "VITE_SUPABASE_ANON_KEY",
+  "SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "STRIPE_SECRET_KEY",
+  "STRIPE_WEBHOOK_SECRET",
+]
+
+[[containers]]
+class_name = "MemexaiApiContainer"
+image = "./Dockerfile.backend"
+max_instances = 2
+
+[[durable_objects.bindings]]
+name = "API_CONTAINER"
+class_name = "MemexaiApiContainer"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MemexaiApiContainer"]

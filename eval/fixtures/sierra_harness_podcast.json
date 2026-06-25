@@ -1,0 +1,246 @@
+{
+  "fixtureVersion": 1,
+  "name": "sierra_harness_podcast",
+  "video": {
+    "youtubeVideoId": "uCKhOmth2ms",
+    "url": "https://www.youtube.com/watch?v=uCKhOmth2ms",
+    "title": "The best AI agents are simpler than you think | Zack Reneau-Wedeen, Sierra",
+    "source": "Max Agency podcast",
+    "guest": "Zack Reneau-Wedeen",
+    "organization": "Sierra",
+    "suppliedBy": "user",
+    "notes": "Use as the first recent sample for agent harness, production agent architecture, workflow, and cost/latency evaluation ideas. Do not store transcript text in this fixture."
+  },
+  "coverage": [
+    "ingestion",
+    "source categorization",
+    "study guide quality",
+    "exact timestamp search",
+    "repo-aware agent brief",
+    "personal overlay notes"
+  ],
+  "expectedLabels": [
+    {
+      "label_type": "domain",
+      "labels": ["AI product", "developer tools", "machine learning"]
+    },
+    {
+      "label_type": "content_type",
+      "labels": ["podcast", "interview"]
+    },
+    {
+      "label_type": "task_fit",
+      "labels": ["product spec", "agent prompt", "implementation plan", "eval harness"]
+    },
+    {
+      "label_type": "topic",
+      "labels": ["agent architecture", "workflow design", "production AI agents"]
+    },
+    {
+      "label_type": "method",
+      "labels": ["harness-driven development", "agent workflow design", "latency and cost control"]
+    },
+    {
+      "label_type": "entity",
+      "labels": ["Sierra", "Zack Reneau-Wedeen", "Max Agency"]
+    },
+    {
+      "label_type": "difficulty",
+      "labels": ["advanced"]
+    },
+    {
+      "label_type": "maturity",
+      "labels": ["production pattern", "case study"]
+    },
+    {
+      "label_type": "evidence_quality",
+      "labels": ["direct explanation", "implementation detail"]
+    }
+  ],
+  "categoryFilters": {
+    "task_fit": ["product spec", "implementation plan"],
+    "method": ["harness-driven development"],
+    "maturity": ["production pattern", "case study"]
+  },
+  "retrievalQueries": [
+    {
+      "id": "simple_agents_harness",
+      "query": "where does the podcast explain why simpler AI agents are better for production harnesses?",
+      "expectedUse": "timestamped evidence for an agent architecture or product spec",
+      "category_filters": {
+        "task_fit": ["product spec", "implementation plan"],
+        "topic": ["agent architecture"]
+      }
+    },
+    {
+      "id": "latency_cost_tradeoffs",
+      "query": "what does Sierra do to keep agent latency and cost predictable at scale?",
+      "expectedUse": "risk and infrastructure section for a project brief",
+      "category_filters": {
+        "method": ["latency and cost control"],
+        "maturity": ["production pattern"]
+      }
+    },
+    {
+      "id": "agent_workflow_design",
+      "query": "how should agent workflows be structured so they are inspectable and easy to iterate?",
+      "expectedUse": "workflow orchestration and MCP context design",
+      "category_filters": {
+        "topic": ["workflow design"],
+        "task_fit": ["agent prompt", "implementation plan"]
+      }
+    }
+  ],
+  "repoContext": {
+    "source": "agent-mcp",
+    "repo": "GhostPeony/memexai",
+    "features": [
+      "MCP context server",
+      "workflow orchestration",
+      "source knowledge extraction",
+      "agent brief generation",
+      "ingestion guardrails"
+    ],
+    "modules": [
+      "backend/mcp_adapter.py",
+      "backend/context.py",
+      "backend/knowledge.py",
+      "backend/workflows.py",
+      "backend/capture_workflows.py"
+    ],
+    "locations": [
+      "backend/context.py:734 build_agent_brief",
+      "backend/mcp_adapter.py:1938 search_video_moments",
+      "backend/capture_workflows.py:1 run_capture_sync_workflow"
+    ],
+    "entrypoints": [
+      "POST /mcp",
+      "POST /api/context/bundle",
+      "POST /api/context/repo-context/validate",
+      "workers/orchestrator/src/index.ts"
+    ],
+    "symbols": [
+      "build_agent_brief",
+      "search_video_moments",
+      "run_capture_sync_workflow",
+      "CapturePlaylistSyncWorkflow"
+    ],
+    "dependencies": [
+      "Supabase Postgres with pgvector",
+      "FastAPI",
+      "Cloudflare Workflows",
+      "Gemini embeddings"
+    ],
+    "commands": [
+      "python -m pytest tests/test_mcp_adapter.py tests/test_context_overlay.py -q",
+      "npm test -- --run"
+    ],
+    "tests": [
+      "tests/test_mcp_adapter.py",
+      "tests/test_context_overlay.py",
+      "tests/test_cloudflare_workflow_prototype.py"
+    ],
+    "deployment": [
+      "hosted FastAPI runtime",
+      "Cloudflare queue consumer",
+      "Supabase as source of record"
+    ],
+    "active_changes": ["agent-first MCP context surface is in active development"],
+    "constraints": [
+      "source video context must remain read-only",
+      "canonical video embeddings are shared but search is user-scoped",
+      "agents may write only overlay notes/concepts unless granted ingest:write",
+      "repo context is supplied by the calling agent and is not stored as source truth"
+    ],
+    "open_questions": [
+      "Which workflow steps should become Cloudflare Workflows first?",
+      "Which retrieval evals should gate a new categorization schema?"
+    ]
+  },
+  "mcpWorkflow": [
+    {
+      "tool": "queue_youtube_ingestion",
+      "requiredScope": "ingest:write",
+      "arguments": {
+        "url": "https://www.youtube.com/watch?v=uCKhOmth2ms",
+        "created_by_client": "sierra-sample-fixture"
+      },
+      "passCriteria": "Returns a durable ingestion job ID without requiring allow_bulk."
+    },
+    {
+      "tool": "get_ingestion_job",
+      "requiredScope": "context:read",
+      "arguments": {
+        "job_id": "<job id from queue_youtube_ingestion>"
+      },
+      "passCriteria": "Job reaches completed status and reports indexed or reused video access."
+    },
+    {
+      "tool": "list_context_categories",
+      "requiredScope": "context:read",
+      "arguments": {
+        "limit": 100
+      },
+      "passCriteria": "Categories include source labels for Sierra, agent architecture, production pattern, and eval harness or implementation plan."
+    },
+    {
+      "tool": "search_video_concepts",
+      "requiredScope": "context:read",
+      "arguments": {
+        "query": "eval harness production AI agents methods pitfalls study guide",
+        "category_filters": {
+          "task_fit": ["implementation plan", "eval harness"],
+          "maturity": ["production pattern", "case study"]
+        },
+        "detail_level": "compact",
+        "max_chars": 6000,
+        "limit": 8
+      },
+      "passCriteria": "Returns source concepts or generated artifacts about harness-driven AI agent development without embedding or LLM spend."
+    },
+    {
+      "tool": "search_video_moments",
+      "requiredScope": "context:read",
+      "arguments": {
+        "query": "how should we build an eval harness for production AI agents?",
+        "retrieval_mode": "hybrid",
+        "category_filters": {
+          "task_fit": ["implementation plan", "eval harness"],
+          "maturity": ["production pattern", "case study"]
+        },
+        "limit": 5
+      },
+      "passCriteria": "Returns timestamped clips from uCKhOmth2ms with relevant evidence."
+    },
+    {
+      "tool": "build_agent_brief",
+      "requiredScope": "context:read",
+      "arguments": {
+        "query": "apply Sierra-style agent harness lessons to Memexai workflow orchestration",
+        "repo_context": {
+          "source": "agent-mcp",
+          "repo": "GhostPeony/memexai",
+          "features": ["workflow orchestration", "MCP context server", "agent brief generation"]
+        },
+        "category_filters": {
+          "task_fit": ["implementation plan"],
+          "topic": ["agent architecture", "workflow design"]
+        },
+        "limit": 8
+      },
+      "passCriteria": "Brief includes source_refs, repo fit, implementation guidance, and at least one workflow or eval recommendation."
+    }
+  ],
+  "overlayChecks": [
+    {
+      "tool": "add_context_note",
+      "requiredScope": "overlay:write",
+      "passCriteria": "Can save a personal takeaway without mutating source labels, concepts, transcripts, chunks, or artifacts."
+    },
+    {
+      "tool": "upsert_personal_concept",
+      "requiredScope": "overlay:write",
+      "passCriteria": "Can store a personalized concept such as 'Sierra-style harness loop' linked by source_refs."
+    }
+  ]
+}

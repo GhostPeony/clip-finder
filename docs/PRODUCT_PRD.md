@@ -120,7 +120,7 @@ Already implemented or partly implemented:
 - Quota counters.
 - Server-key mode.
 - Optional encrypted BYOK mode.
-- Local Chroma mode in the open-source repo.
+- Supabase-only storage in the hosted fork; the old local Chroma mode has been removed.
 
 ## Transcription Extraction Method
 
