@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { GHOST_PEONY_NAME, GHOST_PEONY_URL, PRODUCT_DOMAIN, PRODUCT_NAME } from '../brand';
 import { BrandLogo } from './BrandLogo';
@@ -79,6 +79,13 @@ export function LandingPage({ onOpenDashboard }: LandingPageProps = {}) {
   const { signInWithGoogle, user } = useAuth();
   const [googleLoading, setGoogleLoading] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [videoMuted, setVideoMuted] = useState(true);
+  const [videoPaused, setVideoPaused] = useState(false);
+  const [reduceVideoMotion, setReduceVideoMotion] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoStageRef = useRef<HTMLElement | null>(null);
+  const videoInViewRef = useRef(true);
+  const userPausedVideoRef = useRef(false);
 
   useEffect(() => {
     const elements = Array.from(document.querySelectorAll<HTMLElement>('.scroll-reveal'));
@@ -106,6 +113,100 @@ export function LandingPage({ onOpenDashboard }: LandingPageProps = {}) {
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    const stage = videoStageRef.current;
+    if (!stage || !('requestAnimationFrame' in window)) return;
+
+    let frameId = 0;
+    const updateProgress = () => {
+      frameId = 0;
+      const rect = stage.getBoundingClientRect();
+      const distance = Math.max(1, rect.height);
+      const progress = Math.min(1, Math.max(0, -rect.top / distance));
+      stage.style.setProperty('--video-scroll-progress', progress.toFixed(3));
+    };
+
+    const requestUpdate = () => {
+      if (frameId) return;
+      frameId = window.requestAnimationFrame(updateProgress);
+    };
+
+    updateProgress();
+    window.addEventListener('scroll', requestUpdate, { passive: true });
+    window.addEventListener('resize', requestUpdate);
+    return () => {
+      window.removeEventListener('scroll', requestUpdate);
+      window.removeEventListener('resize', requestUpdate);
+      if (frameId) window.cancelAnimationFrame(frameId);
+    };
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const stage = videoStageRef.current;
+    if (!video || !stage) return;
+
+    const motionQuery =
+      typeof window.matchMedia === 'function'
+        ? window.matchMedia('(prefers-reduced-motion: reduce)')
+        : null;
+
+    const syncPlayback = () => {
+      const shouldPause =
+        Boolean(motionQuery?.matches) ||
+        document.hidden ||
+        !videoInViewRef.current ||
+        userPausedVideoRef.current;
+      if (shouldPause) {
+        video.pause();
+        setVideoPaused(true);
+        return;
+      }
+
+      try {
+        const playPromise = video.play();
+        void playPromise
+          .then(() => setVideoPaused(false))
+          .catch(() => {
+            setVideoPaused(true);
+            // Autoplay may be blocked in some browsers; the user can still start it manually.
+          });
+      } catch {
+        setVideoPaused(true);
+      }
+    };
+
+    const handleMotionChange = () => {
+      setReduceVideoMotion(Boolean(motionQuery?.matches));
+      syncPlayback();
+    };
+
+    if (!('IntersectionObserver' in window)) {
+      setReduceVideoMotion(Boolean(motionQuery?.matches));
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        videoInViewRef.current = entry.isIntersecting;
+        syncPlayback();
+      },
+      { threshold: 0.1 },
+    );
+
+    setReduceVideoMotion(Boolean(motionQuery?.matches));
+    observer.observe(stage);
+    document.addEventListener('visibilitychange', syncPlayback);
+    motionQuery?.addEventListener('change', handleMotionChange);
+    syncPlayback();
+
+    return () => {
+      observer.disconnect();
+      document.removeEventListener('visibilitychange', syncPlayback);
+      motionQuery?.removeEventListener('change', handleMotionChange);
+    };
+  }, []);
+
   const openDashboard = () => {
     setAuthError('');
     if (onOpenDashboard) {
@@ -127,6 +228,46 @@ export function LandingPage({ onOpenDashboard }: LandingPageProps = {}) {
       setAuthError(error.message);
       setGoogleLoading(false);
     }
+  };
+
+  const handleVideoAudioToggle = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const nextMuted = !video.muted;
+    video.muted = nextMuted;
+    setVideoMuted(nextMuted);
+    if (!nextMuted) {
+      try {
+        if (!userPausedVideoRef.current) {
+          await video.play();
+          setVideoPaused(false);
+        }
+      } catch {
+        video.muted = true;
+        setVideoMuted(true);
+      }
+    }
+  };
+
+  const handleVideoPlaybackToggle = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (video.paused) {
+      userPausedVideoRef.current = false;
+      try {
+        await video.play();
+        setVideoPaused(false);
+      } catch {
+        userPausedVideoRef.current = true;
+        setVideoPaused(true);
+      }
+      return;
+    }
+
+    userPausedVideoRef.current = true;
+    video.pause();
+    setVideoPaused(true);
   };
 
   const primaryLabel = user ? 'Open dashboard' : googleLoading ? 'Redirecting...' : 'Start free';
@@ -160,6 +301,45 @@ export function LandingPage({ onOpenDashboard }: LandingPageProps = {}) {
       </header>
 
       <main className="pt-16">
+        <section
+          ref={videoStageRef}
+          className="landing-video-stage"
+          aria-label="Memexai promo video"
+        >
+          <div className="landing-video-panel">
+            <video
+              ref={videoRef}
+              className="landing-video-panel-video"
+              src="/videos/memexai-groove-v1.mp4"
+              autoPlay={!reduceVideoMotion}
+              muted={videoMuted}
+              loop
+              playsInline
+              preload="metadata"
+            />
+            <div className="landing-video-controls">
+              <button
+                type="button"
+                className="landing-video-control"
+                onClick={() => void handleVideoPlaybackToggle()}
+                aria-pressed={!videoPaused}
+                aria-label={videoPaused ? 'Play promo video' : 'Pause promo video'}
+              >
+                {videoPaused ? 'Play' : 'Pause'}
+              </button>
+              <button
+                type="button"
+                className="landing-video-control"
+                onClick={() => void handleVideoAudioToggle()}
+                aria-pressed={!videoMuted}
+                aria-label={videoMuted ? 'Unmute promo video' : 'Mute promo video'}
+              >
+                {videoMuted ? 'Unmute' : 'Mute'}
+              </button>
+            </div>
+          </div>
+        </section>
+
         <section className="glow-wash relative">
           <div className="mx-auto max-w-6xl px-5 pb-24 pt-20 sm:pt-28 md:pb-32 md:pt-36">
             <div className="max-w-4xl">
