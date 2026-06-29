@@ -1,10 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CaptureSource, IngestionJob, LibraryData, VideoClip, YoutubeOAuthStatus } from '../types';
+import {
+  CaptureSource,
+  IngestionJob,
+  LibraryData,
+  UserProject,
+  VideoClip,
+  YoutubeOAuthStatus,
+} from '../types';
 import {
   clearIngestionJobHistory,
+  createProject,
+  deleteCaptureSource,
   fetchCaptureSources,
   fetchIngestionJobs,
   fetchLibrary,
+  fetchProjects,
   fetchUsage,
   fetchYoutubeOAuthStatus,
   syncCaptureSource,
@@ -12,12 +22,14 @@ import {
 } from '../services/api';
 import { YOUTUBE_CONNECTION_SAVED_EVENT } from '../contexts/AuthContext';
 import { BrandLoader } from './BrandLoader';
+import { CaptureSourceDisconnectModal } from './CaptureSourceDisconnectModal';
 import { CaptureSyncConfirmModal } from './CaptureSyncConfirmModal';
 import { UnifiedSearchView } from './UnifiedSearchView';
 
 interface ProductDashboardProps {
   onOpenSettings: () => void;
-  onOpenLibrary: () => void;
+  onOpenLibrary: (projectId?: string) => void;
+  onOpenProjects: () => void;
   onOpenJobs: () => void;
   onConnectYouTube?: () => void | Promise<unknown>;
   onSearchComplete: (clips: VideoClip[], answer: string, activeClip: VideoClip | null) => void;
@@ -30,6 +42,7 @@ interface DashboardBundle {
   usage: UsageInfo | null;
   jobs: IngestionJob[];
   captureSources: CaptureSource[];
+  projects: UserProject[];
   youtubeStatus: YoutubeOAuthStatus;
 }
 
@@ -39,7 +52,7 @@ interface PendingCaptureSync {
 }
 
 const loadDashboardBundle = async (): Promise<DashboardBundle> => {
-  const [libraryResult, usage, jobs, captureSources, youtubeStatus] = await Promise.all([
+  const [libraryResult, usage, jobs, captureSources, projects, youtubeStatus] = await Promise.all([
     fetchLibrary().then(
       (library) => ({ library, failed: false }),
       () => ({
@@ -50,6 +63,7 @@ const loadDashboardBundle = async (): Promise<DashboardBundle> => {
     fetchUsage(),
     fetchIngestionJobs(),
     fetchCaptureSources(),
+    fetchProjects(),
     fetchYoutubeOAuthStatus(),
   ]);
 
@@ -59,6 +73,7 @@ const loadDashboardBundle = async (): Promise<DashboardBundle> => {
     usage,
     jobs,
     captureSources,
+    projects,
     youtubeStatus,
   };
 };
@@ -66,6 +81,7 @@ const loadDashboardBundle = async (): Promise<DashboardBundle> => {
 export const ProductDashboard: React.FC<ProductDashboardProps> = ({
   onOpenSettings,
   onOpenLibrary,
+  onOpenProjects,
   onOpenJobs,
   onConnectYouTube,
   onSearchComplete,
@@ -75,11 +91,19 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
   const [usage, setUsage] = useState<UsageInfo | null>(null);
   const [jobs, setJobs] = useState<IngestionJob[]>([]);
   const [captureSources, setCaptureSources] = useState<CaptureSource[]>([]);
+  const [projects, setProjects] = useState<UserProject[]>([]);
   const [youtubeStatus, setYoutubeStatus] = useState<YoutubeOAuthStatus | null>(null);
   const [syncingSourceId, setSyncingSourceId] = useState<string | null>(null);
   const [pendingCaptureSync, setPendingCaptureSync] = useState<PendingCaptureSync | null>(null);
   const [confirmingCaptureSync, setConfirmingCaptureSync] = useState(false);
+  const [pendingDisconnectSource, setPendingDisconnectSource] = useState<CaptureSource | null>(
+    null,
+  );
+  const [disconnectingSourceId, setDisconnectingSourceId] = useState<string | null>(null);
   const [captureNotice, setCaptureNotice] = useState('');
+  const [projectNotice, setProjectNotice] = useState('');
+  const [projectName, setProjectName] = useState('');
+  const [creatingProject, setCreatingProject] = useState(false);
   const [importNotice, setImportNotice] = useState('');
   const [clearingImports, setClearingImports] = useState(false);
   const [libraryLoadFailed, setLibraryLoadFailed] = useState(false);
@@ -91,6 +115,7 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
     setUsage(bundle.usage);
     setJobs(bundle.jobs.slice(0, 6));
     setCaptureSources(bundle.captureSources);
+    setProjects(bundle.projects);
     setYoutubeStatus(bundle.youtubeStatus);
   }, []);
 
@@ -213,6 +238,22 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
     await refreshDashboardData();
   };
 
+  const handleConfirmDisconnectSource = async () => {
+    if (!pendingDisconnectSource) return;
+    const source = pendingDisconnectSource;
+    setDisconnectingSourceId(source.id);
+    setCaptureNotice('');
+    const deleted = await deleteCaptureSource(source.id);
+    setDisconnectingSourceId(null);
+    if (!deleted) {
+      setCaptureNotice('Could not disconnect that playlist. Refresh and try again.');
+      return;
+    }
+    setPendingDisconnectSource(null);
+    setCaptureNotice('Playlist disconnected. Saved videos remain in your library.');
+    await refreshDashboardData();
+  };
+
   const handleClearImportHistory = async () => {
     if (clearableJobs.length === 0) return;
     if (!confirm('Clear completed and failed import history? Active imports will stay visible.')) {
@@ -229,6 +270,26 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
         : 'No settled imports were cleared.',
     );
     setClearingImports(false);
+  };
+
+  const handleCreateProject = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmedName = projectName.trim();
+    if (!trimmedName) return;
+    setCreatingProject(true);
+    setProjectNotice('');
+    try {
+      const project = await createProject(trimmedName);
+      if (!project) {
+        setProjectNotice('Project could not be created.');
+        return;
+      }
+      setProjectName('');
+      setProjectNotice('Project created. Open Library to assign videos or link a playlist.');
+      await refreshDashboardData();
+    } finally {
+      setCreatingProject(false);
+    }
   };
 
   return (
@@ -304,7 +365,7 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
                     : 'No indexed videos yet'
             }
             action={
-              <button onClick={onOpenLibrary} className="link-quiet text-sm">
+              <button onClick={() => onOpenLibrary()} className="link-quiet text-sm">
                 Open
               </button>
             }
@@ -332,7 +393,73 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
         </aside>
       </section>
 
-      <section className="grid min-w-0 gap-5 xl:grid-cols-2">
+      <section className="grid min-w-0 gap-5 xl:grid-cols-3">
+        <DashboardPanel
+          title="Projects"
+          className="h-full"
+          description={
+            dashboardLoading
+              ? 'Checking scopes'
+              : projects.length > 0
+                ? `${projects.length} project${projects.length === 1 ? '' : 's'}`
+                : 'No projects yet'
+          }
+          action={
+            <button onClick={onOpenProjects} className="link-quiet text-sm">
+              Manage
+            </button>
+          }
+        >
+          {dashboardLoading ? (
+            <BrandLoader compact label="Loading projects" />
+          ) : (
+            <div className="space-y-3">
+              {projects.length > 0 ? (
+                <div className="space-y-2">
+                  {projects.slice(0, 3).map((project) => (
+                    <button
+                      key={project.id}
+                      type="button"
+                      onClick={() => onOpenLibrary(project.id)}
+                      className="min-w-0 rounded-xl bg-cream px-3 py-2 text-left transition-colors hover:bg-petal/50"
+                    >
+                      <p className="truncate text-sm font-semibold text-ink">{project.name}</p>
+                      <p className="mt-1 text-xs text-muted">
+                        {project.videoCount ?? 0} video
+                        {(project.videoCount ?? 0) === 1 ? '' : 's'}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <form onSubmit={(event) => void handleCreateProject(event)} className="space-y-2">
+                <label className="sr-only" htmlFor="dashboard-project-name">
+                  Project name
+                </label>
+                <input
+                  id="dashboard-project-name"
+                  value={projectName}
+                  onChange={(event) => setProjectName(event.target.value)}
+                  className="input w-full"
+                  placeholder="New project"
+                />
+                <button
+                  type="submit"
+                  disabled={creatingProject || !projectName.trim()}
+                  className="btn btn-secondary w-full"
+                >
+                  {creatingProject ? 'Creating' : 'Create new Project'}
+                </button>
+              </form>
+              {projectNotice ? (
+                <p className="rounded-lg bg-mint/40 px-3 py-2 text-xs font-medium text-leaf-deep">
+                  {projectNotice}
+                </p>
+              ) : null}
+            </div>
+          )}
+        </DashboardPanel>
+
         <DashboardPanel
           title="Imports"
           className="h-full"
@@ -399,6 +526,7 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
               sources={captureSources}
               syncingSourceId={syncingSourceId}
               onSyncSource={handleSyncSource}
+              onDisconnectSource={setPendingDisconnectSource}
               onOpenSettings={onOpenSettings}
             />
           )}
@@ -418,6 +546,14 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
           onConfirm={() => void handleConfirmCaptureSync()}
         />
       ) : null}
+      {pendingDisconnectSource ? (
+        <CaptureSourceDisconnectModal
+          sourceTitle={pendingDisconnectSource.title}
+          isSubmitting={disconnectingSourceId === pendingDisconnectSource.id}
+          onCancel={() => setPendingDisconnectSource(null)}
+          onConfirm={() => void handleConfirmDisconnectSource()}
+        />
+      ) : null}
     </div>
   );
 };
@@ -426,11 +562,13 @@ function CaptureSourceList({
   sources,
   syncingSourceId,
   onSyncSource,
+  onDisconnectSource,
   onOpenSettings,
 }: {
   sources: CaptureSource[];
   syncingSourceId: string | null;
   onSyncSource: (source: CaptureSource) => void;
+  onDisconnectSource: (source: CaptureSource) => void;
   onOpenSettings: () => void;
 }) {
   if (sources.length === 0) {
@@ -451,20 +589,28 @@ function CaptureSourceList({
     <div className="space-y-2">
       {sources.slice(0, 3).map((source) => (
         <div key={source.id} className="min-w-0 overflow-hidden rounded-xl bg-cream p-3">
-          <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-ink">{source.title}</p>
               <p className="mt-1 text-xs text-muted">
                 {source.status} · {source.recentItems?.length ?? 0} recent
               </p>
             </div>
-            <button
-              onClick={() => onSyncSource(source)}
-              disabled={syncingSourceId === source.id}
-              className="shrink-0 text-xs font-semibold uppercase tracking-wide text-teal-deep hover:text-ink disabled:opacity-50"
-            >
-              {syncingSourceId === source.id ? 'Syncing' : 'Sync'}
-            </button>
+            <div className="flex shrink-0 flex-wrap gap-3 sm:justify-end">
+              <button
+                onClick={() => onSyncSource(source)}
+                disabled={syncingSourceId === source.id}
+                className="text-xs font-semibold uppercase tracking-wide text-teal-deep hover:text-ink disabled:opacity-50"
+              >
+                {syncingSourceId === source.id ? 'Syncing' : 'Sync'}
+              </button>
+              <button
+                onClick={() => onDisconnectSource(source)}
+                className="text-xs font-semibold uppercase tracking-wide text-muted hover:text-ink"
+              >
+                Disconnect
+              </button>
+            </div>
           </div>
           {source.last_synced_at && (
             <p className="mt-2 text-xs text-muted">

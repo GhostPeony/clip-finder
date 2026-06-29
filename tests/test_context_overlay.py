@@ -1020,6 +1020,66 @@ def test_search_source_knowledge_keyword_mode_avoids_embedding_calls():
     assert result["results"][0]["conceptType"] == "method"
 
 
+def test_search_source_knowledge_keyword_mode_falls_back_when_index_is_empty():
+    source_ref = {
+        "source_type": "transcript",
+        "youtube_video_id": "yt-synthetic",
+        "start_seconds": 90,
+        "end_seconds": 140,
+    }
+    supabase = RpcSupabase(
+        responses={
+            "user_channels": [{"channel_id": "channel-db"}],
+            "user_videos": [],
+            "videos": [
+                {
+                    "id": "video-synthetic",
+                    "channel_id": "channel-db",
+                    "youtube_video_id": "yt-synthetic",
+                    "title": "Synthetic Data Lesson",
+                    "thumbnail_url": "thumb",
+                    "transcript_seconds": 1800,
+                }
+            ],
+            "source_labels": [],
+            "source_concepts": [
+                {
+                    "id": "concept-synthetic",
+                    "video_id": "video-synthetic",
+                    "concept_type": "method",
+                    "name": "Synthetic Data",
+                    "summary": "Synthetic data is used to expand post-training coverage.",
+                    "source_refs": [source_ref],
+                }
+            ],
+            "source_edges": [],
+            "knowledge_artifacts": [],
+        },
+        rpc_responses={"search_source_knowledge_hybrid": []},
+    )
+
+    result = context.search_source_knowledge(
+        supabase,
+        "user-1",
+        "synthetic data",
+        limit=3,
+        retrieval_mode="keyword",
+        embedding_provider=lambda _query: (_ for _ in ()).throw(
+            AssertionError("keyword mode should not embed")
+        ),
+    )
+
+    assert supabase.rpc_calls[0][1]["query_embedding"] is None
+    assert supabase.rpc_calls[0][1]["retrieval_mode"] == "keyword"
+    assert result["retrievalMode"] == "keyword"
+    assert result["retrievalPlan"]["fallbackUsed"] is True
+    assert "keyword search returned no matches" in result["retrievalPlan"]["fallbackReason"]
+    assert result["retrievalBudget"]["embeddingCalls"] == 0
+    assert result["results"][0]["resultType"] == "source_concept"
+    assert result["results"][0]["name"] == "Synthetic Data"
+    assert result["results"][0]["sourceRefs"][0]["start_seconds"] == 90
+
+
 def test_build_video_knowledge_map_returns_sections_and_timestamp_refs():
     source_ref = {
         "source_type": "transcript",
@@ -1427,6 +1487,18 @@ def test_search_library_components_matches_without_embedding_or_llm():
     assert concept["video"]["videoId"] == "yt-a"
     assert concept["sourceRefs"][0]["start_seconds"] == 30
 
+    video_result = context.search_library_components(
+        supabase,
+        "user-1",
+        "yt-a",
+        limit=10,
+        component_types=["video"],
+    )
+
+    assert video_result["results"][0]["resultType"] == "video"
+    assert video_result["results"][0]["video"]["videoId"] == "yt-a"
+    assert video_result["results"][0]["metadata"]["youtubeVideoId"] == "yt-a"
+
 
 def test_library_graph_endpoint_uses_hosted_source_graph(monkeypatch):
     from backend import server
@@ -1714,6 +1786,96 @@ def test_build_agent_brief_creates_actionable_repo_aware_context():
     assert brief["personalOverlay"]["notes"][0]["id"] == "note-1"
     assert brief["citations"] == [source_ref]
     assert all(call[0] != "agent_notes" or call[1] != "insert" for call in supabase.calls)
+
+
+def test_build_agent_brief_prefers_indexed_source_knowledge_when_available():
+    source_ref = {
+        "source_type": "transcript",
+        "youtube_video_id": "yt-terminal-rl",
+        "start_seconds": 120,
+        "end_seconds": 180,
+    }
+    supabase = RpcSupabase(
+        responses={
+            "agent_notes": [],
+            "personal_concepts": [],
+            "user_channels": [{"channel_id": "channel-db"}],
+            "user_videos": [],
+            "videos": [
+                {
+                    "id": "video-db",
+                    "channel_id": "channel-db",
+                    "youtube_video_id": "yt-terminal-rl",
+                    "title": "Older agent lesson",
+                    "thumbnail_url": "thumb",
+                    "transcript_seconds": 900,
+                }
+            ],
+            "source_concepts": [
+                {
+                    "id": "legacy-concept",
+                    "video_id": "video-db",
+                    "concept_type": "claim",
+                    "name": "Generic Agent Journey",
+                    "summary": "A broad agent journey framing.",
+                    "source_refs": [source_ref],
+                }
+            ],
+            "source_edges": [],
+            "knowledge_artifacts": [],
+        },
+        rpc_responses={
+            "search_source_knowledge_hybrid": [
+                {
+                    "id": "index-terminal-rl",
+                    "video_id": "video-db",
+                    "source_object_type": "source_concept",
+                    "source_object_id": "concept:terminal-rl",
+                    "section_key": "",
+                    "title": "Terminal RL Harness",
+                    "body": "Use verifiable reward tests and release gates to train coding agents.",
+                    "aliases": ["RLVR", "eval gates"],
+                    "source_refs": [source_ref],
+                    "metadata": {"conceptType": "method"},
+                    "youtube_video_id": "yt-terminal-rl",
+                    "video_title": "Terminal RL Lesson",
+                    "channel_name": "AI Channel",
+                    "similarity": 0.84,
+                    "keyword_rank": 0.5,
+                    "hybrid_score": 0.04,
+                    "match_type": "hybrid",
+                    "access_scope": "video",
+                    "access_source": "ingest",
+                    "access_reason": "Visible through an explicit saved-video grant.",
+                }
+            ]
+        },
+    )
+    embed_calls = []
+
+    brief = context.build_agent_brief(
+        supabase,
+        "user-1",
+        "apply agent reliability to BashGym",
+        {
+            "source": "agent-mcp",
+            "repo": "Ghostwork/BashGym",
+            "features": ["terminal RL", "verifiable rewards", "release gates"],
+            "symbols": ["dppo_launcher"],
+            "constraints": ["source context is read-only"],
+        },
+        limit=5,
+        embedding_provider=lambda query: embed_calls.append(query) or [0.1, 0.2, 0.3],
+    )
+
+    assert "terminal RL" in embed_calls[0]
+    assert supabase.rpc_calls[0][0] == "search_source_knowledge_hybrid"
+    assert brief["sourceRetrieval"]["usedSourceKnowledgeIndex"] is True
+    assert brief["sourceRetrieval"]["embeddingCalls"] == 1
+    assert brief["keyConcepts"][0]["name"] == "Terminal RL Harness"
+    assert brief["keyConcepts"][0]["type"] == "method"
+    assert "Terminal RL Harness" in brief["implementationGuidance"][0]
+    assert brief["citations"] == [source_ref]
 
 
 def test_build_agent_brief_prompts_more_repo_inspection_when_context_is_partial():

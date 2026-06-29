@@ -9,7 +9,13 @@ from typing import Any
 
 MCP_AUTH_PREFIX = "emt"
 DEFAULT_MCP_SCOPES = ["context:read", "overlay:write"]
-ALLOWED_MCP_SCOPES = ["context:read", "overlay:write", "ingest:write"]
+ALLOWED_MCP_SCOPES = [
+    "context:read",
+    "overlay:write",
+    "ingest:write",
+    "capture:write",
+    "project:write",
+]
 TOKEN_PREFIX_CHARS = 10
 TOKEN_SECRET_BYTES = 32
 

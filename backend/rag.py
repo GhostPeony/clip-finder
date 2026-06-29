@@ -23,12 +23,14 @@ try:
     from .clip_selection import select_clips
     from .config import get_embedding_dimensions, get_embedding_model
     from .db import get_supabase
+    from .projects import resolve_project_scope
 except ImportError:
     from answers import generate_answer
     from category_taxonomy import normalize_category_filters
     from clip_selection import select_clips
     from config import get_embedding_dimensions, get_embedding_model
     from db import get_supabase
+    from projects import resolve_project_scope
 
 # Load environment variables
 env_path = os.path.join(os.path.dirname(__file__), "..", ".env.local")
@@ -110,6 +112,24 @@ def _normalize_retrieval_mode(mode: str | None) -> str:
     return normalized
 
 
+def _project_scope_response(scope: dict | None) -> dict:
+    if not scope:
+        return {
+            "scope": "all_library",
+            "projectId": None,
+            "projectSlug": None,
+            "projectName": None,
+            "videoCount": None,
+        }
+    return {
+        "scope": "project",
+        "projectId": scope.get("id"),
+        "projectSlug": scope.get("slug"),
+        "projectName": scope.get("name"),
+        "videoCount": len(scope.get("videoIds") or []),
+    }
+
+
 def _relevance_reason(retrieval_mode: str, row: dict) -> str:
     match_type = row.get("match_type") or ""
     if retrieval_mode == "hybrid":
@@ -133,6 +153,8 @@ def search_pg(
     limit: int = 5,
     category_filters: dict | None = None,
     retrieval_mode: str = "hybrid",
+    project_id: str | None = None,
+    project_slug: str | None = None,
 ) -> dict:
     """
     Semantic search scoped to a user's authorized video library.
@@ -150,7 +172,17 @@ def search_pg(
         SearchResult dict with 'answer' (empty string) and 'relevantClips'.
     """
     normalized_mode = _normalize_retrieval_mode(retrieval_mode)
+    supabase = get_supabase()
+    project_scope = resolve_project_scope(supabase, user_id, project_id, project_slug)
     if normalized_mode == "keyword":
+        if project_scope:
+            return search_transcript_text_pg(
+                query,
+                user_id,
+                limit,
+                category_filters,
+                project_scope=project_scope,
+            )
         return search_transcript_text_pg(query, user_id, limit, category_filters)
 
     normalized_filters = normalize_category_filters(category_filters)
@@ -159,8 +191,6 @@ def search_pg(
         f"(user={user_id[:8]}, limit={limit}, mode={normalized_mode}, "
         f"filters={bool(normalized_filters)})"
     )
-
-    supabase = get_supabase()
 
     # 1. Embed the query
     embeddings = _get_embeddings(api_key)
@@ -178,6 +208,8 @@ def search_pg(
         "min_start_seconds": 0,
         "category_filters": normalized_filters,
     }
+    if project_scope:
+        rpc_payload["match_project_id"] = project_scope.get("id")
     if normalized_mode == "hybrid":
         rpc_payload["search_query"] = query
 
@@ -221,6 +253,7 @@ def search_pg(
         "relevantClips": clips,
         "categoryFilters": normalized_filters,
         "retrievalMode": normalized_mode,
+        "projectScope": _project_scope_response(project_scope),
         "retrievalPlan": {
             "primary": (
                 "hybrid_vector_keyword_rrf"
@@ -230,6 +263,7 @@ def search_pg(
             "embeddingUsed": True,
             "llmAnswerUsed": bool(answer),
             "candidateMultiplier": 4,
+            "projectScoped": bool(project_scope),
             "fallback": (
                 "Use search_transcript_text for exact phrase checks or "
                 "search_video_concepts for source concepts and generated artifacts."
@@ -249,6 +283,9 @@ def search_transcript_text_pg(
     user_id: str,
     limit: int = 5,
     category_filters: dict | None = None,
+    project_id: str | None = None,
+    project_slug: str | None = None,
+    project_scope: dict | None = None,
 ) -> dict:
     """
     Keyword/entity search scoped to a user's authorized video library.
@@ -258,18 +295,21 @@ def search_transcript_text_pg(
     terms, and title/entity-heavy agent searches.
     """
     normalized_filters = normalize_category_filters(category_filters)
+    supabase = get_supabase()
+    if project_scope is None:
+        project_scope = resolve_project_scope(supabase, user_id, project_id, project_slug)
     print(
         f"[SEARCH_TEXT_PG] Starting keyword search for: {query[:50]}... "
         f"(user={user_id[:8]}, limit={limit}, filters={bool(normalized_filters)})"
     )
 
-    supabase = get_supabase()
     rows = _search_keyword_rpc(
         supabase,
         query,
         user_id,
         limit,
         normalized_filters,
+        project_scope.get("id") if project_scope else None,
     )
     fallback_query = None
     if not rows:
@@ -282,6 +322,7 @@ def search_transcript_text_pg(
                 user_id,
                 limit,
                 normalized_filters,
+                project_scope.get("id") if project_scope else None,
             )
             if fallback_rows:
                 rows = fallback_rows
@@ -317,11 +358,13 @@ def search_transcript_text_pg(
         "relevantClips": clips,
         "categoryFilters": normalized_filters,
         "retrievalMode": "keyword",
+        "projectScope": _project_scope_response(project_scope),
         "retrievalPlan": {
             "primary": "keyword_full_text",
             "embeddingUsed": False,
             "llmAnswerUsed": False,
             "fallbackQuery": fallback_query,
+            "projectScoped": bool(project_scope),
             "fallback": "Use search_video_moments for semantic neighbors if exact search is sparse.",
         },
         "retrievalBudget": {
@@ -339,17 +382,18 @@ def _search_keyword_rpc(
     user_id: str,
     limit: int,
     normalized_filters: dict,
+    project_id: str | None = None,
 ) -> list[dict]:
-    result = supabase.rpc(
-        "search_chunks_keyword",
-        {
-            "search_query": query,
-            "match_user_id": user_id,
-            "match_limit": limit * 4,
-            "min_start_seconds": 0,
-            "category_filters": normalized_filters,
-        },
-    ).execute()
+    payload = {
+        "search_query": query,
+        "match_user_id": user_id,
+        "match_limit": limit * 4,
+        "min_start_seconds": 0,
+        "category_filters": normalized_filters,
+    }
+    if project_id:
+        payload["match_project_id"] = project_id
+    result = supabase.rpc("search_chunks_keyword", payload).execute()
     return result.data or []
 
 
@@ -367,7 +411,11 @@ def _keyword_fallback_queries(query: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def get_library_pg(user_id: str) -> dict:
+def get_library_pg(
+    user_id: str,
+    project_id: str | None = None,
+    project_slug: str | None = None,
+) -> dict:
     """
     Return the user's subscribed channels with their videos and clip counts.
 
@@ -379,6 +427,8 @@ def get_library_pg(user_id: str) -> dict:
     }
     """
     supabase = get_supabase()
+    project_scope = resolve_project_scope(supabase, user_id, project_id, project_slug)
+    scoped_video_ids = set(project_scope.get("videoIds") or []) if project_scope else None
 
     # Get user's subscribed channels
     uc_result = (
@@ -415,13 +465,18 @@ def get_library_pg(user_id: str) -> dict:
         channel_name = channel_data["name"]
 
         # Get all videos for this channel
-        videos_result = (
+        videos_query = (
             supabase.table("videos")
             .select("id, youtube_video_id, title, thumbnail_url, indexed_at")
             .eq("channel_id", channel_id)
             .order("indexed_at", desc=True)
-            .execute()
         )
+        if scoped_video_ids is not None:
+            if not scoped_video_ids:
+                continue
+            videos_query = videos_query.in_("id", list(scoped_video_ids))
+
+        videos_result = videos_query.execute()
 
         videos_data = videos_result.data or []
         for video in videos_data:
@@ -433,6 +488,10 @@ def get_library_pg(user_id: str) -> dict:
     remaining_explicit_video_ids = [
         video_id for video_id in explicit_video_ids if video_id not in included_video_ids
     ]
+    if scoped_video_ids is not None:
+        remaining_explicit_video_ids = [
+            video_id for video_id in remaining_explicit_video_ids if video_id in scoped_video_ids
+        ]
     if remaining_explicit_video_ids:
         videos_result = (
             supabase.table("videos")
@@ -478,6 +537,8 @@ def get_library_pg(user_id: str) -> dict:
                 }
             )
 
+        if scoped_video_ids is not None and not channel_videos:
+            continue
         total_videos += len(channel_videos)
         channels_list.append(
             {
@@ -511,6 +572,7 @@ def get_library_pg(user_id: str) -> dict:
         "channels": channels_list,
         "totalVideos": total_videos,
         "totalClips": total_clips,
+        "projectScope": _project_scope_response(project_scope),
     }
 
 

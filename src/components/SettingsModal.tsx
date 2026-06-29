@@ -5,6 +5,7 @@ import {
   createBillingCheckout,
   createBillingPortal,
   deleteApiKey,
+  deleteCaptureSource,
   disconnectYoutubeOAuth,
   createMcpToken,
   fetchCaptureSources,
@@ -29,6 +30,7 @@ import {
   YoutubeOAuthStatus,
 } from '../types';
 import { YOUTUBE_CONNECTION_SAVED_EVENT } from '../contexts/AuthContext';
+import { CaptureSourceDisconnectModal } from './CaptureSourceDisconnectModal';
 import { CaptureSyncConfirmModal } from './CaptureSyncConfirmModal';
 
 interface SettingsModalProps {
@@ -609,6 +611,14 @@ function buildLocalMcpSetupBundle(
   token?: string,
 ): McpSetupBundle {
   const tokenEnvironmentVariable = 'MEMEXAI_MCP_TOKEN';
+  const claudeSetupSteps = [
+    'Open Claude settings, then Customize > Connectors.',
+    'Choose Add custom connector and paste the Memexai MCP URL.',
+    'Name it Memexai, finish adding it, then click Connect.',
+    'Sign in with Google, approve Memexai access, and enable the connector in the chat.',
+  ];
+  const claudeInitialPrompt =
+    'Use my Memexai connector. Start with get_mcp_session, then list_projects. If a project matches my task, open its project context map before searching source reports or transcript moments.';
   const hermesConfig = [
     'mcp_servers:',
     '  memexai:',
@@ -645,6 +655,15 @@ function buildLocalMcpSetupBundle(
     manifestUrl: mcpManifestUrl,
     agentGuideUrl,
     fullAgentGuideUrl: agentFullGuideUrl,
+    claudeCustomConnector: {
+      name: 'Memexai',
+      url: mcpServerUrl,
+      setupSteps: claudeSetupSteps,
+      initialPrompt: claudeInitialPrompt,
+      authMode: 'Remote MCP OAuth through Google sign-in and Memexai approval.',
+      fallback:
+        'If the Claude client cannot complete OAuth, create a scoped MCP token below and use a client that supports bearer-token MCP headers.',
+    },
     tokenEnvironmentVariable,
     hermesConfig,
     codexConfig,
@@ -708,6 +727,10 @@ const CaptureSourcesSection: React.FC<{
   const [syncingSourceId, setSyncingSourceId] = useState<string | null>(null);
   const [pendingSync, setPendingSync] = useState<PendingCaptureSync | null>(null);
   const [confirmingSync, setConfirmingSync] = useState(false);
+  const [pendingDisconnectSource, setPendingDisconnectSource] = useState<CaptureSource | null>(
+    null,
+  );
+  const [disconnectingSourceId, setDisconnectingSourceId] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [youtubeStatus, setYoutubeStatus] = useState<YoutubeOAuthStatus | null>(null);
   const [connectingYouTube, setConnectingYouTube] = useState(false);
@@ -867,6 +890,22 @@ const CaptureSourcesSection: React.FC<{
     }
   };
 
+  const handleConfirmDisconnectSource = async () => {
+    if (!pendingDisconnectSource) return;
+    const source = pendingDisconnectSource;
+    setDisconnectingSourceId(source.id);
+    setSyncMessage(null);
+    const deleted = await deleteCaptureSource(source.id);
+    setDisconnectingSourceId(null);
+    if (!deleted) {
+      setSyncMessage('Could not disconnect that playlist. Refresh and try again.');
+      return;
+    }
+    setPendingDisconnectSource(null);
+    setSyncMessage('Playlist disconnected. Saved videos remain in your library.');
+    await refreshSources();
+  };
+
   return (
     <section className="rounded-xl border border-ink/10 bg-surface p-4">
       <div className="mb-4">
@@ -964,10 +1003,10 @@ const CaptureSourcesSection: React.FC<{
         ) : sources.length > 0 ? (
           <div className="space-y-2">
             {sources.map((source) => (
-              <div key={source.id} className="rounded-xl bg-cream p-3">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div key={source.id} className="min-w-0 overflow-hidden rounded-xl bg-cream p-3">
+                <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-ink">{source.title}</p>
+                    <p className="break-words text-sm font-semibold text-ink">{source.title}</p>
                     <p className="break-all text-xs text-bark">{source.source_url}</p>
                     <p className="mt-1 text-xs text-muted">
                       {source.status} - Last sync {formatCaptureDate(source.last_synced_at)}
@@ -978,14 +1017,28 @@ const CaptureSourcesSection: React.FC<{
                       </p>
                     ) : null}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleSync(source)}
-                    disabled={syncingSourceId === source.id}
-                    className="btn btn-secondary min-h-0 px-4 py-2 text-sm"
-                  >
-                    {syncingSourceId === source.id ? 'Syncing...' : 'Sync'}
-                  </button>
+                  <div className="flex shrink-0 flex-col gap-2 sm:items-end">
+                    <button
+                      type="button"
+                      onClick={() => handleSync(source)}
+                      disabled={
+                        syncingSourceId === source.id || disconnectingSourceId === source.id
+                      }
+                      className="btn btn-secondary min-h-0 w-full px-4 py-2 text-sm sm:w-auto"
+                    >
+                      {syncingSourceId === source.id ? 'Syncing...' : 'Sync'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingDisconnectSource(source)}
+                      disabled={disconnectingSourceId === source.id}
+                      className="link-quiet min-h-0 w-full text-sm disabled:opacity-50 sm:w-auto"
+                    >
+                      {disconnectingSourceId === source.id
+                        ? 'Disconnecting'
+                        : 'Disconnect playlist'}
+                    </button>
+                  </div>
                 </div>
                 <RecentCaptureItems items={source.recentItems ?? []} />
               </div>
@@ -1004,6 +1057,14 @@ const CaptureSourcesSection: React.FC<{
           onConfirm={() => void handleConfirmSync()}
         />
       ) : null}
+      {pendingDisconnectSource ? (
+        <CaptureSourceDisconnectModal
+          sourceTitle={pendingDisconnectSource.title}
+          isSubmitting={disconnectingSourceId === pendingDisconnectSource.id}
+          onCancel={() => setPendingDisconnectSource(null)}
+          onConfirm={() => void handleConfirmDisconnectSource()}
+        />
+      ) : null}
     </section>
   );
 };
@@ -1012,10 +1073,20 @@ const AgentAccessSection: React.FC = () => {
   const [tokenState, setTokenState] = useState<McpTokenState>({ status: 'loading' });
   const [tokenName, setTokenName] = useState('Hermes on ponyo');
   const [allowAgentIngest, setAllowAgentIngest] = useState(false);
+  const [allowAgentProjectSetup, setAllowAgentProjectSetup] = useState(false);
+  const [allowAgentPlaylistSync, setAllowAgentPlaylistSync] = useState(false);
   const [createdToken, setCreatedToken] = useState<CreatedMcpToken | null>(null);
   const [creating, setCreating] = useState(false);
   const [copied, setCopied] = useState<
-    'token' | 'config' | 'envConfig' | 'codexConfig' | 'firstSteps' | 'setupBundle' | null
+    | 'token'
+    | 'config'
+    | 'envConfig'
+    | 'codexConfig'
+    | 'firstSteps'
+    | 'setupBundle'
+    | 'claudeUrl'
+    | 'claudePrompt'
+    | null
   >(null);
 
   const refreshTokens = async () => {
@@ -1050,6 +1121,10 @@ const AgentAccessSection: React.FC = () => {
       agentFullGuideUrl,
       createdToken?.token,
     );
+  const claudeConnector =
+    setupBundle.claudeCustomConnector ??
+    buildLocalMcpSetupBundle(mcpServerUrl, mcpManifestUrl, agentGuideUrl, agentFullGuideUrl)
+      .claudeCustomConnector;
   const envConfigSnippet = setupBundle.hermesConfig;
   const codexConfigSnippet =
     setupBundle.codexConfig ??
@@ -1075,6 +1150,12 @@ const AgentAccessSection: React.FC = () => {
     const scopes = ['context:read', 'overlay:write'];
     if (allowAgentIngest) {
       scopes.push('ingest:write');
+    }
+    if (allowAgentProjectSetup) {
+      scopes.push('project:write');
+    }
+    if (allowAgentPlaylistSync) {
+      scopes.push('capture:write');
     }
     setCreating(true);
     setCreatedToken(null);
@@ -1107,7 +1188,15 @@ const AgentAccessSection: React.FC = () => {
   };
 
   const copyText = async (
-    kind: 'token' | 'config' | 'envConfig' | 'codexConfig' | 'firstSteps' | 'setupBundle',
+    kind:
+      | 'token'
+      | 'config'
+      | 'envConfig'
+      | 'codexConfig'
+      | 'firstSteps'
+      | 'setupBundle'
+      | 'claudeUrl'
+      | 'claudePrompt',
     value: string,
   ) => {
     if (!navigator.clipboard) return;
@@ -1121,10 +1210,64 @@ const AgentAccessSection: React.FC = () => {
       <div>
         <h3 className="font-serif text-2xl font-medium text-ink">Agent connection</h3>
         <p className="mt-1 text-xs leading-5 text-bark">
-          Create or manage scoped access for a desktop agent.
+          Connect Claude with OAuth, or create scoped token fallback access for other agents.
         </p>
       </div>
       <div className="mt-4 border-t border-ink/10 pt-4">
+        {claudeConnector ? (
+          <div className="mb-4 rounded-xl bg-cream p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <h4 className="font-serif text-xl font-medium text-ink">Claude custom connector</h4>
+                <p className="mt-1 text-xs leading-5 text-bark">
+                  Add this remote MCP URL in Claude. Claude opens Google sign-in and the Memexai
+                  approval screen.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => copyText('claudePrompt', claudeConnector.initialPrompt)}
+                className="btn btn-secondary min-h-0 shrink-0 px-3 py-2 text-xs"
+              >
+                {copied === 'claudePrompt' ? 'Copied' : 'Copy first prompt'}
+              </button>
+            </div>
+
+            <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
+              <label className="block min-w-0">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
+                  MCP URL
+                </span>
+                <input
+                  readOnly
+                  value={claudeConnector.url}
+                  className="input w-full px-3 py-2 font-mono text-xs"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => copyText('claudeUrl', claudeConnector.url)}
+                className="btn btn-secondary mt-auto min-h-0 px-4 py-2 text-sm"
+              >
+                {copied === 'claudeUrl' ? 'Copied' : 'Copy URL'}
+              </button>
+            </div>
+
+            <ol className="mt-3 list-decimal space-y-1 pl-5 text-xs leading-5 text-bark">
+              {claudeConnector.setupSteps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+            <p className="mt-3 text-xs leading-5 text-bark">{claudeConnector.fallback}</p>
+          </div>
+        ) : null}
+
+        <div className="mb-3">
+          <h4 className="text-sm font-semibold text-ink">Token fallback</h4>
+          <p className="mt-1 text-xs leading-5 text-bark">
+            Use this for Hermes, Codex, or any MCP client that needs a bearer-token config.
+          </p>
+        </div>
         <div className="mb-4 flex flex-wrap gap-2">
           <button
             type="button"
@@ -1180,6 +1323,37 @@ const AgentAccessSection: React.FC = () => {
             <span className="block text-xs leading-5 text-bark">
               Lets this token queue YouTube links for import. Bulk playlist or channel imports still
               require explicit approval.
+            </span>
+          </span>
+        </label>
+
+        <label className="mt-3 flex items-start gap-3 rounded-xl bg-cream p-3">
+          <input
+            type="checkbox"
+            checked={allowAgentProjectSetup}
+            onChange={(event) => setAllowAgentProjectSetup(event.target.checked)}
+            className="mt-1 h-4 w-4 accent-violet-deep"
+          />
+          <span>
+            <span className="block text-sm font-semibold text-ink">Allow project setup</span>
+            <span className="block text-xs leading-5 text-bark">
+              Lets this token create project scopes when you ask the agent to organize a new
+              workstream.
+            </span>
+          </span>
+        </label>
+
+        <label className="mt-3 flex items-start gap-3 rounded-xl bg-cream p-3">
+          <input
+            type="checkbox"
+            checked={allowAgentPlaylistSync}
+            onChange={(event) => setAllowAgentPlaylistSync(event.target.checked)}
+            className="mt-1 h-4 w-4 accent-violet-deep"
+          />
+          <span>
+            <span className="block text-sm font-semibold text-ink">Allow playlist sync</span>
+            <span className="block text-xs leading-5 text-bark">
+              Lets this token link YouTube playlists to projects and queue confirmed playlist syncs.
             </span>
           </span>
         </label>

@@ -20,6 +20,8 @@ interface LibraryKnowledgeGraphProps {
   activeView: 'videos' | 'topics' | 'guides';
   latestVideos: Array<LibraryVideo & { channelName: string }>;
   onIndexMore: () => void;
+  projectId?: string | null;
+  projectName?: string;
 }
 
 interface VideoKnowledge {
@@ -61,6 +63,8 @@ export const LibraryKnowledgeGraph: React.FC<LibraryKnowledgeGraphProps> = ({
   activeView,
   latestVideos,
   onIndexMore,
+  projectId,
+  projectName,
 }) => {
   const [graphData, setGraphData] = useState<LibrarySourceGraphData | null>(null);
   const [loadingGraph, setLoadingGraph] = useState(true);
@@ -80,7 +84,9 @@ export const LibraryKnowledgeGraph: React.FC<LibraryKnowledgeGraphProps> = ({
     let active = true;
 
     const load = async () => {
-      const cached = await getCachedLibraryGraph(50);
+      const cached = projectId
+        ? await getCachedLibraryGraph(50, projectId)
+        : await getCachedLibraryGraph(50);
       if (!active) return;
       if (cached) {
         setGraphData(cached);
@@ -88,7 +94,7 @@ export const LibraryKnowledgeGraph: React.FC<LibraryKnowledgeGraphProps> = ({
       } else {
         setLoadingGraph(true);
       }
-      const data = await fetchLibraryGraph(50);
+      const data = projectId ? await fetchLibraryGraph(50, projectId) : await fetchLibraryGraph(50);
       if (!active) return;
       setGraphData(data);
       setLoadingGraph(false);
@@ -99,7 +105,15 @@ export const LibraryKnowledgeGraph: React.FC<LibraryKnowledgeGraphProps> = ({
     return () => {
       active = false;
     };
-  }, []);
+  }, [projectId]);
+
+  useEffect(() => {
+    setSelectedVideoKey(null);
+    setSelectedGuide(null);
+    setSearchAnswer('');
+    setSearchResults([]);
+    setSearchError('');
+  }, [projectId]);
 
   const videoKnowledge = useMemo(
     () => buildVideoKnowledge(graphData, latestVideos),
@@ -159,12 +173,15 @@ export const LibraryKnowledgeGraph: React.FC<LibraryKnowledgeGraphProps> = ({
     setSearchAnswer('');
     setSearchResults([]);
     try {
-      const { answer, relevantClips } = await searchVideoClips(
-        trimmedQuery,
-        LIBRARY_SEARCH_RESULT_LIMIT,
-        undefined,
-        searchMode,
-      );
+      const { answer, relevantClips } = projectId
+        ? await searchVideoClips(
+            trimmedQuery,
+            LIBRARY_SEARCH_RESULT_LIMIT,
+            undefined,
+            searchMode,
+            projectId,
+          )
+        : await searchVideoClips(trimmedQuery, LIBRARY_SEARCH_RESULT_LIMIT, undefined, searchMode);
       const clips = relevantClips.filter((clip) => clip.videoId);
       setSearchAnswer(answer || '');
       setSearchResults(clips);
@@ -215,6 +232,7 @@ export const LibraryKnowledgeGraph: React.FC<LibraryKnowledgeGraphProps> = ({
         onModeChange={setSearchMode}
         onQueryChange={setSearchQuery}
         onSubmit={handleSearch}
+        projectName={projectName}
       />
 
       {activeView === 'videos' ? (
@@ -263,6 +281,7 @@ function LibrarySearchPanel({
   onModeChange,
   onQueryChange,
   onSubmit,
+  projectName,
 }: {
   mode: LibrarySearchMode;
   query: string;
@@ -273,6 +292,7 @@ function LibrarySearchPanel({
   onModeChange: (mode: LibrarySearchMode) => void;
   onQueryChange: (query: string) => void;
   onSubmit: (event: React.FormEvent) => void;
+  projectName?: string;
 }) {
   const selectedMode = searchModeOptions.find((option) => option.id === mode);
 
@@ -283,8 +303,9 @@ function LibrarySearchPanel({
           <div>
             <h2 className="font-serif text-3xl font-medium text-ink">Search saved videos</h2>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-bark">
-              Find the video, idea, or moment you saved without pasting the link into an agent
-              again.
+              {projectName
+                ? `Searching project: ${projectName}.`
+                : 'Find the video, idea, or moment you saved without pasting the link into an agent again.'}
             </p>
           </div>
           <div className="inline-flex rounded-2xl border border-ink/10 bg-cream p-1">

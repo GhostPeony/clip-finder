@@ -66,6 +66,8 @@ def test_public_agent_docs_expose_mcp_and_repo_context_guidance(monkeypatch):
     assert "get_mcp_session" in text
     assert "context://brain-sync-contract" in text
     assert "repoFit.targetMap" in text
+    assert "Claude custom connector URL: http://testserver/mcp" in text
+    assert "Fallback path: create a bearer MCP token" in text
 
 
 def test_public_full_agent_docs_include_ingestion_guardrails(monkeypatch):
@@ -100,9 +102,21 @@ def test_public_mcp_manifest_has_agent_setup_metadata(monkeypatch):
     assert response.status_code == 200
     manifest = response.json()
     assert manifest["transport"]["url"] == "http://testserver/mcp"
-    assert manifest["auth"]["type"] == "bearer"
+    assert manifest["auth"]["type"] == "oauth_or_bearer"
+    assert manifest["auth"]["preferred"] == "oauth_custom_connector"
     assert manifest["auth"]["setupBundle"]["mcpEndpoint"] == "http://testserver/mcp"
     assert manifest["auth"]["setupBundle"]["manifestUrl"] == "http://testserver/mcp.json"
+    assert manifest["auth"]["setupBundle"]["claudeCustomConnector"]["url"] == (
+        "http://testserver/mcp"
+    )
+    assert (
+        "Customize > Connectors"
+        in manifest["auth"]["setupBundle"]["claudeCustomConnector"]["setupSteps"][0]
+    )
+    assert (
+        "get_mcp_session"
+        in manifest["auth"]["setupBundle"]["claudeCustomConnector"]["initialPrompt"]
+    )
     assert manifest["auth"]["setupBundle"]["accessModel"]["searchScope"] == "current_user_grants"
     assert manifest["auth"]["setupBundle"]["accessModel"]["globalSearch"] == "not_exposed"
     assert manifest["auth"]["setupBundle"]["accessModel"]["visibilityGrants"] == [
@@ -117,10 +131,14 @@ def test_public_mcp_manifest_has_agent_setup_metadata(monkeypatch):
     )
     assert "does not spend" in manifest["auth"]["setupBundle"]["codexSetupNote"]
     assert "oneTimeCredential" not in manifest["auth"]["setupBundle"]
+    assert manifest["auth"]["oauth"]["mcpEndpoint"] == "http://testserver/mcp"
+    assert manifest["auth"]["oauth"]["clientRegistration"] == "http://testserver/oauth/register"
     assert {scope["name"] for scope in manifest["auth"]["scopes"]} == {
         "context:read",
         "overlay:write",
         "ingest:write",
+        "capture:write",
+        "project:write",
     }
     assert manifest["accessModel"]["visibilityGrants"] == ["user_videos", "user_channels"]
     assert "current user" in manifest["accessModel"]["searchScope"]
@@ -182,10 +200,11 @@ def test_public_mcp_manifest_has_agent_setup_metadata(monkeypatch):
     assert "commands" in manifest["repoContextWorkflow"]["schema"]
     assert "tests" in manifest["repoContextWorkflow"]["schema"]
     assert "active_changes" in manifest["repoContextWorkflow"]["schema"]
-    assert manifest["agentOnboarding"]["preferred"] == "mcp_manifest_and_bearer_token"
+    assert manifest["agentOnboarding"]["preferred"] == "oauth_custom_connector"
     assert manifest["agentOnboarding"]["sessionTool"] == "get_mcp_session"
     assert manifest["agentOnboarding"]["quickstartResource"] == "context://agent-quickstart"
     assert manifest["agentOnboarding"]["quickstartTool"] == "get_agent_quickstart"
+    assert "fallbackFlow" in manifest["agentOnboarding"]
     assert manifest["brainSync"]["version"] == "memexai-brain-sync-v1"
     assert manifest["brainSync"]["sourceTruth"]["readOnly"] is True
     assert any(

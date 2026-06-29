@@ -114,6 +114,33 @@ def test_create_mcp_token_allows_explicit_ingestion_scope(monkeypatch):
     assert inserted["scopes"] == ["context:read", "overlay:write", "ingest:write"]
 
 
+def test_create_mcp_token_allows_project_and_capture_scopes(monkeypatch):
+    supabase = Supabase()
+    sample_bearer = "_".join([mcp_tokens.MCP_AUTH_PREFIX, "display", "secret"])
+    monkeypatch.setattr(mcp_tokens, "_new_token", lambda: sample_bearer)
+
+    mcp_tokens.create_mcp_token(
+        supabase,
+        "user-1",
+        "Agent setup token",
+        [
+            "context:read",
+            "overlay:write",
+            "project:write",
+            "capture:write",
+            "admin",
+        ],
+    )
+
+    inserted = supabase.inserts[0][1]
+    assert inserted["scopes"] == [
+        "context:read",
+        "overlay:write",
+        "project:write",
+        "capture:write",
+    ]
+
+
 def test_authenticate_mcp_token_updates_last_used_for_valid_token():
     sample_bearer = "_".join([mcp_tokens.MCP_AUTH_PREFIX, "display", "secret"])
     supabase = Supabase(
@@ -248,6 +275,40 @@ def test_mcp_endpoint_schedules_queued_ingestion_jobs(monkeypatch):
     response = TestClient(server.app).post(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 9, "method": "tools/call"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {"ok": True}
+    assert processed == [queued_job]
+
+
+def test_mcp_endpoint_schedules_capture_sync_jobs(monkeypatch):
+    from backend import server
+
+    queued_job = {
+        "id": "job-1",
+        "user_id": "local",
+        "source_url": "https://www.youtube.com/watch?v=uCKhOmth2ms",
+        "status": "queued",
+    }
+    processed = []
+
+    def fake_handle(payload, user_id, supabase, scopes, tool_context):
+        assert user_id == "local"
+        assert supabase == "supabase"
+        tool_context["queued_capture_sync_jobs"].append(queued_job)
+        return {"jsonrpc": "2.0", "id": payload["id"], "result": {"ok": True}}, 200
+
+    monkeypatch.setenv("SEARCHTUBE_AUTH_MODE", "none")
+    monkeypatch.setattr(server, "is_supabase_mode", lambda: True)
+    monkeypatch.setattr(server, "get_supabase", lambda: "supabase")
+    monkeypatch.setattr(server, "mcp_payload_requires_supabase", lambda payload: True)
+    monkeypatch.setattr(server, "handle_mcp_request", fake_handle)
+    monkeypatch.setattr(server, "process_hosted_ingestion_job", lambda job: processed.append(job))
+
+    response = TestClient(server.app).post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 10, "method": "tools/call"},
     )
 
     assert response.status_code == 200

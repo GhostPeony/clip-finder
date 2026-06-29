@@ -61,6 +61,51 @@ export interface LibraryData {
   channels: LibraryChannel[];
   totalVideos: number;
   totalClips: number;
+  projectScope?: ProjectScope | null;
+}
+
+export interface ProjectScope {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  status?: 'active' | 'archived' | string;
+  videoIds?: string[];
+  videoCount?: number;
+  captureSources?: CaptureSource[];
+  linkedCaptureSourceCount?: number;
+}
+
+export interface UserProject extends ProjectScope {
+  user_id?: string;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ProjectsData {
+  projects: UserProject[];
+  archivedProjects?: UserProject[];
+  totalProjects: number;
+}
+
+export interface ProjectContextMap {
+  version: string;
+  found: boolean;
+  project?: ProjectScope;
+  videos: Array<{
+    videoId: string;
+    title: string;
+    channelName?: string | null;
+    thumbnailUrl?: string | null;
+    transcriptSeconds?: number | null;
+    indexedAt?: string | null;
+    next_mcp_call?: Record<string, unknown>;
+  }>;
+  componentCounts?: Record<string, number>;
+  facets?: Array<Record<string, unknown>>;
+  suggestedFollowUpQueries?: string[];
+  guidance?: string;
 }
 
 export type LibraryComponentType =
@@ -150,6 +195,7 @@ export interface LibraryEdgeCaseHandling {
 export interface LibrarySourceGraphData {
   version: string;
   limit: number;
+  projectScope?: ProjectScope | null;
   accessModel: {
     scope: string;
     visibilityGrants: string[];
@@ -195,6 +241,7 @@ export interface LibraryComponentSearchResult {
 export interface LibraryComponentSearchData {
   query: string;
   retrievalMode: 'component_keyword';
+  projectScope?: ProjectScope | null;
   results: LibraryComponentSearchResult[];
   componentTypes: LibraryComponentType[];
   accessModel: {
@@ -295,12 +342,22 @@ export interface McpSetupCall {
   purpose: string;
 }
 
+export interface McpClaudeConnectorSetup {
+  name: string;
+  url: string;
+  setupSteps: string[];
+  initialPrompt: string;
+  authMode: string;
+  fallback: string;
+}
+
 export interface McpSetupBundle {
   serverName: string;
   mcpEndpoint: string;
   manifestUrl: string;
   agentGuideUrl: string;
   fullAgentGuideUrl: string;
+  claudeCustomConnector?: McpClaudeConnectorSetup;
   tokenEnvironmentVariable: string;
   hermesConfig: string;
   codexConfig?: string;
@@ -365,6 +422,7 @@ export interface CaptureSourceItem {
 export interface CaptureSource {
   id: string;
   user_id?: string;
+  project_id?: string | null;
   source_type: 'playlist' | 'liked_videos';
   source_url: string;
   external_id: string;
@@ -451,6 +509,7 @@ export type AppMode =
   | 'ingest'
   | 'search'
   | 'library'
+  | 'projects'
   | 'jobs'
   | 'about'
   | 'contact';

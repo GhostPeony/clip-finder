@@ -7,13 +7,16 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 try:
-    from .capture import build_capture_sources_context
+    from .billing import resolve_user_entitlements
+    from .capture import build_capture_sources_context, create_playlist_capture_source
+    from .capture_workflows import run_capture_sync_workflow
     from .config import get_free_max_active_ingestion_jobs
     from .context import (
         build_agent_brief,
         build_brain_digest_export,
         build_context_bundle,
         build_library_source_graph,
+        build_project_context_map,
         build_video_knowledge_map,
         create_agent_note,
         get_video_context,
@@ -35,6 +38,7 @@ try:
         list_ingestion_jobs,
         record_ingestion_job_event,
     )
+    from .projects import create_project, list_projects, resolve_project_scope
     from .repo_context import (
         describe_repo_context_contract,
         repo_context_json_schema,
@@ -48,13 +52,16 @@ try:
     )
     from .youtube_utils import detect_url_type
 except ImportError:
-    from capture import build_capture_sources_context
+    from billing import resolve_user_entitlements
+    from capture import build_capture_sources_context, create_playlist_capture_source
+    from capture_workflows import run_capture_sync_workflow
     from config import get_free_max_active_ingestion_jobs
     from context import (
         build_agent_brief,
         build_brain_digest_export,
         build_context_bundle,
         build_library_source_graph,
+        build_project_context_map,
         build_video_knowledge_map,
         create_agent_note,
         get_video_context,
@@ -76,6 +83,7 @@ except ImportError:
         list_ingestion_jobs,
         record_ingestion_job_event,
     )
+    from projects import create_project, list_projects, resolve_project_scope
     from repo_context import (
         describe_repo_context_contract,
         repo_context_json_schema,
@@ -120,6 +128,7 @@ READ_TOOL_NAMES = {
     "export_brain_digest",
     "get_brain_sync_contract",
     "get_agent_quickstart",
+    "get_project_context_map",
     "get_library_source_graph",
     "get_video_knowledge_map",
     "get_repo_context_contract",
@@ -129,6 +138,7 @@ READ_TOOL_NAMES = {
     "get_workflow_run",
     "list_capture_sources",
     "list_context_categories",
+    "list_projects",
     "list_ingestion_jobs",
     "list_workflow_runs",
     "list_video_library",
@@ -143,6 +153,8 @@ READ_TOOL_NAMES = {
 }
 OVERLAY_WRITE_TOOL_NAMES = {"add_context_note", "upsert_personal_concept"}
 INGEST_WRITE_TOOL_NAMES = {"queue_youtube_ingestion"}
+CAPTURE_WRITE_TOOL_NAMES = {"link_youtube_playlist_capture_source", "sync_capture_source"}
+PROJECT_WRITE_TOOL_NAMES = {"create_project"}
 DB_FREE_TOOL_NAMES = {
     "get_brain_sync_contract",
     "get_agent_quickstart",
@@ -314,7 +326,8 @@ def _initialize_result(params: Any) -> dict:
             "Read source video context and transcript-derived knowledge. "
             "Write only personal overlay notes or concepts; do not mutate source context. "
             "With ingest:write, agents may queue YouTube URLs for ingestion, but indexed "
-            "source context remains read-only."
+            "source context remains read-only. With capture:write, agents may preview and "
+            "explicitly queue sync jobs for the user's linked YouTube capture sources."
         ),
     }
 
@@ -366,6 +379,10 @@ def _authorize_tool_scope(tool_name: str, scopes: list[str] | None) -> None:
         raise McpAdapterError(FORBIDDEN, "MCP token is missing the overlay:write scope")
     if tool_name in INGEST_WRITE_TOOL_NAMES and "ingest:write" not in effective_scopes:
         raise McpAdapterError(FORBIDDEN, "MCP token is missing the ingest:write scope")
+    if tool_name in CAPTURE_WRITE_TOOL_NAMES and "capture:write" not in effective_scopes:
+        raise McpAdapterError(FORBIDDEN, "MCP token is missing the capture:write scope")
+    if tool_name in PROJECT_WRITE_TOOL_NAMES and "project:write" not in effective_scopes:
+        raise McpAdapterError(FORBIDDEN, "MCP token is missing the project:write scope")
 
 
 def _authorize_context_read(scopes: list[str] | None) -> None:
@@ -439,6 +456,11 @@ def describe_brain_sync_contract() -> dict:
             ),
         },
         "currentPullSurfaces": [
+            {
+                "name": "project_scopes",
+                "use": ["list_projects", "context://projects", "get_project_context_map"],
+                "defaultGranularity": "explicit user project boundaries and scoped video maps",
+            },
             {
                 "name": "library_snapshot",
                 "use": ["list_video_library", "context://library"],
@@ -530,8 +552,9 @@ def describe_brain_sync_contract() -> dict:
         "recommendedFlow": [
             "Call get_mcp_session to confirm context:read and overlay:write scopes.",
             "Read context://brain-sync-contract or call get_brain_sync_contract.",
-            "Pull list_video_library and list_context_categories as the current library map.",
-            "Search source knowledge first with search_video_concepts retrieval_mode=hybrid.",
+            "Call list_projects and choose a project_id/project_slug when the user is working inside a specific project.",
+            "Pull get_project_context_map, list_video_library, and list_context_categories as the current map.",
+            "Search source knowledge first with search_video_concepts retrieval_mode=hybrid, scoped by project when appropriate.",
             "Call get_video_knowledge_map for candidate videos before pulling transcript clips.",
             "Use search_video_moments for timestamp evidence, and get_video_context/include_transcript only when needed.",
             "Store only compact source refs in the external brain unless the user asks for deep context.",
@@ -572,10 +595,13 @@ def _agent_quickstart_payload() -> dict:
         "coreRules": [
             "Source video context is read-only.",
             "Search is scoped to the current user's video and channel grants, not the global corpus.",
+            "Project scopes are explicit MCP arguments; do not infer them from the web UI.",
             "Search clips, library videos, and video context include accessScope/accessSource/accessReason so shared canonical videos stay explainable.",
             "Use caller-supplied repo_context from the agent's own repo tools.",
             "Existing personal brains should pull compact Memexai digests through the brain sync contract, not by reading the database.",
             "Write only personal overlay notes/concepts unless ingest:write is explicitly granted.",
+            "Use project:write only when the user asks the agent to create a project scope.",
+            "Use capture:write for already-linked playlist capture sources; preview with max_jobs=0 before queueing.",
             "Ask for explicit user approval before setting allow_bulk=true for playlists/channels.",
             "Poll ingestion jobs or workflow runs before assuming newly submitted videos are searchable.",
         ],
@@ -609,12 +635,18 @@ def _agent_quickstart_payload() -> dict:
             {
                 "step": "discover_saved_video_context",
                 "use": [
+                    "list_projects",
+                    "context://projects",
+                    "get_project_context_map",
                     "list_video_library",
                     "context://library",
                     "list_context_categories",
                     "get_brain_sync_contract",
                 ],
-                "why": "Find available videos and useful category filters.",
+                "why": (
+                    "Find explicit project scopes first, then inspect the relevant project "
+                    "or full library and useful category filters."
+                ),
             },
             {
                 "step": "sync_external_brain",
@@ -637,8 +669,9 @@ def _agent_quickstart_payload() -> dict:
                     "context://video-map/{videoId}",
                 ],
                 "why": (
-                    "Use hybrid source-knowledge search first, then inspect a candidate video's "
-                    "map so the agent can navigate report sections, concepts, and timestamp refs."
+                    "Use hybrid source-knowledge search first, scoped by project_id/project_slug "
+                    "when relevant, then inspect a candidate video's map so the agent can "
+                    "navigate report sections, concepts, and timestamp refs."
                 ),
             },
             {
@@ -669,6 +702,8 @@ def _agent_quickstart_payload() -> dict:
             ],
             "overlay:write": ["add notes", "upsert personal concepts"],
             "ingest:write": ["queue user-provided or user-approved YouTube URLs"],
+            "capture:write": ["preview and queue sync for linked YouTube capture sources"],
+            "project:write": ["create user-owned project scopes"],
         },
         "repoContextWorkflow": repo_workflow,
         "brainSyncContract": describe_brain_sync_contract(),
@@ -768,6 +803,60 @@ def _agent_quickstart_payload() -> dict:
                     },
                 },
             },
+            "previewCaptureSourceSync": {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {
+                    "name": "sync_capture_source",
+                    "arguments": {
+                        "capture_source_id": "capture_source_id",
+                        "max_jobs": 0,
+                    },
+                },
+            },
+            "queueConfirmedCaptureSourceSync": {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {
+                    "name": "sync_capture_source",
+                    "arguments": {
+                        "capture_source_id": "capture_source_id",
+                        "max_jobs": 3,
+                        "allow_queue": True,
+                        "confirmed_queue_count": 3,
+                        "created_by_client": "agent-name",
+                    },
+                },
+            },
+            "createProject": {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {
+                    "name": "create_project",
+                    "arguments": {
+                        "name": "Agent project",
+                        "description": "Project scope created from the user's agent chat.",
+                        "created_by_client": "agent-name",
+                    },
+                },
+            },
+            "linkPlaylistToProject": {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {
+                    "name": "link_youtube_playlist_capture_source",
+                    "arguments": {
+                        "playlist_url": "https://www.youtube.com/playlist?list=PLAYLIST_ID",
+                        "project_id": "project_id",
+                        "title": "Agent project inbox",
+                        "created_by_client": "agent-name",
+                    },
+                },
+            },
         },
     }
 
@@ -779,12 +868,16 @@ def _mcp_session_payload(user_id: str, scopes: list[str] | None, auth_kind: str)
     has_context = "context:read" in scope_set
     has_overlay = "overlay:write" in scope_set
     has_ingest = "ingest:write" in scope_set
+    has_capture = "capture:write" in scope_set
+    has_project_write = "project:write" in scope_set
     capabilities = [
         {
             "name": "read_saved_video_context",
             "allowed": has_context,
             "requiredScope": "context:read",
             "tools": [
+                "list_projects",
+                "get_project_context_map",
                 "list_video_library",
                 "list_context_categories",
                 "search_video_concepts",
@@ -809,6 +902,23 @@ def _mcp_session_payload(user_id: str, scopes: list[str] | None, auth_kind: str)
             "requiredScope": "ingest:write",
             "tools": ["queue_youtube_ingestion"],
             "guardrail": "Playlist and channel URLs still require allow_bulk=true.",
+        },
+        {
+            "name": "sync_linked_youtube_capture_sources",
+            "allowed": has_capture,
+            "requiredScope": "capture:write",
+            "tools": ["link_youtube_playlist_capture_source", "sync_capture_source"],
+            "guardrail": (
+                "Use max_jobs=0 to preview, then queue only with allow_queue=true and "
+                "confirmed_queue_count equal to max_jobs."
+            ),
+        },
+        {
+            "name": "create_user_projects",
+            "allowed": has_project_write,
+            "requiredScope": "project:write",
+            "tools": ["create_project"],
+            "guardrail": "Create projects only when the user asks for a new project scope.",
         },
     ]
 
@@ -841,6 +951,8 @@ def _mcp_session_payload(user_id: str, scopes: list[str] | None, auth_kind: str)
                 "get_brain_sync_contract",
                 "get_repo_context_workflow",
                 "get_repo_context_contract",
+                "list_projects",
+                "get_project_context_map",
                 "list_video_library",
                 "list_context_categories",
                 "search_video_concepts",
@@ -852,6 +964,11 @@ def _mcp_session_payload(user_id: str, scopes: list[str] | None, auth_kind: str)
         recommended_calls.append("add_context_note")
     if has_ingest:
         recommended_calls.append("queue_youtube_ingestion")
+    if has_capture:
+        recommended_calls.append("sync_capture_source")
+        recommended_calls.append("link_youtube_playlist_capture_source")
+    if has_project_write:
+        recommended_calls.append("create_project")
 
     missing_recommended_scopes = [scope for scope in DEFAULT_SCOPES if scope not in scope_set]
     return {
@@ -884,8 +1001,10 @@ def _mcp_session_payload(user_id: str, scopes: list[str] | None, auth_kind: str)
         },
         "preferredRetrievalFlow": [
             "get_mcp_session",
+            "list_projects to identify explicit project scopes",
+            "get_project_context_map when a project matches the user's task",
             "list_video_library",
-            "search_video_concepts with retrieval_mode=hybrid",
+            "search_video_concepts with retrieval_mode=hybrid and project_id/project_slug when scoped",
             "get_video_knowledge_map for candidate videos",
             "search_video_moments for timestamp evidence",
             "get_video_context/include_transcript only when needed",
@@ -893,8 +1012,11 @@ def _mcp_session_payload(user_id: str, scopes: list[str] | None, auth_kind: str)
         "guardrails": [
             "Source transcripts, chunks, source labels, source concepts, and generated artifacts are read-only.",
             "Search is scoped to the current user's user_videos and user_channels grants.",
+            "Project scope is explicit per MCP call; agents must not assume the web UI's selected project.",
             "Use accessScope, accessSource, and accessReason on search clips, library videos, and video context to explain shared canonical video access.",
             "Write durable takeaways only to the personal overlay unless the user explicitly grants ingestion.",
+            "Capture-source sync uses capture:write and returns workflow/job handles; poll those handles for confirmations and errors.",
+            "Project creation uses project:write; playlist linking uses capture:write and must target a user-owned project.",
         ],
     }
 
@@ -903,6 +1025,7 @@ def _list_resources(user_id: str, supabase: Any | None, scopes: list[str] | None
     _authorize_context_read(scopes)
     db = _ensure_supabase(supabase)
     library = list_video_library_context(db, user_id, 100)
+    projects = list_projects(db, user_id, 100)
     resources = [
         {
             "uri": "context://agent-quickstart",
@@ -958,6 +1081,15 @@ def _list_resources(user_id: str, supabase: Any | None, scopes: list[str] | None
             "mimeType": "application/json",
         },
         {
+            "uri": "context://projects",
+            "name": "video_projects",
+            "title": "Video Projects",
+            "description": (
+                "User-defined project scopes for narrowing library and agent retrieval."
+            ),
+            "mimeType": "application/json",
+        },
+        {
             "uri": "context://library-graph",
             "name": "library_source_graph",
             "title": "Library Source Graph",
@@ -996,6 +1128,20 @@ def _list_resources(user_id: str, supabase: Any | None, scopes: list[str] | None
             "mimeType": "application/json",
         },
     ]
+
+    for project in projects.get("projects", []):
+        project_id = project.get("id")
+        if not project_id:
+            continue
+        resources.append(
+            {
+                "uri": f"context://project/{project_id}",
+                "name": f"project_{project_id}",
+                "title": project.get("name") or project.get("slug") or project_id,
+                "description": ("Project-scoped saved-video map for agent retrieval and browsing."),
+                "mimeType": "application/json",
+            }
+        )
 
     for channel in library.get("channels", []):
         channel_name = channel.get("name") or "Unknown channel"
@@ -1055,6 +1201,14 @@ def _read_resource(
     db = _ensure_supabase(supabase)
     if parsed.netloc == "library" and parsed.path in {"", "/"}:
         return _resource_response(uri, list_video_library_context(db, user_id, 100))
+    if parsed.netloc == "projects" and parsed.path in {"", "/"}:
+        return _resource_response(uri, list_projects(db, user_id, 100))
+    if parsed.netloc == "project" and parsed.path.strip("/"):
+        project_id = unquote(parsed.path.strip("/"))
+        context = build_project_context_map(db, user_id, project_id=project_id)
+        if not context.get("found"):
+            raise McpAdapterError(INVALID_PARAMS, "Project resource not found")
+        return _resource_response(uri, context)
     if parsed.netloc == "library-graph" and parsed.path in {"", "/"}:
         return _resource_response(uri, build_library_source_graph(db, user_id, 50))
     if parsed.netloc == "brain-digest" and parsed.path in {"", "/"}:
@@ -1105,6 +1259,8 @@ def _get_video_context_tool(
             "detail_level",
             "max_chars",
             "max_context_tokens",
+            "project_id",
+            "project_slug",
         },
     )
     video_id = arguments.get("youtube_video_id") or arguments.get("video_id")
@@ -1114,8 +1270,19 @@ def _get_video_context_tool(
     if not isinstance(include_transcript, bool):
         raise McpAdapterError(INVALID_PARAMS, "include_transcript must be a boolean")
     budget = _budget_args(arguments)
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
 
-    context = get_video_context(supabase, user_id, video_id.strip())
+    if project_id or project_slug:
+        context = get_video_context(
+            supabase,
+            user_id,
+            video_id.strip(),
+            project_id=project_id,
+            project_slug=project_slug,
+        )
+    else:
+        context = get_video_context(supabase, user_id, video_id.strip())
     if not context:
         return _tool_response({"found": False, "videoId": video_id.strip()})
     return _tool_response(
@@ -1127,9 +1294,72 @@ def _list_video_library_tool(
     supabase: Any, user_id: str, arguments: dict, tool_context: dict
 ) -> dict:
     del tool_context
+    _ensure_allowed_args(arguments, {"limit", "project_id", "project_slug"})
+    limit = _bounded_int(arguments.get("limit", 50), minimum=1, maximum=100, name="limit")
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
+    if project_id or project_slug:
+        return _tool_response(
+            list_video_library_context(
+                supabase,
+                user_id,
+                limit,
+                project_id=project_id,
+                project_slug=project_slug,
+            )
+        )
+    return _tool_response(list_video_library_context(supabase, user_id, limit))
+
+
+def _list_projects_tool(supabase: Any, user_id: str, arguments: dict, tool_context: dict) -> dict:
+    del tool_context
     _ensure_allowed_args(arguments, {"limit"})
     limit = _bounded_int(arguments.get("limit", 50), minimum=1, maximum=100, name="limit")
-    return _tool_response(list_video_library_context(supabase, user_id, limit))
+    payload = list_projects(supabase, user_id, limit)
+    payload["guidance"] = (
+        "Projects are explicit retrieval scopes. Choose a project_id or project_slug for "
+        "search_video_concepts, get_project_context_map, list_video_library, "
+        "get_video_knowledge_map, and transcript searches when the user is working in a "
+        "specific project. If no project is clearly relevant, search the full library and "
+        "state that you broadened scope."
+    )
+    return _tool_response(payload)
+
+
+def _get_project_context_map_tool(
+    supabase: Any, user_id: str, arguments: dict, tool_context: dict
+) -> dict:
+    del tool_context
+    _ensure_allowed_args(
+        arguments,
+        {
+            "project_id",
+            "project_slug",
+            "limit",
+            "detail_level",
+            "max_chars",
+            "max_context_tokens",
+            "project_id",
+            "project_slug",
+        },
+    )
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
+    if not (project_id or project_slug):
+        raise McpAdapterError(INVALID_PARAMS, "project_id or project_slug is required")
+    limit = _bounded_int(arguments.get("limit", 25), minimum=1, maximum=100, name="limit")
+    budget = _budget_args(arguments)
+    payload = build_project_context_map(
+        supabase,
+        user_id,
+        project_id=project_id,
+        project_slug=project_slug,
+        limit=limit,
+        detail_level=budget["detailLevel"],
+        max_chars=budget["requestedMaxChars"],
+        max_context_tokens=budget["maxContextTokens"],
+    )
+    return _tool_response(payload)
 
 
 def _get_library_source_graph_tool(
@@ -1138,11 +1368,29 @@ def _get_library_source_graph_tool(
     del tool_context
     _ensure_allowed_args(
         arguments,
-        {"limit", "detail_level", "max_chars", "max_context_tokens"},
+        {
+            "limit",
+            "detail_level",
+            "max_chars",
+            "max_context_tokens",
+            "project_id",
+            "project_slug",
+        },
     )
     limit = _bounded_int(arguments.get("limit", 50), minimum=1, maximum=100, name="limit")
     budget = _budget_args(arguments)
-    payload = build_library_source_graph(supabase, user_id, limit)
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
+    if project_id or project_slug:
+        payload = build_library_source_graph(
+            supabase,
+            user_id,
+            limit,
+            project_id=project_id,
+            project_slug=project_slug,
+        )
+    else:
+        payload = build_library_source_graph(supabase, user_id, limit)
     return _tool_response(_apply_response_budget(payload, budget))
 
 
@@ -1159,6 +1407,8 @@ def _search_library_components_tool(
             "detail_level",
             "max_chars",
             "max_context_tokens",
+            "project_id",
+            "project_slug",
         },
     )
     query = _required_string(arguments, "query").strip()
@@ -1172,7 +1422,20 @@ def _search_library_components_tool(
             raise McpAdapterError(INVALID_PARAMS, "component_types must be an array of strings")
     limit = _bounded_int(arguments.get("limit", 20), minimum=1, maximum=50, name="limit")
     budget = _budget_args(arguments)
-    payload = search_library_components(supabase, user_id, query, limit, component_types)
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
+    if project_id or project_slug:
+        payload = search_library_components(
+            supabase,
+            user_id,
+            query,
+            limit,
+            component_types,
+            project_id=project_id,
+            project_slug=project_slug,
+        )
+    else:
+        payload = search_library_components(supabase, user_id, query, limit, component_types)
     return _tool_response(_apply_retrieval_budget(payload, "results", budget))
 
 
@@ -1189,8 +1452,20 @@ def _list_context_categories_tool(
     supabase: Any, user_id: str, arguments: dict, tool_context: dict
 ) -> dict:
     del tool_context
-    _ensure_allowed_args(arguments, {"limit"})
+    _ensure_allowed_args(arguments, {"limit", "project_id", "project_slug"})
     limit = _bounded_int(arguments.get("limit", 100), minimum=1, maximum=200, name="limit")
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
+    if project_id or project_slug:
+        return _tool_response(
+            list_context_categories(
+                supabase,
+                user_id,
+                limit,
+                project_id=project_id,
+                project_slug=project_slug,
+            )
+        )
     return _tool_response(list_context_categories(supabase, user_id, limit))
 
 
@@ -1200,7 +1475,19 @@ def _list_ingestion_jobs_tool(
     del tool_context
     _ensure_allowed_args(arguments, {"limit"})
     limit = _bounded_int(arguments.get("limit", 10), minimum=1, maximum=50, name="limit")
-    return _tool_response({"jobs": list_ingestion_jobs(supabase, user_id, limit)})
+    jobs = list_ingestion_jobs(supabase, user_id, limit)
+    return _tool_response(
+        {
+            "jobs": [_compact_ingestion_job(job) for job in jobs if isinstance(job, dict)],
+            "returnedJobs": len(jobs),
+            "detailTool": "get_ingestion_job",
+            "guidance": (
+                "This list is compact by default. Use get_ingestion_job with a specific "
+                "job_id to inspect ingestion_job_events, full cost estimates, warnings, "
+                "and failure details."
+            ),
+        }
+    )
 
 
 def _get_ingestion_job_tool(
@@ -1283,6 +1570,8 @@ def _export_brain_digest_tool(
             "detail_level",
             "max_chars",
             "max_context_tokens",
+            "project_id",
+            "project_slug",
         },
     )
     cursor = _optional_string(arguments, "cursor")
@@ -1394,6 +1683,292 @@ def _upsert_personal_concept_tool(
     return _tool_response({"concept": concept})
 
 
+def _plan_limit_snapshot(supabase: Any, user_id: str) -> dict:
+    try:
+        billing = resolve_user_entitlements(supabase, user_id)
+        entitlements = billing.get("entitlements") if isinstance(billing, dict) else {}
+    except Exception:
+        entitlements = {}
+
+    def as_int(key: str, fallback: int) -> int:
+        try:
+            value = int((entitlements or {}).get(key, fallback))
+        except (TypeError, ValueError):
+            value = fallback
+        return max(1, value)
+
+    return {
+        "planKey": (entitlements or {}).get("planKey", "free"),
+        "billingStatus": (entitlements or {}).get("billingStatus", "free"),
+        "maxActiveIngestionJobs": as_int(
+            "maxActiveIngestionJobs",
+            get_free_max_active_ingestion_jobs(),
+        ),
+        "maxImportVideos": as_int("maxImportVideos", 1),
+    }
+
+
+def _require_available_ingestion_slot(supabase: Any, user_id: str) -> dict:
+    limits = _plan_limit_snapshot(supabase, user_id)
+    active_jobs = count_active_ingestion_jobs(supabase, user_id)
+    limits["activeIngestionJobs"] = active_jobs
+    if active_jobs >= limits["maxActiveIngestionJobs"]:
+        raise McpAdapterError(
+            SERVER_ERROR,
+            (
+                "This user already has the maximum number of imports running for their plan. "
+                "Poll existing ingestion jobs and try again after one finishes."
+            ),
+        )
+    return limits
+
+
+def _resolve_agent_project_target(
+    supabase: Any,
+    user_id: str,
+    *,
+    project_id: str | None,
+    project_slug: str | None,
+    source_type: str,
+) -> dict | None:
+    if not project_id and not project_slug:
+        return None
+    if source_type != "video":
+        raise McpAdapterError(
+            INVALID_PARAMS,
+            (
+                "project_id/project_slug is only supported for single-video URL ingestion. "
+                "For project-linked playlists, use list_capture_sources then sync_capture_source."
+            ),
+        )
+    try:
+        project_scope = resolve_project_scope(
+            supabase,
+            user_id,
+            project_id=project_id,
+            project_slug=project_slug,
+        )
+    except ValueError as exc:
+        raise McpAdapterError(INVALID_PARAMS, str(exc)) from exc
+    if not project_scope:
+        raise McpAdapterError(INVALID_PARAMS, "Project not found")
+    return {
+        "id": project_scope.get("id"),
+        "name": project_scope.get("name"),
+        "slug": project_scope.get("slug"),
+    }
+
+
+def _ingestion_polling_payload(
+    job: dict | None = None, workflow_instance_id: str | None = None
+) -> dict:
+    job_ids = []
+    if isinstance(job, dict) and job.get("id"):
+        job_ids.append(job.get("id"))
+    return {
+        "mode": "poll",
+        "jobStatusTool": "get_ingestion_job",
+        "workflowStatusTool": "get_workflow_run",
+        "workflow_instance_id": workflow_instance_id,
+        "job_ids": job_ids,
+        "errorSurface": "get_ingestion_job returns ingestion_job_events with warning/error rows",
+        "confirmationSurface": (
+            "A completed ingestion job confirms searchable video context. A failed or partial "
+            "job explains errors in ingestion_job_events."
+        ),
+    }
+
+
+def _compact_queued_jobs(jobs: list[dict]) -> list[dict]:
+    compact = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        compact.append(
+            {
+                "id": job.get("id"),
+                "status": job.get("status"),
+                "sourceUrl": job.get("source_url"),
+                "sourceType": job.get("source_type"),
+            }
+        )
+    return compact
+
+
+def _compact_ingestion_job(job: dict) -> dict:
+    cost_estimate = job.get("cost_estimate") if isinstance(job.get("cost_estimate"), dict) else {}
+    mcp_context = cost_estimate.get("mcp") if isinstance(cost_estimate, dict) else {}
+    project_target = mcp_context.get("requestedProject") if isinstance(mcp_context, dict) else None
+    return {
+        "id": job.get("id"),
+        "status": job.get("status"),
+        "sourceUrl": job.get("source_url"),
+        "sourceType": job.get("source_type"),
+        "requestedVideoCount": job.get("requested_video_count"),
+        "indexedVideoCount": job.get("indexed_video_count"),
+        "skippedVideoCount": job.get("skipped_video_count"),
+        "failedVideoCount": job.get("failed_video_count"),
+        "lastMessage": job.get("last_message"),
+        "error": job.get("error"),
+        "createdAt": job.get("created_at"),
+        "startedAt": job.get("started_at"),
+        "completedAt": job.get("completed_at"),
+        "digestDepth": cost_estimate.get("digestDepth"),
+        "projectTarget": project_target,
+    }
+
+
+def _metadata_argument(arguments: dict) -> dict:
+    metadata = arguments.get("metadata", {})
+    if metadata is None:
+        return {}
+    if not isinstance(metadata, dict):
+        raise McpAdapterError(INVALID_PARAMS, "metadata must be an object")
+    return metadata
+
+
+def _create_project_tool(supabase: Any, user_id: str, arguments: dict, tool_context: dict) -> dict:
+    del tool_context
+    _ensure_allowed_args(arguments, {"name", "description", "metadata", "created_by_client"})
+    name = _required_string(arguments, "name").strip()
+    if not name:
+        raise McpAdapterError(INVALID_PARAMS, "name cannot be empty")
+
+    description = (_optional_string(arguments, "description") or "").strip()
+    created_by_client = _optional_string(arguments, "created_by_client") or "mcp"
+    metadata = {
+        **_metadata_argument(arguments),
+        "mcp": {
+            "createdBy": "agent",
+            "createdByClient": created_by_client,
+        },
+    }
+    try:
+        project = create_project(
+            supabase,
+            user_id,
+            name,
+            description,
+            metadata,
+        )
+    except ValueError as exc:
+        raise McpAdapterError(INVALID_PARAMS, str(exc)) from exc
+
+    return _tool_response(
+        {
+            "project": project,
+            "guidance": (
+                "Project created for this authenticated user. Use project.id or "
+                "project.slug in scoped retrieval calls, queue_youtube_ingestion for "
+                "single-video project imports, or link_youtube_playlist_capture_source "
+                "to attach a standing YouTube playlist to the project."
+            ),
+            "nextMcpCalls": [
+                {
+                    "name": "link_youtube_playlist_capture_source",
+                    "requiresScope": "capture:write",
+                    "argumentsTemplate": {
+                        "playlist_url": "https://www.youtube.com/playlist?list=PLAYLIST_ID",
+                        "project_id": project.get("id"),
+                    },
+                },
+                {
+                    "name": "get_project_context_map",
+                    "requiresScope": "context:read",
+                    "argumentsTemplate": {"project_id": project.get("id")},
+                },
+            ],
+        }
+    )
+
+
+def _link_youtube_playlist_capture_source_tool(
+    supabase: Any, user_id: str, arguments: dict, tool_context: dict
+) -> dict:
+    del tool_context
+    _ensure_allowed_args(
+        arguments,
+        {
+            "playlist_url",
+            "title",
+            "project_id",
+            "project_slug",
+            "created_by_client",
+        },
+    )
+    playlist_url = _required_string(arguments, "playlist_url").strip()
+    if not playlist_url:
+        raise McpAdapterError(INVALID_PARAMS, "playlist_url cannot be empty")
+    source_type, playlist_id = detect_url_type(playlist_url)
+    if source_type != "playlist" or not playlist_id:
+        raise McpAdapterError(INVALID_PARAMS, "playlist_url must be a valid YouTube playlist URL")
+
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
+    if not project_id and not project_slug:
+        raise McpAdapterError(
+            INVALID_PARAMS,
+            "project_id or project_slug is required so the playlist is attached to a project.",
+        )
+    try:
+        project_scope = resolve_project_scope(
+            supabase,
+            user_id,
+            project_id=project_id,
+            project_slug=project_slug,
+        )
+    except ValueError as exc:
+        raise McpAdapterError(INVALID_PARAMS, str(exc)) from exc
+    if not project_scope:
+        raise McpAdapterError(INVALID_PARAMS, "Project not found")
+
+    client = _optional_string(arguments, "created_by_client") or "mcp"
+    try:
+        source = create_playlist_capture_source(
+            supabase,
+            user_id,
+            playlist_url,
+            _optional_string(arguments, "title") or "",
+            project_scope["id"],
+            "agent",
+            client,
+        )
+    except ValueError as exc:
+        raise McpAdapterError(INVALID_PARAMS, str(exc)) from exc
+
+    return _tool_response(
+        {
+            "captureSource": source,
+            "projectTarget": {
+                "id": project_scope.get("id"),
+                "name": project_scope.get("name"),
+                "slug": project_scope.get("slug"),
+            },
+            "playlist": {"playlistId": playlist_id, "url": playlist_url},
+            "guidance": (
+                "Playlist capture source linked to the project. Call sync_capture_source "
+                "with max_jobs=0 to preview pending videos, then queue only after explicit "
+                "confirmation with allow_queue=true and confirmed_queue_count."
+            ),
+            "nextMcpCalls": [
+                {
+                    "name": "sync_capture_source",
+                    "requiresScope": "capture:write",
+                    "argumentsTemplate": {
+                        "capture_source_id": source.get("id"),
+                        "max_jobs": 0,
+                    },
+                },
+                {
+                    "name": "list_capture_sources",
+                    "requiresScope": "context:read",
+                    "argumentsTemplate": {},
+                },
+            ],
+        }
+    )
+
+
 def _build_context_bundle_tool(
     supabase: Any, user_id: str, arguments: dict, tool_context: dict
 ) -> dict:
@@ -1431,7 +2006,6 @@ def _build_context_bundle_tool(
 def _build_agent_brief_tool(
     supabase: Any, user_id: str, arguments: dict, tool_context: dict
 ) -> dict:
-    del tool_context
     _ensure_allowed_args(
         arguments,
         {
@@ -1457,7 +2031,16 @@ def _build_agent_brief_tool(
 
     limit = _bounded_int(arguments.get("limit", 8), minimum=1, maximum=20, name="limit")
     budget = _budget_args(arguments)
-    payload = build_agent_brief(supabase, user_id, query, repo_context, limit, category_filters)
+    payload = build_agent_brief(
+        supabase,
+        user_id,
+        query,
+        repo_context,
+        limit,
+        category_filters,
+        embedding_provider=tool_context.get("embed_source_query"),
+        retrieval_mode="hybrid",
+    )
     payload["detailLevel"] = budget["detailLevel"]
     return _tool_response(_apply_response_budget(payload, budget))
 
@@ -1465,7 +2048,17 @@ def _build_agent_brief_tool(
 def _queue_youtube_ingestion_tool(
     supabase: Any, user_id: str, arguments: dict, tool_context: dict
 ) -> dict:
-    _ensure_allowed_args(arguments, {"url", "allow_bulk", "created_by_client", "digest_depth"})
+    _ensure_allowed_args(
+        arguments,
+        {
+            "url",
+            "allow_bulk",
+            "created_by_client",
+            "digest_depth",
+            "project_id",
+            "project_slug",
+        },
+    )
     url = _required_string(arguments, "url").strip()
     if not url:
         raise McpAdapterError(INVALID_PARAMS, "url cannot be empty")
@@ -1482,12 +2075,14 @@ def _queue_youtube_ingestion_tool(
             "playlist and channel ingestion require allow_bulk=true after explicit user approval",
         )
 
-    active_jobs = count_active_ingestion_jobs(supabase, user_id)
-    if active_jobs >= get_free_max_active_ingestion_jobs():
-        raise McpAdapterError(
-            SERVER_ERROR,
-            "This user already has an active ingestion job. Try again after it finishes.",
-        )
+    project_target = _resolve_agent_project_target(
+        supabase,
+        user_id,
+        project_id=_optional_string(arguments, "project_id"),
+        project_slug=_optional_string(arguments, "project_slug"),
+        source_type=source_type,
+    )
+    limits = _require_available_ingestion_slot(supabase, user_id)
 
     digest_depth = normalize_digest_depth(arguments.get("digest_depth", DEFAULT_DIGEST_DEPTH))
     cost_estimate = build_ingestion_cost_estimate(
@@ -1497,10 +2092,18 @@ def _queue_youtube_ingestion_tool(
         source_type,
         digest_depth=digest_depth,
     )
+    client = _optional_string(arguments, "created_by_client") or "mcp"
+    cost_estimate = {
+        **cost_estimate,
+        "mcp": {
+            "createdBy": "agent",
+            "createdByClient": client,
+            "requestedProject": project_target,
+        },
+    }
     job = create_ingestion_job(supabase, user_id, url, source_type, cost_estimate)
     job_id = job.get("id")
     if job_id:
-        client = _optional_string(arguments, "created_by_client") or "mcp"
         record_ingestion_job_event(
             supabase,
             job_id,
@@ -1518,11 +2121,137 @@ def _queue_youtube_ingestion_tool(
             "extractedId": extracted_id,
             "digestDepth": digest_depth,
             "costEstimate": job.get("cost_estimate") or cost_estimate,
+            "limits": limits,
+            "projectTarget": project_target,
+            "notifications": _ingestion_polling_payload(job),
             "guidance": (
                 "The URL has been queued for the user's hosted ingestion pipeline. "
                 "Use list_video_library or context://library after the job completes; "
                 "source transcript and generated knowledge remain read-only over MCP. "
-                "Inspect costEstimate and digestDepth before approving more bulk submissions."
+                "Inspect costEstimate, limits, and digestDepth before approving more bulk "
+                "submissions. If projectTarget is set, a successful single-video job will be "
+                "attached to that project after ingestion finishes."
+            ),
+        }
+    )
+
+
+def _sync_capture_source_tool(
+    supabase: Any, user_id: str, arguments: dict, tool_context: dict
+) -> dict:
+    _ensure_allowed_args(
+        arguments,
+        {
+            "capture_source_id",
+            "max_jobs",
+            "allow_queue",
+            "confirmed_queue_count",
+            "created_by_client",
+        },
+    )
+    capture_source_id = _required_string(arguments, "capture_source_id").strip()
+    if not capture_source_id:
+        raise McpAdapterError(INVALID_PARAMS, "capture_source_id cannot be empty")
+
+    max_jobs = _bounded_int(arguments.get("max_jobs", 0), minimum=0, maximum=100, name="max_jobs")
+    allow_queue = arguments.get("allow_queue", False)
+    if not isinstance(allow_queue, bool):
+        raise McpAdapterError(INVALID_PARAMS, "allow_queue must be a boolean")
+
+    confirmed_queue_count = arguments.get("confirmed_queue_count")
+    if confirmed_queue_count is not None:
+        confirmed_queue_count = _bounded_int(
+            confirmed_queue_count,
+            minimum=0,
+            maximum=100,
+            name="confirmed_queue_count",
+        )
+
+    limits = _plan_limit_snapshot(supabase, user_id)
+    limits["activeIngestionJobs"] = count_active_ingestion_jobs(supabase, user_id)
+    if max_jobs > limits["maxImportVideos"]:
+        raise McpAdapterError(
+            INVALID_PARAMS,
+            (
+                f"max_jobs exceeds this user's plan import limit of "
+                f"{limits['maxImportVideos']} videos per request"
+            ),
+        )
+    if max_jobs > 0:
+        if allow_queue is not True:
+            raise McpAdapterError(
+                INVALID_PARAMS,
+                "Queueing capture-source ingestion jobs requires allow_queue=true.",
+            )
+        if confirmed_queue_count != max_jobs:
+            raise McpAdapterError(
+                INVALID_PARAMS,
+                "confirmed_queue_count must equal max_jobs after the agent shows the user a preview.",
+            )
+        if limits["activeIngestionJobs"] >= limits["maxActiveIngestionJobs"]:
+            raise McpAdapterError(
+                SERVER_ERROR,
+                (
+                    "This user already has the maximum number of imports running for their plan. "
+                    "Poll existing ingestion jobs and try again after one finishes."
+                ),
+            )
+
+    queued_capture_sync_jobs = tool_context.get("queued_capture_sync_jobs")
+
+    def defer_dispatch(job: dict) -> dict:
+        if isinstance(queued_capture_sync_jobs, list):
+            queued_capture_sync_jobs.append(job)
+        return {
+            "status": "scheduled_after_mcp_response",
+            "source": "mcp-capture-sync",
+        }
+
+    client = _optional_string(arguments, "created_by_client") or "mcp"
+    try:
+        sync_result = run_capture_sync_workflow(
+            supabase,
+            user_id,
+            capture_source_id,
+            max_jobs,
+            dispatch_job=defer_dispatch,
+            trigger="mcp.capture.sync",
+            created_by="agent",
+            created_by_client=client,
+        )
+    except ValueError as exc:
+        raise McpAdapterError(INVALID_PARAMS, str(exc)) from exc
+
+    queued_jobs = sync_result.get("queuedJobs", [])
+    workflow_instance_id = sync_result.get("workflow_instance_id")
+    return _tool_response(
+        {
+            "mode": "queued" if max_jobs > 0 else "preview",
+            "captureSource": sync_result.get("captureSource"),
+            "workflowInstance": sync_result.get("workflowInstance"),
+            "workflow_instance_id": workflow_instance_id,
+            "counts": {
+                "discoveredCount": sync_result.get("discoveredCount", 0),
+                "newItemCount": sync_result.get("newItemCount", 0),
+                "queueCandidateCount": sync_result.get("queueCandidateCount", 0),
+                "queuedJobCount": sync_result.get("queuedJobCount", 0),
+                "requestedJobCount": sync_result.get("requestedJobCount", max_jobs),
+                "remainingQueueCount": sync_result.get("remainingQueueCount", 0),
+                "skippedExistingCount": sync_result.get("skippedExistingCount", 0),
+            },
+            "costEstimate": sync_result.get("costEstimate"),
+            "limits": limits,
+            "queuedJobs": _compact_queued_jobs(queued_jobs),
+            "dispatchResults": sync_result.get("dispatchResults", []),
+            "notifications": {
+                **_ingestion_polling_payload(None, workflow_instance_id),
+                "job_ids": [job.get("id") for job in queued_jobs if isinstance(job, dict)],
+            },
+            "guidance": (
+                "Use max_jobs=0 first to preview queueCandidateCount. Queueing requires "
+                "allow_queue=true and confirmed_queue_count equal to max_jobs. Poll "
+                "get_workflow_run for sync status and get_ingestion_job for per-video "
+                "errors or confirmations."
             ),
         }
     )
@@ -1541,6 +2270,8 @@ def _search_video_concepts_tool(
             "detail_level",
             "max_chars",
             "max_context_tokens",
+            "project_id",
+            "project_slug",
         },
     )
     query = _required_string(arguments, "query").strip()
@@ -1553,18 +2284,36 @@ def _search_video_concepts_tool(
     limit = _bounded_int(arguments.get("limit", 8), minimum=1, maximum=20, name="limit")
     budget = _budget_args(arguments)
     retrieval_mode = _source_knowledge_retrieval_mode(arguments)
-    payload = search_source_knowledge(
-        supabase,
-        user_id,
-        query,
-        limit,
-        category_filters,
-        budget["detailLevel"],
-        budget["requestedMaxChars"],
-        budget["maxContextTokens"],
-        retrieval_mode=retrieval_mode,
-        embedding_provider=tool_context.get("embed_source_query"),
-    )
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
+    if project_id or project_slug:
+        payload = search_source_knowledge(
+            supabase,
+            user_id,
+            query,
+            limit,
+            category_filters,
+            budget["detailLevel"],
+            budget["requestedMaxChars"],
+            budget["maxContextTokens"],
+            retrieval_mode=retrieval_mode,
+            embedding_provider=tool_context.get("embed_source_query"),
+            project_id=project_id,
+            project_slug=project_slug,
+        )
+    else:
+        payload = search_source_knowledge(
+            supabase,
+            user_id,
+            query,
+            limit,
+            category_filters,
+            budget["detailLevel"],
+            budget["requestedMaxChars"],
+            budget["maxContextTokens"],
+            retrieval_mode=retrieval_mode,
+            embedding_provider=tool_context.get("embed_source_query"),
+        )
     return _tool_response(payload)
 
 
@@ -1580,20 +2329,36 @@ def _get_video_knowledge_map_tool(
             "detail_level",
             "max_chars",
             "max_context_tokens",
+            "project_id",
+            "project_slug",
         },
     )
     video_id = arguments.get("youtube_video_id") or arguments.get("video_id")
     if not isinstance(video_id, str) or not video_id.strip():
         raise McpAdapterError(INVALID_PARAMS, "youtube_video_id is required")
     budget = _budget_args(arguments)
-    payload = build_video_knowledge_map(
-        supabase,
-        user_id,
-        video_id.strip(),
-        detail_level=budget["detailLevel"],
-        max_chars=budget["requestedMaxChars"],
-        max_context_tokens=budget["maxContextTokens"],
-    )
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
+    if project_id or project_slug:
+        payload = build_video_knowledge_map(
+            supabase,
+            user_id,
+            video_id.strip(),
+            detail_level=budget["detailLevel"],
+            max_chars=budget["requestedMaxChars"],
+            max_context_tokens=budget["maxContextTokens"],
+            project_id=project_id,
+            project_slug=project_slug,
+        )
+    else:
+        payload = build_video_knowledge_map(
+            supabase,
+            user_id,
+            video_id.strip(),
+            detail_level=budget["detailLevel"],
+            max_chars=budget["requestedMaxChars"],
+            max_context_tokens=budget["maxContextTokens"],
+        )
     return _tool_response(payload)
 
 
@@ -1611,6 +2376,8 @@ def _search_transcript_text_tool(
             "detail_level",
             "max_chars",
             "max_context_tokens",
+            "project_id",
+            "project_slug",
         },
     )
     query = _required_string(arguments, "query").strip()
@@ -1633,8 +2400,13 @@ def _search_transcript_text_tool(
     if not callable(search_runner):
         raise McpAdapterError(SERVER_ERROR, "Keyword transcript search is not configured")
 
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
     try:
-        result = search_runner(query, limit, category_filters)
+        if project_id or project_slug:
+            result = search_runner(query, limit, category_filters, project_id, project_slug)
+        else:
+            result = search_runner(query, limit, category_filters)
     except ValueError as exc:
         raise McpAdapterError(SERVER_ERROR, str(exc)) from exc
 
@@ -1643,6 +2415,7 @@ def _search_transcript_text_tool(
         "retrievalMode": result.get("retrievalMode", "keyword"),
         "detailLevel": budget["detailLevel"],
         "categoryFilters": result.get("categoryFilters", category_filters or {}),
+        "projectScope": result.get("projectScope"),
         "relevantClips": [
             _budget_clip({**clip, "matchType": clip.get("matchType", "transcript_keyword")}, budget)
             for clip in result.get("relevantClips", [])
@@ -1686,6 +2459,8 @@ def _search_video_moments_tool(
             "detail_level",
             "max_chars",
             "max_context_tokens",
+            "project_id",
+            "project_slug",
         },
     )
     query = _required_string(arguments, "query").strip()
@@ -1702,8 +2477,20 @@ def _search_video_moments_tool(
     if not callable(search_runner):
         raise McpAdapterError(SERVER_ERROR, "Semantic moment search is not configured")
 
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
     try:
-        result = search_runner(query, limit, category_filters, retrieval_mode)
+        if project_id or project_slug:
+            result = search_runner(
+                query,
+                limit,
+                category_filters,
+                retrieval_mode,
+                project_id,
+                project_slug,
+            )
+        else:
+            result = search_runner(query, limit, category_filters, retrieval_mode)
     except ValueError as exc:
         raise McpAdapterError(SERVER_ERROR, str(exc)) from exc
 
@@ -1713,6 +2500,7 @@ def _search_video_moments_tool(
         "retrievalMode": result.get("retrievalMode", retrieval_mode),
         "detailLevel": budget["detailLevel"],
         "categoryFilters": result.get("categoryFilters", category_filters or {}),
+        "projectScope": result.get("projectScope"),
         "answer": answer,
         "relevantClips": [
             _budget_clip(
@@ -1980,6 +2768,20 @@ BUDGET_TOOL_PROPERTIES = {
     },
 }
 
+PROJECT_SCOPE_TOOL_PROPERTIES = {
+    "project_id": {
+        "type": "string",
+        "description": (
+            "Optional user project ID to scope search/context. Agents should choose this "
+            "explicitly after list_projects instead of assuming the web UI's current filter."
+        ),
+    },
+    "project_slug": {
+        "type": "string",
+        "description": "Optional user project slug to scope search/context.",
+    },
+}
+
 
 def _budget_args(arguments: dict) -> dict:
     raw_detail = arguments.get("detail_level", "compact")
@@ -2174,6 +2976,54 @@ TOOLS = [
                     "default": 50,
                     "description": "Maximum number of recent videos to return across channels.",
                 },
+                **PROJECT_SCOPE_TOOL_PROPERTIES,
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "list_projects",
+        "title": "List Projects",
+        "description": (
+            "List user-created project scopes. Agents should call this before scoped "
+            "retrieval, then pass project_id or project_slug explicitly to search and "
+            "context tools when the user is working inside a project."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 50,
+                },
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "get_project_context_map",
+        "title": "Get Project Context Map",
+        "description": (
+            "Return a compact navigable map for one project: videos, component counts, "
+            "top categories, capture-source links, suggested follow-up queries, and "
+            "next MCP calls. Use this after list_projects and before broad library search."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                **PROJECT_SCOPE_TOOL_PROPERTIES,
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 25,
+                    "description": "Maximum scoped videos to include in the map.",
+                },
+                **BUDGET_TOOL_PROPERTIES,
             },
             "additionalProperties": False,
         },
@@ -2197,6 +3047,7 @@ TOOLS = [
                     "default": 50,
                     "description": "Maximum user-visible videos to include before graph sampling.",
                 },
+                **PROJECT_SCOPE_TOOL_PROPERTIES,
                 **BUDGET_TOOL_PROPERTIES,
             },
             "additionalProperties": False,
@@ -2241,6 +3092,7 @@ TOOLS = [
                     },
                     "description": "Optional component kinds to search.",
                 },
+                **PROJECT_SCOPE_TOOL_PROPERTIES,
                 **BUDGET_TOOL_PROPERTIES,
             },
             "required": ["query"],
@@ -2372,6 +3224,7 @@ TOOLS = [
                         "vector search only; keyword avoids embedding spend."
                     ),
                 },
+                **PROJECT_SCOPE_TOOL_PROPERTIES,
                 **BUDGET_TOOL_PROPERTIES,
             },
             "required": ["query"],
@@ -2422,6 +3275,7 @@ TOOLS = [
                         "embedding calls."
                     ),
                 },
+                **PROJECT_SCOPE_TOOL_PROPERTIES,
                 **BUDGET_TOOL_PROPERTIES,
             },
             "required": ["query"],
@@ -2449,6 +3303,7 @@ TOOLS = [
                     "type": "string",
                     "description": "Alias for youtube_video_id.",
                 },
+                **PROJECT_SCOPE_TOOL_PROPERTIES,
                 **BUDGET_TOOL_PROPERTIES,
             },
             "additionalProperties": False,
@@ -2490,6 +3345,16 @@ TOOLS = [
                     "maximum": 20,
                     "default": 5,
                 },
+                "retrieval_mode": {
+                    "type": "string",
+                    "enum": ["hybrid", "semantic", "keyword"],
+                    "default": "hybrid",
+                    "description": (
+                        "hybrid fuses vector and keyword/title candidates; semantic uses "
+                        "vector search only; keyword avoids embedding spend."
+                    ),
+                },
+                **PROJECT_SCOPE_TOOL_PROPERTIES,
                 **BUDGET_TOOL_PROPERTIES,
             },
             "required": ["query"],
@@ -2514,6 +3379,7 @@ TOOLS = [
                     "default": 100,
                     "description": "Maximum number of categories to return.",
                 },
+                **PROJECT_SCOPE_TOOL_PROPERTIES,
             },
             "additionalProperties": False,
         },
@@ -2523,8 +3389,9 @@ TOOLS = [
         "name": "list_ingestion_jobs",
         "title": "List Ingestion Jobs",
         "description": (
-            "List recent hosted ingestion jobs for the current user so agents can check "
-            "whether submitted YouTube links have been indexed."
+            "List recent hosted ingestion jobs for the current user in compact form so "
+            "agents can check whether submitted YouTube links have been indexed. Use "
+            "get_ingestion_job for full events and detailed diagnostics."
         ),
         "inputSchema": {
             "type": "object",
@@ -2706,6 +3573,7 @@ TOOLS = [
                         "Set true only for deeper source inspection."
                     ),
                 },
+                **PROJECT_SCOPE_TOOL_PROPERTIES,
                 **BUDGET_TOOL_PROPERTIES,
             },
             "additionalProperties": False,
@@ -2867,6 +3735,136 @@ TOOLS = [
         "annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
     },
     {
+        "name": "create_project",
+        "title": "Create Project",
+        "description": (
+            "Create a user-owned Memexai project scope that can group saved videos, "
+            "playlist capture sources, and project-scoped retrieval. Requires project:write."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Human-readable project name requested by the user.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional short project description.",
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Optional structured project metadata.",
+                    "additionalProperties": True,
+                },
+                "created_by_client": {
+                    "type": "string",
+                    "description": "Optional agent/client name recorded in project metadata.",
+                },
+            },
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "openWorldHint": False,
+        },
+    },
+    {
+        "name": "link_youtube_playlist_capture_source",
+        "title": "Link YouTube Playlist To Project",
+        "description": (
+            "Create a YouTube playlist capture source and attach it to an existing "
+            "user-owned project. Requires capture:write."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "playlist_url": {
+                    "type": "string",
+                    "description": "YouTube playlist URL to use as a standing capture source.",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Optional display title for the capture source.",
+                },
+                "project_id": {
+                    "type": "string",
+                    "description": "Project id returned by list_projects or create_project.",
+                },
+                "project_slug": {
+                    "type": "string",
+                    "description": "Project slug returned by list_projects or create_project.",
+                },
+                "created_by_client": {
+                    "type": "string",
+                    "description": "Optional agent/client name recorded on the capture source.",
+                },
+            },
+            "required": ["playlist_url"],
+            "anyOf": [{"required": ["project_id"]}, {"required": ["project_slug"]}],
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "openWorldHint": False,
+        },
+    },
+    {
+        "name": "sync_capture_source",
+        "title": "Sync Linked YouTube Capture Source",
+        "description": (
+            "Preview or queue ingestion for a YouTube playlist capture source already linked "
+            "to the current user's Memexai project/library. Requires capture:write."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "capture_source_id": {
+                    "type": "string",
+                    "description": "User-owned capture source id from list_capture_sources.",
+                },
+                "max_jobs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "default": 0,
+                    "description": (
+                        "0 previews pending videos without queueing. A positive value queues "
+                        "that many ingestion jobs after explicit confirmation."
+                    ),
+                },
+                "allow_queue": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Must be true to queue ingestion jobs.",
+                },
+                "confirmed_queue_count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": (
+                        "Must equal max_jobs when queueing, after the agent shows the user "
+                        "the previewed queue count."
+                    ),
+                },
+                "created_by_client": {
+                    "type": "string",
+                    "description": "Optional agent/client name recorded on the workflow.",
+                },
+            },
+            "required": ["capture_source_id"],
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "openWorldHint": False,
+        },
+    },
+    {
         "name": "queue_youtube_ingestion",
         "title": "Queue YouTube Ingestion",
         "description": (
@@ -2901,6 +3899,20 @@ TOOLS = [
                         "only transcript/search rows; basic creates compact labels/concepts/TLDR; "
                         "standard creates labels, concepts, edges, TLDR, and source report; deep "
                         "uses a larger transcript/output budget."
+                    ),
+                },
+                "project_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional user-owned project id for single-video URL ingestion. "
+                        "Bulk playlist/channel project targeting must use sync_capture_source."
+                    ),
+                },
+                "project_slug": {
+                    "type": "string",
+                    "description": (
+                        "Optional user-owned project slug for single-video URL ingestion. "
+                        "Bulk playlist/channel project targeting must use sync_capture_source."
                     ),
                 },
             },
@@ -3172,6 +4184,8 @@ PROMPT_BUILDERS = {
 
 TOOL_HANDLERS = {
     "list_video_library": _list_video_library_tool,
+    "list_projects": _list_projects_tool,
+    "get_project_context_map": _get_project_context_map_tool,
     "get_library_source_graph": _get_library_source_graph_tool,
     "search_library_components": _search_library_components_tool,
     "list_capture_sources": _list_capture_sources_tool,
@@ -3195,7 +4209,10 @@ TOOL_HANDLERS = {
     "list_agent_notes": _list_agent_notes_tool,
     "add_context_note": _add_context_note_tool,
     "upsert_personal_concept": _upsert_personal_concept_tool,
+    "create_project": _create_project_tool,
+    "link_youtube_playlist_capture_source": _link_youtube_playlist_capture_source_tool,
     "build_context_bundle": _build_context_bundle_tool,
     "build_agent_brief": _build_agent_brief_tool,
+    "sync_capture_source": _sync_capture_source_tool,
     "queue_youtube_ingestion": _queue_youtube_ingestion_tool,
 }

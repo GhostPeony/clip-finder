@@ -1,5 +1,25 @@
 # Production Hosted Setup
 
+# Anonymous Auth And MCP Playlist Sync Assessment
+
+- [x] Verify current Supabase anonymous sign-in behavior, conversion semantics, and security constraints from primary docs.
+- [x] Inspect current Memexai auth/profile/quota assumptions for anonymous-user compatibility.
+- [x] Inspect current MCP tools/resources and playlist capture sync implementation.
+- [x] Assess whether an MCP agent can trigger project-linked playlist sync today, and identify the smallest missing product/engineering slice if not.
+- [x] Summarize vulnerabilities, business case, free-tier friction reduction, and recommended path.
+
+# MCP Agent Ingestion And Capture Sync
+
+- [x] Research MCP tool/auth/security practices from Anthropic, Arcade, Unsloth, and the MCP specification.
+- [x] Add scoped MCP permissions for agent-triggered capture-source sync.
+- [x] Add scoped MCP project creation for authenticated agents.
+- [x] Add scoped MCP playlist capture-source creation attached to a user project.
+- [x] Add plan-aware user limit checks and project-target validation to MCP YouTube URL ingestion.
+- [x] Add project assignment for successful single-video agent ingestion jobs.
+- [x] Add an MCP capture-source sync tool with preview, explicit confirmation, workflow handles, and ingestion job handles.
+- [x] Add focused regression tests for scopes, confirmation gates, user limits, project scoping, and agent-visible status handles.
+- [x] Run focused verification and review the feature for MCP abuse paths.
+
 # Library Topic/Report UX Correction
 
 - [x] Map the current Library graph UI data shape for videos, topics, and artifacts.
@@ -422,3 +442,49 @@
 - [x] Fix live-mode checkout after sandbox testing by replacing stale Stripe test customer IDs on first live checkout, surfacing backend billing errors, and adding a plan-detail selector before redirecting to Stripe.
 - [x] Replace the inline Settings upgrade expansion with a dedicated plan-selection view/modal and visually verify it on desktop and mobile before redeploying.
 - [ ] Verify with Stripe CLI sandbox: checkout success, monthly renewal/invoice paid, payment failed, portal cancelation, subscription deleted, and entitlements update all produce correct Supabase state.
+
+# Project-Scoped Video Context
+
+- [x] Add user-owned project and project-video membership schema with RLS.
+- [x] Add project-aware search/library RPC filtering without changing existing access grants.
+- [x] Add backend project CRUD, video assignment, and project-scoped library/search endpoints.
+- [x] Attach capture playlists to one default project and sync successful videos into that project.
+- [x] Add MCP project listing, project context maps, scoped retrieval inputs, and updated agent guidance.
+- [x] Add dashboard/library UI for creating projects, assigning videos, linking playlists, and switching project scopes.
+- [x] Add backend, MCP, and frontend regression tests for project scope behavior.
+- [x] Run verification before shipping.
+
+# Project-Scoped Context Cloudflare Deploy And Production MCP Eval
+
+- [x] Confirm Wrangler is authenticated to the intended Cloudflare account.
+- [x] Apply the project-scoped Supabase migration to production.
+- [x] Re-run deploy-quality checks before shipping.
+- [x] Deploy the API container worker to Cloudflare.
+- [x] Deploy the frontend to Cloudflare Pages.
+- [x] Smoke-test production API, app, and MCP discovery.
+- [x] Run production MCP retrieval evals against `cadecr@gmail.com`.
+- [x] Compare MCP answers against local BashGym/Ghostwork project context for relevance, speed, and response size.
+
+# Project UX Follow-Up
+
+- [x] Add user-scoped playlist disconnect for capture sources without disconnecting YouTube OAuth.
+- [x] Fix mobile project/capture settings layouts so long playlist URLs and project controls wrap cleanly.
+- [x] Make projects easier to browse/search and open as a selected Library scope from Dashboard and Library.
+- [x] Create a production project for `cadecr@gmail.com` from the existing linked playlist/videos if safe.
+- [x] Run frontend/backend tests and deploy the project UX fixes.
+
+# First-Class Projects Navigation
+
+- [x] Add a top-level Projects navigation item on desktop and mobile.
+- [x] Add a Projects section inside the Library menu.
+- [x] Render a dedicated project management view that works even before a user has indexed videos.
+- [x] Update dashboard project actions to send users to Projects management when appropriate.
+- [x] Add/adjust regression tests, verify, and deploy.
+
+# Claude MCP Connector Setup
+
+- [x] Audit current website and public docs for Claude connector setup instructions.
+- [x] Add Claude custom connector setup instructions to the user-facing Settings agent connection surface.
+- [x] Update public/MCP setup metadata so agents and users see OAuth-first Claude guidance before token fallback.
+- [x] Document the Anthropic Connector Directory submission path and readiness checklist.
+- [x] Add/update regression tests and run focused verification.

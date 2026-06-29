@@ -318,6 +318,7 @@ def test_mcp_resources_list_exposes_library_notes_and_video_resources(monkeypatc
     assert "context://agent-quickstart" in uris
     assert "context://brain-sync-contract" in uris
     assert "context://brain-digest" in uris
+    assert "context://projects" in uris
     assert "context://library" in uris
     assert "context://library-graph" in uris
     assert "context://repo-context-contract" in uris
@@ -348,6 +349,7 @@ def test_mcp_resources_read_returns_agent_quickstart_without_supabase(monkeypatc
     assert contents[0]["uri"] == "context://agent-quickstart"
     assert payload["version"] == "memexai-agent-quickstart-v1"
     assert any("accessScope" in rule for rule in payload["coreRules"])
+    assert any("Project scopes" in rule for rule in payload["coreRules"])
     assert any("library videos" in rule for rule in payload["coreRules"])
     assert "get_mcp_session" in payload["recommendedFlow"][0]["use"]
     repo_step = next(
@@ -362,6 +364,13 @@ def test_mcp_resources_read_returns_agent_quickstart_without_supabase(monkeypatc
     assert "get_brain_sync_contract" in brain_step["use"]
     assert "export_brain_digest" in brain_step["use"]
     assert "context://brain-digest" in brain_step["use"]
+    discovery_step = next(
+        step
+        for step in payload["recommendedFlow"]
+        if step["step"] == "discover_saved_video_context"
+    )
+    assert "list_projects" in discovery_step["use"]
+    assert "get_project_context_map" in discovery_step["use"]
     assert payload["brainSyncContract"]["sourceTruth"]["readOnly"] is True
     assert payload["jsonRpcExamples"]["getBrainSyncContract"]["params"]["name"] == (
         "get_brain_sync_contract"
@@ -692,6 +701,52 @@ def test_mcp_resources_read_returns_capture_sources(monkeypatch):
     assert '"Memexai Inbox"' in contents[0]["text"]
 
 
+def test_mcp_resources_read_returns_projects_and_project_map(monkeypatch):
+    from backend import mcp_adapter
+
+    calls = []
+
+    def fake_projects(supabase, user_id, limit):
+        calls.append(("projects", supabase, user_id, limit))
+        return {
+            "projects": [{"id": "project-1", "name": "Agent Harness", "slug": "agent"}],
+            "totalProjects": 1,
+        }
+
+    def fake_project_map(supabase, user_id, **kwargs):
+        calls.append(("project_map", supabase, user_id, kwargs))
+        return {"found": True, "project": {"id": kwargs["project_id"]}, "videos": []}
+
+    supabase = Supabase()
+    monkeypatch.setattr(mcp_adapter, "list_projects", fake_projects)
+    monkeypatch.setattr(mcp_adapter, "build_project_context_map", fake_project_map)
+    client = _client(monkeypatch, supabase)
+
+    projects_response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 16,
+            "method": "resources/read",
+            "params": {"uri": "context://projects"},
+        },
+    )
+    map_response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 17,
+            "method": "resources/read",
+            "params": {"uri": "context://project/project-1"},
+        },
+    )
+
+    assert projects_response.status_code == 200
+    assert map_response.status_code == 200
+    assert calls[0] == ("projects", supabase, "local", 100)
+    assert calls[1] == ("project_map", supabase, "local", {"project_id": "project-1"})
+
+
 def test_mcp_resources_read_returns_workflow_status(monkeypatch):
     from backend import mcp_adapter
 
@@ -769,6 +824,8 @@ def test_mcp_tools_list_exposes_context_tools_only(monkeypatch):
     names = {tool["name"] for tool in tools}
     assert "get_mcp_session" in names
     assert "get_brain_sync_contract" in names
+    assert "list_projects" in names
+    assert "get_project_context_map" in names
     assert "list_video_library" in names
     assert "list_capture_sources" in names
     assert "list_context_categories" in names
@@ -785,12 +842,24 @@ def test_mcp_tools_list_exposes_context_tools_only(monkeypatch):
     assert "get_video_context" in names
     assert "build_context_bundle" in names
     assert "build_agent_brief" in names
+    assert "create_project" in names
+    assert "link_youtube_playlist_capture_source" in names
+    assert "sync_capture_source" in names
     assert "queue_youtube_ingestion" in names
     assert "add_context_note" in names
     assert "ingest_youtube_url" not in names
     assert "update_source_concept" not in names
+    link_tool = next(
+        tool for tool in tools if tool["name"] == "link_youtube_playlist_capture_source"
+    )
+    assert link_tool["inputSchema"]["required"] == ["playlist_url"]
+    assert link_tool["inputSchema"]["anyOf"] == [
+        {"required": ["project_id"]},
+        {"required": ["project_slug"]},
+    ]
     search_tool = next(tool for tool in tools if tool["name"] == "search_video_concepts")
     assert search_tool["inputSchema"]["properties"]["retrieval_mode"]["default"] == "hybrid"
+    assert "project_id" in search_tool["inputSchema"]["properties"]
 
 
 def test_mcp_list_video_library_returns_user_library(monkeypatch):
@@ -847,6 +916,62 @@ def test_mcp_list_video_library_returns_user_library(monkeypatch):
     assert structured["channels"][0]["videos"][0]["accessScope"] == "video"
     assert structured["channels"][0]["videos"][0]["accessSource"] == "shared_existing"
     assert structured["limit"] == 100
+
+
+def test_mcp_list_projects_and_project_context_map_tools(monkeypatch):
+    from backend import mcp_adapter
+
+    calls = []
+
+    def fake_projects(supabase, user_id, limit):
+        calls.append(("list", supabase, user_id, limit))
+        return {
+            "projects": [{"id": "project-1", "name": "Agent Harness", "slug": "agent"}],
+            "totalProjects": 1,
+        }
+
+    def fake_project_map(supabase, user_id, **kwargs):
+        calls.append(("map", supabase, user_id, kwargs))
+        return {
+            "found": True,
+            "project": {"id": kwargs.get("project_id"), "name": "Agent Harness"},
+            "videos": [],
+        }
+
+    supabase = Supabase()
+    monkeypatch.setattr(mcp_adapter, "list_projects", fake_projects)
+    monkeypatch.setattr(mcp_adapter, "build_project_context_map", fake_project_map)
+    client = _client(monkeypatch, supabase)
+
+    list_response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 23,
+            "method": "tools/call",
+            "params": {"name": "list_projects", "arguments": {"limit": 5}},
+        },
+    )
+    map_response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 24,
+            "method": "tools/call",
+            "params": {
+                "name": "get_project_context_map",
+                "arguments": {"project_id": "project-1", "detail_level": "compact"},
+            },
+        },
+    )
+
+    assert list_response.status_code == 200
+    assert map_response.status_code == 200
+    assert calls[0] == ("list", supabase, "local", 5)
+    assert calls[1][0:3] == ("map", supabase, "local")
+    assert calls[1][3]["project_id"] == "project-1"
+    assert calls[1][3]["limit"] == 25
+    assert map_response.json()["result"]["structuredContent"]["project"]["name"] == "Agent Harness"
 
 
 def test_mcp_list_capture_sources_returns_user_sources(monkeypatch):
@@ -980,7 +1105,26 @@ def test_mcp_list_ingestion_jobs_returns_recent_agent_submissions(monkeypatch):
 
     def fake_jobs(supabase, user_id, limit):
         calls.append((supabase, user_id, limit))
-        return [{"id": "job-1", "status": "completed"}]
+        return [
+            {
+                "id": "job-1",
+                "status": "completed",
+                "source_url": "https://youtu.be/abc123",
+                "source_type": "video",
+                "indexed_video_count": 1,
+                "cost_estimate": {
+                    "digestDepth": "standard",
+                    "veryLargeNestedPayload": {"shouldNotReturn": True},
+                    "mcp": {
+                        "requestedProject": {
+                            "id": "project-1",
+                            "name": "AI learning",
+                        }
+                    },
+                },
+                "ingestion_job_events": [{"message": "large event list"}],
+            }
+        ]
 
     supabase = Supabase()
     monkeypatch.setattr(mcp_adapter, "list_ingestion_jobs", fake_jobs)
@@ -1003,6 +1147,13 @@ def test_mcp_list_ingestion_jobs_returns_recent_agent_submissions(monkeypatch):
     structured = response.json()["result"]["structuredContent"]
     assert calls == [(supabase, "local", 50)]
     assert structured["jobs"][0]["id"] == "job-1"
+    assert structured["jobs"][0]["sourceUrl"] == "https://youtu.be/abc123"
+    assert structured["jobs"][0]["indexedVideoCount"] == 1
+    assert structured["jobs"][0]["digestDepth"] == "standard"
+    assert structured["jobs"][0]["projectTarget"]["id"] == "project-1"
+    assert "cost_estimate" not in structured["jobs"][0]
+    assert "ingestion_job_events" not in structured["jobs"][0]
+    assert structured["detailTool"] == "get_ingestion_job"
 
 
 def test_mcp_validate_repo_context_returns_contract(monkeypatch):
@@ -1102,9 +1253,14 @@ def test_mcp_get_brain_sync_contract_does_not_require_supabase(monkeypatch):
     assert structured["version"] == "memexai-brain-sync-v1"
     assert structured["role"]["embedMoments"].startswith("Canonical saved-video source system")
     assert structured["sourceTruth"]["readOnly"] is True
-    assert "search_video_concepts" in structured["currentPullSurfaces"][2]["use"]
-    assert "get_video_knowledge_map" in structured["currentPullSurfaces"][2]["use"]
-    assert "search_transcript_text" in structured["currentPullSurfaces"][2]["use"]
+    evidence_surface = next(
+        surface
+        for surface in structured["currentPullSurfaces"]
+        if surface["name"] == "evidence_search"
+    )
+    assert "search_video_concepts" in evidence_surface["use"]
+    assert "get_video_knowledge_map" in evidence_surface["use"]
+    assert "search_transcript_text" in evidence_surface["use"]
     digest_surface = next(
         surface
         for surface in structured["currentPullSurfaces"]
@@ -1409,8 +1565,16 @@ def test_mcp_build_agent_brief_accepts_agent_repo_context(monkeypatch):
 
     calls = []
 
-    def fake_brief(supabase, user_id, query, repo_context, limit, category_filters=None):
-        calls.append((supabase, user_id, query, repo_context, limit, category_filters))
+    def fake_brief(
+        supabase,
+        user_id,
+        query,
+        repo_context,
+        limit,
+        category_filters=None,
+        **kwargs,
+    ):
+        calls.append((supabase, user_id, query, repo_context, limit, category_filters, kwargs))
         return {
             "title": "Agent Brief: apply reward models",
             "repoContext": repo_context,
@@ -1447,7 +1611,7 @@ def test_mcp_build_agent_brief_accepts_agent_repo_context(monkeypatch):
 
     assert response.status_code == 200
     structured = response.json()["result"]["structuredContent"]
-    assert calls[0][1:] == (
+    assert calls[0][1:6] == (
         "local",
         "apply reward models",
         {
@@ -1458,6 +1622,7 @@ def test_mcp_build_agent_brief_accepts_agent_repo_context(monkeypatch):
         20,
         {"method": ["reward modeling"]},
     )
+    assert calls[0][6]["retrieval_mode"] == "hybrid"
     assert calls[0][0] is supabase
     assert structured["keyConcepts"][0]["name"] == "Reward model"
     assert structured["categoryFilters"] == {"method": ["reward modeling"]}
@@ -1486,6 +1651,451 @@ def test_mcp_queue_youtube_ingestion_requires_ingest_write_scope(monkeypatch):
     assert "ingest:write" in error["message"]
 
 
+def test_mcp_create_project_requires_project_write_scope(monkeypatch):
+    client = _client(monkeypatch, Supabase())
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 60,
+            "method": "tools/call",
+            "params": {
+                "name": "create_project",
+                "arguments": {"name": "Agent Project"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    error = response.json()["error"]
+    assert error["code"] == -32002
+    assert "project:write" in error["message"]
+
+
+def test_mcp_create_project_creates_user_owned_project(monkeypatch):
+    from backend import mcp_adapter
+
+    calls = []
+
+    def fake_create_project(supabase, user_id, name, description="", metadata=None):
+        calls.append((supabase, user_id, name, description, metadata))
+        return {
+            "id": "project-1",
+            "name": name,
+            "slug": "agent-project",
+            "description": description,
+            "metadata": metadata,
+        }
+
+    supabase = Supabase()
+    monkeypatch.setattr(mcp_adapter, "create_project", fake_create_project)
+
+    response, status = mcp_adapter.handle_mcp_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 61,
+            "method": "tools/call",
+            "params": {
+                "name": "create_project",
+                "arguments": {
+                    "name": "Agent Project",
+                    "description": "Context for this workstream",
+                    "metadata": {"purpose": "agent setup"},
+                    "created_by_client": "hermes",
+                },
+            },
+        },
+        "user-1",
+        supabase,
+        ["project:write"],
+        {},
+    )
+
+    assert status == 200
+    structured = response["result"]["structuredContent"]
+    assert structured["project"]["id"] == "project-1"
+    assert structured["nextMcpCalls"][0]["name"] == "link_youtube_playlist_capture_source"
+    assert calls == [
+        (
+            supabase,
+            "user-1",
+            "Agent Project",
+            "Context for this workstream",
+            {"purpose": "agent setup", "mcp": {"createdBy": "agent", "createdByClient": "hermes"}},
+        )
+    ]
+
+
+def test_mcp_link_youtube_playlist_requires_capture_write_scope(monkeypatch):
+    client = _client(monkeypatch, Supabase())
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 62,
+            "method": "tools/call",
+            "params": {
+                "name": "link_youtube_playlist_capture_source",
+                "arguments": {
+                    "playlist_url": "https://www.youtube.com/playlist?list=PL12345678901",
+                    "project_id": "project-1",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    error = response.json()["error"]
+    assert error["code"] == -32002
+    assert "capture:write" in error["message"]
+
+
+def test_mcp_link_youtube_playlist_requires_project_target():
+    from backend import mcp_adapter
+
+    response, status = mcp_adapter.handle_mcp_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 63,
+            "method": "tools/call",
+            "params": {
+                "name": "link_youtube_playlist_capture_source",
+                "arguments": {
+                    "playlist_url": "https://www.youtube.com/playlist?list=PL12345678901",
+                },
+            },
+        },
+        "user-1",
+        Supabase(),
+        ["capture:write"],
+        {},
+    )
+
+    assert status == 200
+    assert response["error"]["code"] == -32602
+    assert "project_id or project_slug" in response["error"]["message"]
+
+
+def test_mcp_link_youtube_playlist_attaches_capture_source_to_project(monkeypatch):
+    from backend import mcp_adapter
+
+    calls = []
+
+    def fake_resolve_project(supabase, user_id, project_id=None, project_slug=None):
+        calls.append(("project", supabase, user_id, project_id, project_slug))
+        return {"id": "project-1", "name": "Agent Project", "slug": "agent-project"}
+
+    def fake_create_source(
+        supabase,
+        user_id,
+        playlist_url,
+        title="",
+        project_id=None,
+        created_by="user",
+        created_by_client=None,
+    ):
+        calls.append(
+            (
+                "source",
+                supabase,
+                user_id,
+                playlist_url,
+                title,
+                project_id,
+                created_by,
+                created_by_client,
+            )
+        )
+        return {
+            "id": "capture-1",
+            "source_url": playlist_url,
+            "project_id": project_id,
+            "created_by": created_by,
+        }
+
+    supabase = Supabase()
+    monkeypatch.setattr(mcp_adapter, "resolve_project_scope", fake_resolve_project)
+    monkeypatch.setattr(mcp_adapter, "create_playlist_capture_source", fake_create_source)
+
+    response, status = mcp_adapter.handle_mcp_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 64,
+            "method": "tools/call",
+            "params": {
+                "name": "link_youtube_playlist_capture_source",
+                "arguments": {
+                    "playlist_url": "https://www.youtube.com/playlist?list=PL12345678901",
+                    "project_slug": "agent-project",
+                    "title": "Agent inbox",
+                    "created_by_client": "hermes",
+                },
+            },
+        },
+        "user-1",
+        supabase,
+        ["capture:write"],
+        {},
+    )
+
+    assert status == 200
+    structured = response["result"]["structuredContent"]
+    assert structured["captureSource"]["id"] == "capture-1"
+    assert structured["projectTarget"]["id"] == "project-1"
+    assert structured["nextMcpCalls"][0]["name"] == "sync_capture_source"
+    assert calls[0] == ("project", supabase, "user-1", None, "agent-project")
+    assert calls[1] == (
+        "source",
+        supabase,
+        "user-1",
+        "https://www.youtube.com/playlist?list=PL12345678901",
+        "Agent inbox",
+        "project-1",
+        "agent",
+        "hermes",
+    )
+
+
+def test_mcp_sync_capture_source_requires_capture_write_scope(monkeypatch):
+    client = _client(monkeypatch, Supabase())
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 65,
+            "method": "tools/call",
+            "params": {
+                "name": "sync_capture_source",
+                "arguments": {"capture_source_id": "capture-1", "max_jobs": 0},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    error = response.json()["error"]
+    assert error["code"] == -32002
+    assert "capture:write" in error["message"]
+
+
+def test_mcp_sync_capture_source_previews_without_queueing(monkeypatch):
+    from backend import mcp_adapter
+
+    calls = []
+
+    def fake_workflow(
+        supabase,
+        user_id,
+        capture_source_id,
+        max_jobs=1,
+        dispatch_job=None,
+        trigger="api.capture.sync",
+        created_by="user",
+        created_by_client=None,
+    ):
+        calls.append(
+            (
+                supabase,
+                user_id,
+                capture_source_id,
+                max_jobs,
+                dispatch_job,
+                trigger,
+                created_by,
+                created_by_client,
+            )
+        )
+        return {
+            "captureSource": {"id": capture_source_id, "project_id": "project-1"},
+            "workflowInstance": {"id": "workflow-1", "status": "completed"},
+            "workflow_instance_id": "workflow-1",
+            "discoveredCount": 3,
+            "newItemCount": 2,
+            "queueCandidateCount": 2,
+            "queuedJobCount": 0,
+            "requestedJobCount": 0,
+            "remainingQueueCount": 2,
+            "skippedExistingCount": 1,
+            "queuedJobs": [],
+            "dispatchResults": [],
+        }
+
+    supabase = Supabase()
+    monkeypatch.setattr(
+        mcp_adapter,
+        "_plan_limit_snapshot",
+        lambda supabase, user_id: {"maxImportVideos": 5, "maxActiveIngestionJobs": 1},
+    )
+    monkeypatch.setattr(mcp_adapter, "count_active_ingestion_jobs", lambda supabase, user_id: 0)
+    monkeypatch.setattr(mcp_adapter, "run_capture_sync_workflow", fake_workflow)
+
+    response, status = mcp_adapter.handle_mcp_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 66,
+            "method": "tools/call",
+            "params": {
+                "name": "sync_capture_source",
+                "arguments": {"capture_source_id": "capture-1", "max_jobs": 0},
+            },
+        },
+        "user-1",
+        supabase,
+        ["capture:write"],
+        {"queued_capture_sync_jobs": []},
+    )
+
+    assert status == 200
+    structured = response["result"]["structuredContent"]
+    assert structured["mode"] == "preview"
+    assert structured["counts"]["queueCandidateCount"] == 2
+    assert structured["notifications"]["workflow_instance_id"] == "workflow-1"
+    assert calls[0][3] == 0
+    assert calls[0][5] == "mcp.capture.sync"
+    assert calls[0][6] == "agent"
+
+
+def test_mcp_sync_capture_source_requires_explicit_queue_confirmation(monkeypatch):
+    from backend import mcp_adapter
+
+    monkeypatch.setattr(
+        mcp_adapter,
+        "_plan_limit_snapshot",
+        lambda supabase, user_id: {"maxImportVideos": 5, "maxActiveIngestionJobs": 1},
+    )
+    monkeypatch.setattr(mcp_adapter, "count_active_ingestion_jobs", lambda supabase, user_id: 0)
+
+    response, status = mcp_adapter.handle_mcp_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 67,
+            "method": "tools/call",
+            "params": {
+                "name": "sync_capture_source",
+                "arguments": {"capture_source_id": "capture-1", "max_jobs": 2},
+            },
+        },
+        "user-1",
+        Supabase(),
+        ["capture:write"],
+        {"queued_capture_sync_jobs": []},
+    )
+
+    assert status == 200
+    assert response["error"]["code"] == -32602
+    assert "allow_queue=true" in response["error"]["message"]
+
+    response, status = mcp_adapter.handle_mcp_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 68,
+            "method": "tools/call",
+            "params": {
+                "name": "sync_capture_source",
+                "arguments": {
+                    "capture_source_id": "capture-1",
+                    "max_jobs": 2,
+                    "allow_queue": True,
+                    "confirmed_queue_count": 1,
+                },
+            },
+        },
+        "user-1",
+        Supabase(),
+        ["capture:write"],
+        {"queued_capture_sync_jobs": []},
+    )
+
+    assert status == 200
+    assert response["error"]["code"] == -32602
+    assert "confirmed_queue_count" in response["error"]["message"]
+
+
+def test_mcp_sync_capture_source_queues_confirmed_jobs_for_server_dispatch(monkeypatch):
+    from backend import mcp_adapter
+
+    queued_job = {
+        "id": "job-1",
+        "source_url": "https://www.youtube.com/watch?v=uCKhOmth2ms",
+        "source_type": "video",
+        "status": "queued",
+    }
+
+    def fake_workflow(
+        supabase,
+        user_id,
+        capture_source_id,
+        max_jobs=1,
+        dispatch_job=None,
+        trigger="api.capture.sync",
+        created_by="user",
+        created_by_client=None,
+    ):
+        dispatch = dispatch_job(queued_job)
+        return {
+            "captureSource": {"id": capture_source_id, "project_id": "project-1"},
+            "workflowInstance": {"id": "workflow-1", "status": "completed"},
+            "workflow_instance_id": "workflow-1",
+            "discoveredCount": 1,
+            "newItemCount": 1,
+            "queueCandidateCount": 1,
+            "queuedJobCount": 1,
+            "requestedJobCount": max_jobs,
+            "remainingQueueCount": 0,
+            "skippedExistingCount": 0,
+            "queuedJobs": [queued_job],
+            "dispatchResults": [{"ingestion_job_id": "job-1", "dispatch": dispatch}],
+        }
+
+    supabase = Supabase()
+    queued_jobs = []
+    monkeypatch.setattr(
+        mcp_adapter,
+        "_plan_limit_snapshot",
+        lambda supabase, user_id: {"maxImportVideos": 5, "maxActiveIngestionJobs": 1},
+    )
+    monkeypatch.setattr(mcp_adapter, "count_active_ingestion_jobs", lambda supabase, user_id: 0)
+    monkeypatch.setattr(mcp_adapter, "run_capture_sync_workflow", fake_workflow)
+
+    response, status = mcp_adapter.handle_mcp_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 69,
+            "method": "tools/call",
+            "params": {
+                "name": "sync_capture_source",
+                "arguments": {
+                    "capture_source_id": "capture-1",
+                    "max_jobs": 1,
+                    "allow_queue": True,
+                    "confirmed_queue_count": 1,
+                    "created_by_client": "hermes",
+                },
+            },
+        },
+        "user-1",
+        supabase,
+        ["capture:write"],
+        {"queued_capture_sync_jobs": queued_jobs},
+    )
+
+    assert status == 200
+    structured = response["result"]["structuredContent"]
+    assert structured["mode"] == "queued"
+    assert structured["queuedJobs"] == [
+        {
+            "id": "job-1",
+            "status": "queued",
+            "sourceUrl": "https://www.youtube.com/watch?v=uCKhOmth2ms",
+            "sourceType": "video",
+        }
+    ]
+    assert structured["notifications"]["job_ids"] == ["job-1"]
+    assert queued_jobs == [queued_job]
+
+
 def test_mcp_queue_youtube_ingestion_requires_bulk_approval_for_playlists(monkeypatch):
     from backend import mcp_adapter
 
@@ -1512,6 +2122,34 @@ def test_mcp_queue_youtube_ingestion_requires_bulk_approval_for_playlists(monkey
     assert response["error"]["code"] == -32602
     assert "allow_bulk=true" in response["error"]["message"]
     assert ("table", "ingestion_jobs") not in supabase.calls
+
+
+def test_mcp_queue_youtube_ingestion_rejects_bulk_project_target():
+    from backend import mcp_adapter
+
+    response, status = mcp_adapter.handle_mcp_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 40,
+            "method": "tools/call",
+            "params": {
+                "name": "queue_youtube_ingestion",
+                "arguments": {
+                    "url": "https://www.youtube.com/playlist?list=PL12345678901",
+                    "allow_bulk": True,
+                    "project_id": "project-1",
+                },
+            },
+        },
+        "user-1",
+        Supabase(),
+        ["ingest:write"],
+        {},
+    )
+
+    assert status == 200
+    assert response["error"]["code"] == -32602
+    assert "sync_capture_source" in response["error"]["message"]
 
 
 def test_mcp_queue_youtube_ingestion_creates_queued_job_with_scope(monkeypatch):
@@ -1585,6 +2223,67 @@ def test_mcp_queue_youtube_ingestion_creates_queued_job_with_scope(monkeypatch):
     assert calls[1][5]["sourceType"] == "video"
     assert calls[2] == ("event", supabase, "job-1", "info", "Queued from MCP by hermes.")
     assert queued_jobs == [structured["job"]]
+
+
+def test_mcp_queue_youtube_ingestion_stores_single_video_project_target(monkeypatch):
+    from backend import mcp_adapter
+
+    calls = []
+
+    def fake_count_active(supabase, user_id):
+        return 0
+
+    def fake_project_scope(supabase, user_id, project_id=None, project_slug=None):
+        calls.append(("project", supabase, user_id, project_id, project_slug))
+        return {"id": "project-1", "name": "Agent Project", "slug": "agent-project"}
+
+    def fake_create_job(supabase, user_id, source_url, source_type, cost_estimate=None):
+        calls.append(("create", cost_estimate))
+        return {
+            "id": "job-1",
+            "user_id": user_id,
+            "source_url": source_url,
+            "source_type": source_type,
+            "status": "queued",
+            "cost_estimate": cost_estimate,
+        }
+
+    supabase = Supabase()
+    monkeypatch.setattr(mcp_adapter, "count_active_ingestion_jobs", fake_count_active)
+    monkeypatch.setattr(mcp_adapter, "resolve_project_scope", fake_project_scope)
+    monkeypatch.setattr(mcp_adapter, "create_ingestion_job", fake_create_job)
+    monkeypatch.setattr(
+        mcp_adapter,
+        "record_ingestion_job_event",
+        lambda supabase, job_id, level, message: {"id": "event-1"},
+    )
+
+    response, status = mcp_adapter.handle_mcp_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 41,
+            "method": "tools/call",
+            "params": {
+                "name": "queue_youtube_ingestion",
+                "arguments": {
+                    "url": "https://www.youtube.com/watch?v=uCKhOmth2ms",
+                    "project_id": "project-1",
+                    "created_by_client": "hermes",
+                },
+            },
+        },
+        "user-1",
+        supabase,
+        ["ingest:write"],
+        {"queued_ingestion_jobs": []},
+    )
+
+    assert status == 200
+    structured = response["result"]["structuredContent"]
+    assert structured["projectTarget"]["id"] == "project-1"
+    assert structured["job"]["cost_estimate"]["mcp"]["requestedProject"]["id"] == "project-1"
+    assert structured["notifications"]["job_ids"] == ["job-1"]
+    assert calls[0] == ("project", supabase, "user-1", "project-1", None)
 
 
 def test_mcp_search_video_moments_uses_scoped_search_runner(monkeypatch):
@@ -1815,6 +2514,48 @@ def test_mcp_search_video_concepts_accepts_keyword_mode_without_embeddings(monke
     assert structured["retrievalMode"] == "keyword"
     assert structured["retrievalBudget"]["embeddingCalls"] == 0
     assert structured["results"][0]["resultType"] == "source_concept"
+
+
+def test_mcp_search_video_concepts_passes_project_scope(monkeypatch):
+    from backend import mcp_adapter
+
+    captured = {}
+
+    def fake_source_search(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {
+            "query": args[2],
+            "retrievalMode": kwargs["retrieval_mode"],
+            "projectScope": {"id": kwargs["project_id"]},
+            "results": [],
+            "retrievalBudget": {"embeddingCalls": 0, "llmCalls": 0},
+        }
+
+    monkeypatch.setattr(mcp_adapter, "search_source_knowledge", fake_source_search)
+    response, status_code = mcp_adapter.handle_mcp_request(
+        {
+            "jsonrpc": "2.0",
+            "id": 37,
+            "method": "tools/call",
+            "params": {
+                "name": "search_video_concepts",
+                "arguments": {
+                    "query": "agent harness",
+                    "retrieval_mode": "hybrid",
+                    "project_id": "project-1",
+                },
+            },
+        },
+        "user-1",
+        Supabase(),
+        ["context:read"],
+        {},
+    )
+
+    assert status_code == 200
+    assert captured["kwargs"]["project_id"] == "project-1"
+    assert response["result"]["structuredContent"]["projectScope"]["id"] == "project-1"
 
 
 def test_mcp_get_video_knowledge_map_returns_compact_navigation(monkeypatch):

@@ -12,7 +12,10 @@ import {
   CaptureSource,
   CaptureSourceSyncResult,
   OnboardingStatus,
+  ProjectContextMap,
+  ProjectsData,
   SaveYoutubeOAuthConnectionRequest,
+  UserProject,
   YoutubeOAuthStatus,
 } from '../types';
 import { supabase } from '../lib/supabase';
@@ -101,6 +104,10 @@ function cacheKey(name: string, suffix?: string | number): string {
   return `${LIBRARY_CACHE_PREFIX}:${name}${suffix === undefined ? '' : `:${suffix}`}`;
 }
 
+function projectScopeSuffix(projectId?: string | null): string {
+  return projectId ? `project:${projectId}` : 'all';
+}
+
 function readJsonCache<T>(key: string, scope: string, maxAgeMs: number): T | null {
   try {
     const storage = getSessionCacheStorage();
@@ -146,17 +153,22 @@ export const invalidateLibraryCaches = (): void => {
   }
 };
 
-export const getCachedLibrary = async (): Promise<LibraryData | null> => {
+export const getCachedLibrary = async (projectId?: string | null): Promise<LibraryData | null> => {
   const { cacheScope } = await getAuthContext();
-  return readJsonCache<LibraryData>(cacheKey('library'), cacheScope, LIBRARY_CACHE_MAX_AGE_MS);
+  return readJsonCache<LibraryData>(
+    cacheKey('library', projectScopeSuffix(projectId)),
+    cacheScope,
+    LIBRARY_CACHE_MAX_AGE_MS,
+  );
 };
 
 export const getCachedLibraryGraph = async (
   limit: number = 50,
+  projectId?: string | null,
 ): Promise<LibrarySourceGraphData | null> => {
   const { cacheScope } = await getAuthContext();
   return readJsonCache<LibrarySourceGraphData>(
-    cacheKey('library-graph', limit),
+    cacheKey('library-graph', `${limit}:${projectScopeSuffix(projectId)}`),
     cacheScope,
     LIBRARY_GRAPH_CACHE_MAX_AGE_MS,
   );
@@ -203,15 +215,136 @@ export const checkBackendHealth = async (): Promise<{
   }
 };
 
-export const fetchLibrary = async (): Promise<LibraryData> => {
+export const fetchLibrary = async (projectId?: string | null): Promise<LibraryData> => {
   const { headers, cacheScope } = await getAuthContext();
-  const response = await fetch(`${API_URL}/library`, { headers });
+  const params = new URLSearchParams();
+  if (projectId) params.set('project_id', projectId);
+  const url = params.toString() ? `${API_URL}/library?${params.toString()}` : `${API_URL}/library`;
+  const response = await fetch(url, { headers });
   if (!response.ok) {
     throw new Error(`Backend Error: ${response.statusText}`);
   }
   const data = await response.json();
-  writeJsonCache(cacheKey('library'), cacheScope, data);
+  writeJsonCache(cacheKey('library', projectScopeSuffix(projectId)), cacheScope, data);
   return data;
+};
+
+export const fetchProjects = async (): Promise<UserProject[]> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/projects`, { headers });
+    if (!response.ok) return [];
+    const data = (await response.json()) as ProjectsData;
+    return data.projects || [];
+  } catch (error) {
+    console.warn('Error fetching projects:', error);
+    return [];
+  }
+};
+
+export const createProject = async (
+  name: string,
+  description: string = '',
+): Promise<UserProject | null> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/projects`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ name, description }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    invalidateLibraryCaches();
+    return data.project || null;
+  } catch (error) {
+    console.warn('Error creating project:', error);
+    return null;
+  }
+};
+
+export const updateProject = async (
+  projectId: string,
+  updates: { name?: string; description?: string; status?: 'active' | 'archived' },
+): Promise<UserProject | null> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/projects/${encodeURIComponent(projectId)}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify(updates),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    invalidateLibraryCaches();
+    return data.project || null;
+  } catch (error) {
+    console.warn('Error updating project:', error);
+    return null;
+  }
+};
+
+export const addProjectVideos = async (
+  projectId: string,
+  youtubeVideoIds: string[],
+): Promise<{ project: UserProject; addedVideos: string[] } | null> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/projects/${encodeURIComponent(projectId)}/videos`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ youtube_video_ids: youtubeVideoIds, added_source: 'manual' }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    invalidateLibraryCaches();
+    return data;
+  } catch (error) {
+    console.warn('Error adding project videos:', error);
+    return null;
+  }
+};
+
+export const removeProjectVideo = async (
+  projectId: string,
+  youtubeVideoId: string,
+): Promise<boolean> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(
+      `${API_URL}/projects/${encodeURIComponent(projectId)}/videos/${encodeURIComponent(
+        youtubeVideoId,
+      )}`,
+      {
+        method: 'DELETE',
+        headers,
+      },
+    );
+    if (response.ok) invalidateLibraryCaches();
+    return response.ok;
+  } catch (error) {
+    console.warn('Error removing project video:', error);
+    return false;
+  }
+};
+
+export const fetchProjectContextMap = async (
+  projectId: string,
+  limit: number = 25,
+): Promise<ProjectContextMap | null> => {
+  try {
+    const headers = await getAuthHeaders();
+    const params = new URLSearchParams({ limit: String(limit) });
+    const response = await fetch(
+      `${API_URL}/projects/${encodeURIComponent(projectId)}/context-map?${params.toString()}`,
+      { headers },
+    );
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.warn('Error fetching project context map:', error);
+    return null;
+  }
 };
 
 const emptyLibraryGraph = (): LibrarySourceGraphData => ({
@@ -246,16 +379,24 @@ const emptyLibraryGraph = (): LibrarySourceGraphData => ({
   guidance: '',
 });
 
-export const fetchLibraryGraph = async (limit: number = 50): Promise<LibrarySourceGraphData> => {
+export const fetchLibraryGraph = async (
+  limit: number = 50,
+  projectId?: string | null,
+): Promise<LibrarySourceGraphData> => {
   try {
     const { headers, cacheScope } = await getAuthContext();
     const params = new URLSearchParams({ limit: String(limit) });
+    if (projectId) params.set('project_id', projectId);
     const response = await fetch(`${API_URL}/library/graph?${params.toString()}`, { headers });
     if (!response.ok) {
       throw new Error(`Backend Error: ${response.statusText}`);
     }
     const data = await response.json();
-    writeJsonCache(cacheKey('library-graph', limit), cacheScope, data);
+    writeJsonCache(
+      cacheKey('library-graph', `${limit}:${projectScopeSuffix(projectId)}`),
+      cacheScope,
+      data,
+    );
     return data;
   } catch (error) {
     console.warn('Error fetching library graph:', error);
@@ -287,6 +428,7 @@ export const searchLibraryComponents = async (
   query: string,
   limit: number = 20,
   componentTypes?: LibraryComponentType[],
+  projectId?: string | null,
 ): Promise<LibraryComponentSearchData> => {
   try {
     const headers = await getAuthHeaders();
@@ -297,6 +439,7 @@ export const searchLibraryComponents = async (
     if (componentTypes && componentTypes.length > 0) {
       params.set('component_types', componentTypes.join(','));
     }
+    if (projectId) params.set('project_id', projectId);
     const response = await fetch(`${API_URL}/library/components/search?${params.toString()}`, {
       headers,
     });
@@ -399,6 +542,7 @@ export const searchVideoClips = async (
   limit: number = 5,
   categoryFilters?: Record<string, string | string[]>,
   retrievalMode: 'hybrid' | 'semantic' | 'keyword' = 'hybrid',
+  projectId?: string | null,
 ): Promise<{ answer: string; relevantClips: VideoClip[] }> => {
   const headers = await getAuthHeaders();
 
@@ -411,6 +555,7 @@ export const searchVideoClips = async (
         limit,
         category_filters: categoryFilters,
         retrieval_mode: retrievalMode,
+        project_id: projectId || undefined,
       }),
     });
 
@@ -665,6 +810,7 @@ export const fetchCaptureSources = async (): Promise<CaptureSource[]> => {
 export const createCaptureSource = async (
   playlistUrl: string,
   title: string = '',
+  projectId?: string | null,
 ): Promise<CaptureSource | null> => {
   try {
     const headers = await getAuthHeaders();
@@ -674,14 +820,52 @@ export const createCaptureSource = async (
       body: JSON.stringify({
         playlist_url: playlistUrl,
         title,
+        project_id: projectId || undefined,
         created_by: 'user',
       }),
     });
     if (!response.ok) return null;
     const data = await response.json();
+    invalidateLibraryCaches();
     return data.captureSource || null;
   } catch (error) {
     console.warn('Error creating capture source:', error);
+    return null;
+  }
+};
+
+export const deleteCaptureSource = async (sourceId: string): Promise<boolean> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/capture/sources/${encodeURIComponent(sourceId)}`, {
+      method: 'DELETE',
+      headers,
+    });
+    if (response.ok) invalidateLibraryCaches();
+    return response.ok;
+  } catch (error) {
+    console.warn('Error deleting capture source:', error);
+    return false;
+  }
+};
+
+export const setCaptureSourceProject = async (
+  sourceId: string,
+  projectId: string | null,
+): Promise<CaptureSource | null> => {
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${API_URL}/capture/sources/${sourceId}/project`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ project_id: projectId }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    invalidateLibraryCaches();
+    return data.captureSource || null;
+  } catch (error) {
+    console.warn('Error updating capture source project:', error);
     return null;
   }
 };

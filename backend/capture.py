@@ -14,12 +14,14 @@ try:
     from .digest_depth import DEFAULT_DIGEST_DEPTH, normalize_digest_depth
     from .ingestion_costs import build_ingestion_cost_estimate
     from .jobs import create_ingestion_job, utc_now
+    from .projects import get_project
     from .youtube_oauth import get_youtube_oauth_access_token
     from .youtube_utils import detect_url_type
 except ImportError:
     from digest_depth import DEFAULT_DIGEST_DEPTH, normalize_digest_depth
     from ingestion_costs import build_ingestion_cost_estimate
     from jobs import create_ingestion_job, utc_now
+    from projects import get_project
     from youtube_oauth import get_youtube_oauth_access_token
     from youtube_utils import detect_url_type
 
@@ -85,11 +87,26 @@ def list_capture_source_items(
     )
 
 
+def delete_capture_source(supabase: Any, user_id: str, capture_source_id: str) -> bool:
+    """Delete one user-owned capture source. Saved videos remain untouched."""
+    source_id = " ".join(str(capture_source_id or "").split()).strip()
+    if not source_id:
+        return False
+    source = _get_capture_source(supabase, user_id, source_id)
+    if not source:
+        return False
+    supabase.table("youtube_capture_sources").delete().eq("user_id", user_id).eq(
+        "id", source_id
+    ).execute()
+    return True
+
+
 def create_playlist_capture_source(
     supabase: Any,
     user_id: str,
     playlist_url: str,
     title: str = "",
+    project_id: str | None = None,
     created_by: str = "user",
     created_by_client: str | None = None,
 ) -> dict:
@@ -100,6 +117,8 @@ def create_playlist_capture_source(
         raise ValueError("playlist_url must be a valid YouTube playlist URL")
     if created_by not in {"user", "agent"}:
         raise ValueError("created_by must be 'user' or 'agent'")
+    if project_id and not get_project(supabase, user_id, project_id=project_id):
+        raise ValueError("Project not found")
 
     payload = {
         "user_id": user_id,
@@ -110,6 +129,8 @@ def create_playlist_capture_source(
         "status": "active",
         "created_by": created_by,
     }
+    if project_id:
+        payload["project_id"] = project_id
     if created_by_client:
         payload["created_by_client"] = created_by_client
 

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsModal } from './SettingsModal';
 
@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   createCaptureSource: vi.fn(),
   createMcpToken: vi.fn(),
   deleteApiKey: vi.fn(),
+  deleteCaptureSource: vi.fn(),
   disconnectYoutubeOAuth: vi.fn(),
   fetchCaptureSources: vi.fn(),
   fetchMcpTokens: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('../services/api', () => ({
   createCaptureSource: apiMocks.createCaptureSource,
   createMcpToken: apiMocks.createMcpToken,
   deleteApiKey: apiMocks.deleteApiKey,
+  deleteCaptureSource: apiMocks.deleteCaptureSource,
   disconnectYoutubeOAuth: apiMocks.disconnectYoutubeOAuth,
   fetchCaptureSources: apiMocks.fetchCaptureSources,
   fetchMcpTokens: apiMocks.fetchMcpTokens,
@@ -183,6 +185,20 @@ describe('SettingsModal', () => {
         manifestUrl: 'https://api.memexai.xyz/mcp.json',
         agentGuideUrl: 'https://api.memexai.xyz/llms.txt',
         fullAgentGuideUrl: 'https://api.memexai.xyz/llms-full.txt',
+        claudeCustomConnector: {
+          name: 'Memexai',
+          url: 'https://api.memexai.xyz/mcp',
+          setupSteps: [
+            'Open Claude settings, then Customize > Connectors.',
+            'Choose Add custom connector and paste the Memexai MCP URL.',
+            'Name it Memexai, finish adding it, then click Connect.',
+            'Sign in with Google, approve Memexai access, and enable the connector in the chat.',
+          ],
+          initialPrompt:
+            'Use my Memexai connector. Start with get_mcp_session, then list_projects.',
+          authMode: 'Remote MCP OAuth through Google sign-in and Memexai approval.',
+          fallback: 'If the Claude client cannot complete OAuth, create a scoped MCP token below.',
+        },
         tokenEnvironmentVariable: 'MEMEXAI_MCP_TOKEN',
         hermesConfig:
           'mcp_servers:\n  memexai:\n    url: "https://api.memexai.xyz/mcp"\n    headers:\n      Authorization: "Bearer ${MEMEXAI_MCP_TOKEN}"\n    timeout: 180\n    connect_timeout: 30',
@@ -236,7 +252,9 @@ describe('SettingsModal', () => {
     });
 
     expect(screen.getByDisplayValue('emt_visible_secret')).toBeInTheDocument();
-    expect(screen.queryByText(/https:\/\/api\.memexai\.xyz\/mcp/)).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('https://api.memexai.xyz/mcp')).toBeInTheDocument();
+    expect(screen.getByText('Claude custom connector')).toBeInTheDocument();
+    expect(screen.getByText(/Customize > Connectors/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /copy codex config/i })).toBeInTheDocument();
     expect(screen.getByText('Setup bundle')).toBeInTheDocument();
     expect(screen.getByText('Hermes config with token')).toBeInTheDocument();
@@ -260,6 +278,14 @@ describe('SettingsModal', () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(expect.stringContaining('connect_timeout: 30'));
       expect(writeText).toHaveBeenCalledWith(expect.stringContaining('emt_visible_secret'));
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /copy url/i }));
+    fireEvent.click(screen.getByRole('button', { name: /copy first prompt/i }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('https://api.memexai.xyz/mcp');
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('get_mcp_session'));
     });
   });
 
@@ -387,6 +413,36 @@ describe('SettingsModal', () => {
     expect(screen.queryByText(/workflow 12345678/i)).not.toBeInTheDocument();
   });
 
+  it('disconnects one playlist capture source without removing YouTube OAuth', async () => {
+    const captureSource = {
+      id: 'capture-1',
+      source_type: 'playlist',
+      source_url: 'https://www.youtube.com/playlist?list=PLabcdef123456',
+      external_id: 'PLabcdef123456',
+      title: 'Research inbox',
+      status: 'active',
+      last_synced_at: '2026-06-22T12:00:00Z',
+      recentItems: [],
+    };
+    apiMocks.fetchCaptureSources.mockResolvedValue([captureSource]);
+    apiMocks.deleteCaptureSource.mockResolvedValue(true);
+
+    render(<SettingsModal isOpen onClose={() => undefined} allowUserKeys={false} />);
+
+    expect(await screen.findByText('Research inbox')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /disconnect playlist/i }));
+    const dialog = await screen.findByRole('dialog', { name: /disconnect this playlist/i });
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^disconnect playlist$/i }));
+
+    await waitFor(() => {
+      expect(apiMocks.deleteCaptureSource).toHaveBeenCalledWith('capture-1');
+    });
+    expect(apiMocks.disconnectYoutubeOAuth).not.toHaveBeenCalled();
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Playlist disconnected/i)).toBeInTheDocument();
+  });
+
   it('starts YouTube connection from the capture inbox', async () => {
     const onConnectYouTube = vi.fn().mockResolvedValue({ error: null });
 
@@ -455,6 +511,34 @@ describe('SettingsModal', () => {
         'context:read',
         'overlay:write',
         'ingest:write',
+      ]);
+    });
+  });
+
+  it('can create an MCP token with agent project and playlist sync scopes', async () => {
+    apiMocks.createMcpToken.mockResolvedValue({
+      token: 'emt_visible_secret',
+      tokenRecord: {
+        id: 'token-1',
+        name: 'Hermes on ponyo',
+        tokenPrefix: 'emt_visible',
+        scopes: ['context:read', 'overlay:write', 'project:write', 'capture:write'],
+      },
+    });
+
+    render(<SettingsModal isOpen onClose={() => undefined} allowUserKeys={false} />);
+
+    await openAgentConnection();
+    fireEvent.click(screen.getByLabelText(/allow project setup/i));
+    fireEvent.click(screen.getByLabelText(/allow playlist sync/i));
+    fireEvent.click(screen.getByRole('button', { name: /create token/i }));
+
+    await waitFor(() => {
+      expect(apiMocks.createMcpToken).toHaveBeenCalledWith('Hermes on ponyo', [
+        'context:read',
+        'overlay:write',
+        'project:write',
+        'capture:write',
       ]);
     });
   });

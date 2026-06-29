@@ -3,11 +3,14 @@ import {
   approveMcpOAuthAuthorization,
   checkBackendHealth,
   clearIngestionJobHistory,
+  addProjectVideos,
   createBillingCheckout,
   createBillingPortal,
   createCaptureSource,
   createMcpToken,
+  createProject,
   deleteApiKey,
+  deleteCaptureSource,
   disconnectYoutubeOAuth,
   fetchAppConfig,
   fetchBillingStatus,
@@ -15,6 +18,8 @@ import {
   fetchLibraryArtifact,
   fetchLibrary,
   fetchLibraryGraph,
+  fetchProjects,
+  fetchProjectContextMap,
   fetchIngestionJobs,
   getCachedLibrary,
   getCachedLibraryGraph,
@@ -31,6 +36,7 @@ import {
   saveYoutubeOAuthConnection,
   searchLibraryComponents,
   searchVideoClips,
+  setCaptureSourceProject,
   syncCaptureSource,
 } from './api';
 import { supabase } from '../lib/supabase';
@@ -155,6 +161,30 @@ describe('api client', () => {
     );
   });
 
+  it('can scope search requests to a project', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ answer: '', relevantClips: [] }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await searchVideoClips('agent memory', 5, undefined, 'hybrid', 'project-1');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${API_BASE}/api/search`,
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          query: 'agent memory',
+          limit: 5,
+          category_filters: undefined,
+          retrieval_mode: 'hybrid',
+          project_id: 'project-1',
+        }),
+      }),
+    );
+  });
+
   it('checks backend health', async () => {
     vi.stubGlobal(
       'fetch',
@@ -252,6 +282,55 @@ describe('api client', () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       `${API_BASE}/api/library/graph?limit=25`,
+      expect.objectContaining({ headers: expect.any(Object) }),
+    );
+  });
+
+  it('scopes library and graph fetches by project id', async () => {
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () =>
+        url.includes('/library/graph')
+          ? {
+              version: 'memexai-library-source-graph-v1',
+              limit: 25,
+              accessModel: {
+                scope: 'project',
+                visibilityGrants: ['user_videos', 'user_channels'],
+                sourceTruth: 'read_only',
+                provenanceFields: ['accessScope', 'accessSource', 'accessReason'],
+              },
+              videos: [],
+              componentCounts: {
+                videos: 0,
+                channels: 0,
+                sourceLabels: 0,
+                sourceConcepts: 0,
+                sourceEdges: 0,
+                knowledgeArtifacts: 0,
+                transcriptChunksSampled: 0,
+                agentNotes: 0,
+                personalConcepts: 0,
+                reviewFlags: 0,
+              },
+              graph: { nodes: [], edges: [], selectedNodeId: null },
+              reviewFlags: [],
+              edgeCaseHandling: [],
+              guidance: '',
+            }
+          : { channels: [], totalVideos: 0, totalClips: 0 },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchLibrary('project-1');
+    await fetchLibraryGraph(25, 'project-1');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${API_BASE}/api/library?project_id=project-1`,
+      expect.objectContaining({ headers: expect.any(Object) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${API_BASE}/api/library/graph?limit=25&project_id=project-1`,
       expect.objectContaining({ headers: expect.any(Object) }),
     );
   });
@@ -373,6 +452,87 @@ describe('api client', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       `${API_BASE}/api/library/components/search?q=harness+loop&limit=20&component_types=source_concept%2Cvideo`,
       expect.objectContaining({ headers: expect.any(Object) }),
+    );
+  });
+
+  it('manages project scopes through authenticated backend endpoints', async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/projects') && init?.method !== 'POST') {
+        return {
+          ok: true,
+          json: async () => ({
+            projects: [{ id: 'project-1', name: 'Agent harness', slug: 'agent-harness' }],
+            totalProjects: 1,
+          }),
+        };
+      }
+      if (url.endsWith('/api/projects') && init?.method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({
+            project: { id: 'project-1', name: 'Agent harness', slug: 'agent-harness' },
+          }),
+        };
+      }
+      if (url.endsWith('/api/projects/project-1/videos')) {
+        return {
+          ok: true,
+          json: async () => ({
+            project: { id: 'project-1', name: 'Agent harness', slug: 'agent-harness' },
+            addedVideos: ['yt-1'],
+          }),
+        };
+      }
+      if (url.endsWith('/api/projects/project-1/context-map?limit=25')) {
+        return {
+          ok: true,
+          json: async () => ({ found: true, project: { id: 'project-1' }, videos: [] }),
+        };
+      }
+      if (url.endsWith('/api/capture/sources/capture-1/project')) {
+        return {
+          ok: true,
+          json: async () => ({ captureSource: { id: 'capture-1', project_id: 'project-1' } }),
+        };
+      }
+      return { ok: false, json: async () => ({}) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchProjects()).resolves.toHaveLength(1);
+    await expect(createProject('Agent harness', 'Research scope')).resolves.toMatchObject({
+      id: 'project-1',
+    });
+    await expect(addProjectVideos('project-1', ['yt-1'])).resolves.toMatchObject({
+      addedVideos: ['yt-1'],
+    });
+    await expect(fetchProjectContextMap('project-1')).resolves.toMatchObject({
+      found: true,
+    });
+    await expect(setCaptureSourceProject('capture-1', 'project-1')).resolves.toMatchObject({
+      project_id: 'project-1',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${API_BASE}/api/projects`,
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ name: 'Agent harness', description: 'Research scope' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${API_BASE}/api/projects/project-1/videos`,
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ youtube_video_ids: ['yt-1'], added_source: 'manual' }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${API_BASE}/api/capture/sources/capture-1/project`,
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ project_id: 'project-1' }),
+      }),
     );
   });
 
@@ -595,6 +755,12 @@ describe('api client', () => {
           }),
         };
       }
+      if (url.endsWith('/api/capture/sources/capture-1') && init?.method === 'DELETE') {
+        return {
+          ok: true,
+          json: async () => ({ deleted: true }),
+        };
+      }
       return {
         ok: true,
         json: async () => ({
@@ -623,6 +789,7 @@ describe('api client', () => {
     await expect(syncCaptureSource('capture-1', 2)).resolves.toMatchObject({
       queuedJobCount: 1,
     });
+    await expect(deleteCaptureSource('capture-1')).resolves.toBe(true);
 
     expect(fetchMock).toHaveBeenCalledWith(
       `${API_BASE}/api/capture/sources`,
@@ -641,6 +808,10 @@ describe('api client', () => {
         method: 'POST',
         body: JSON.stringify({ max_jobs: 2 }),
       }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${API_BASE}/api/capture/sources/capture-1`,
+      expect.objectContaining({ method: 'DELETE' }),
     );
   });
 

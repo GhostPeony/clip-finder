@@ -4,10 +4,10 @@ Status: first implementation slice.
 
 Memexai supports two MCP auth paths:
 
-1. Dashboard-created bearer tokens for manual setup.
-2. OAuth-native MCP onboarding for clients that can discover and authorize remote MCP servers.
+1. OAuth-native MCP onboarding for clients that can discover and authorize remote MCP servers.
+2. Dashboard-created bearer tokens for manual setup fallback.
 
-The OAuth path is the preferred product direction because it lets Codex, Claude Code, Claude custom connectors, and similar desktop or hosted agent clients connect without first opening the Memexai dashboard. The agent client should be able to initiate the connection, open the user's browser for sign-in/approval, and receive its scoped MCP credential without the user manually creating a token in Settings.
+The OAuth path is the preferred product direction because it lets Claude custom connectors, Claude Code, Codex, and similar desktop or hosted agent clients connect without first opening the Memexai dashboard. The agent client should be able to initiate the connection, open the user's browser for sign-in/approval, and receive its scoped MCP credential without the user manually creating a token in Settings.
 
 For a paid or user-specific remote MCP, some credential is expected. Local STDIO MCP servers can often use environment variables or local credentials, but remote MCP servers that expose private user data should authenticate the user and issue a scoped access token. The product goal is not "no token"; it is "no manual dashboard token copy/paste unless the client cannot do OAuth."
 
@@ -27,6 +27,24 @@ For a paid or user-specific remote MCP, some credential is expected. Local STDIO
 10. Client exchanges the code at `/oauth/token`.
 11. Memexai returns an opaque bearer token backed by the existing `mcp_tokens` table.
 12. Agent calls `get_mcp_session`.
+
+## Claude Custom Connector Setup
+
+Until Memexai is listed in Claude's Connectors Directory, users add it manually:
+
+1. Open Claude settings, then `Customize > Connectors`.
+2. Choose `Add custom connector`.
+3. Paste `https://api.memexai.xyz/mcp`.
+4. Name it `Memexai`.
+5. Connect, sign in with Google, approve Memexai access, then enable the connector in the chat.
+
+Recommended first prompt:
+
+```text
+Use my Memexai connector. Start with get_mcp_session, then list_projects. If a project matches my task, open its project context map before searching source reports or transcript moments.
+```
+
+If OAuth fails in a specific client, the user can create a scoped MCP token in Settings and configure the agent with a bearer-token HTTP MCP header.
 
 ## Security Shape
 

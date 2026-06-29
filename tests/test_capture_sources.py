@@ -54,6 +54,11 @@ class Query:
         self.supabase.calls.append((self.table_name, "update", payload))
         return self
 
+    def delete(self):
+        self.action = "delete"
+        self.supabase.calls.append((self.table_name, "delete"))
+        return self
+
     def maybe_single(self):
         self.single = True
         self.supabase.calls.append((self.table_name, "maybe_single"))
@@ -77,6 +82,8 @@ class Query:
         if self.action == "update":
             row_id = next((value for column, value in self.filters if column == "id"), "row-1")
             return Result([{**self.payload, "id": row_id}])
+        if self.action == "delete":
+            return Result([])
         if self.count_requested:
             return Result([], self.supabase.active_count)
         data = self.supabase.responses.get(self.table_name, [])
@@ -144,6 +151,27 @@ def test_list_capture_sources_scopes_to_user():
     assert sources == [{"id": "capture-1", "title": "Inbox"}]
     assert ("youtube_capture_sources", "eq", "user_id", "user-1") in supabase.calls
     assert ("youtube_capture_sources", "limit", 100) in supabase.calls
+
+
+def test_delete_capture_source_scopes_to_user_and_leaves_videos_untouched():
+    supabase = Supabase({"youtube_capture_sources": [{"id": "capture-1", "title": "Inbox"}]})
+
+    deleted = capture.delete_capture_source(supabase, "user-1", "capture-1")
+
+    assert deleted is True
+    assert ("youtube_capture_sources", "eq", "user_id", "user-1") in supabase.calls
+    assert ("youtube_capture_sources", "eq", "id", "capture-1") in supabase.calls
+    assert ("youtube_capture_sources", "delete") in supabase.calls
+    assert all(call[0] != "videos" for call in supabase.calls)
+
+
+def test_delete_capture_source_returns_false_when_source_missing():
+    supabase = Supabase({"youtube_capture_sources": []})
+
+    deleted = capture.delete_capture_source(supabase, "user-1", "capture-404")
+
+    assert deleted is False
+    assert ("youtube_capture_sources", "delete") not in supabase.calls
 
 
 def test_build_capture_sources_context_includes_recent_items():
@@ -464,11 +492,12 @@ def test_create_capture_source_endpoint_validates_playlist(monkeypatch):
     monkeypatch.setattr(
         server,
         "create_playlist_capture_source",
-        lambda supabase, user_id, playlist_url, title, created_by, created_by_client: {
+        lambda supabase, user_id, playlist_url, title, project_id, created_by, created_by_client: {
             "id": "capture-1",
             "user_id": user_id,
             "source_url": playlist_url,
             "title": title,
+            "project_id": project_id,
             "created_by": created_by,
             "created_by_client": created_by_client,
         },

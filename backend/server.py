@@ -44,6 +44,7 @@ try:
     from .capture import (
         build_capture_sources_context,
         create_playlist_capture_source,
+        delete_capture_source,
     )
     from .capture_workflows import run_capture_sync_workflow
     from .config import (
@@ -61,6 +62,7 @@ try:
     from .context import (
         build_context_bundle,
         build_library_source_graph,
+        build_project_context_map,
         create_agent_note,
         get_library_artifact,
         get_video_context,
@@ -117,6 +119,15 @@ try:
         revoke_mcp_token,
     )
     from .onboarding import build_onboarding_status, build_onboarding_update
+    from .projects import (
+        add_videos_to_project,
+        create_project,
+        delete_project,
+        list_projects,
+        remove_video_from_project,
+        set_capture_source_project,
+        update_project,
+    )
     from .queue_dispatch import dispatch_ingestion_job
     from .rag import _get_embeddings as get_query_embeddings
     from .repo_context import repo_context_workflow_contract, validate_repo_context
@@ -152,6 +163,7 @@ except ImportError:
     from capture import (
         build_capture_sources_context,
         create_playlist_capture_source,
+        delete_capture_source,
     )
     from capture_workflows import run_capture_sync_workflow
     from config import (
@@ -169,6 +181,7 @@ except ImportError:
     from context import (
         build_context_bundle,
         build_library_source_graph,
+        build_project_context_map,
         create_agent_note,
         get_library_artifact,
         get_video_context,
@@ -225,6 +238,15 @@ except ImportError:
         revoke_mcp_token,
     )
     from onboarding import build_onboarding_status, build_onboarding_update
+    from projects import (
+        add_videos_to_project,
+        create_project,
+        delete_project,
+        list_projects,
+        remove_video_from_project,
+        set_capture_source_project,
+        update_project,
+    )
     from queue_dispatch import dispatch_ingestion_job
     from rag import _get_embeddings as get_query_embeddings
     from repo_context import repo_context_workflow_contract, validate_repo_context
@@ -262,6 +284,31 @@ class SearchRequest(BaseModel):
     limit: int = 5  # Default to 5 results, frontend can override
     category_filters: dict | None = None
     retrieval_mode: str = "hybrid"
+    project_id: str | None = None
+    project_slug: str | None = None
+
+
+class ProjectRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: str = ""
+    metadata: dict = Field(default_factory=dict)
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    status: str | None = None
+    metadata: dict | None = None
+
+
+class ProjectVideosRequest(BaseModel):
+    video_ids: list[str] = Field(default_factory=list)
+    youtube_video_ids: list[str] = Field(default_factory=list)
+    added_source: str = "manual"
+
+
+class CaptureSourceProjectRequest(BaseModel):
+    project_id: str | None = None
 
 
 class BillingCheckoutRequest(BaseModel):
@@ -303,6 +350,7 @@ class RepoContextValidationRequest(BaseModel):
 class CaptureSourceRequest(BaseModel):
     playlist_url: str
     title: str = ""
+    project_id: str | None = None
     created_by: str = "user"
     created_by_client: str | None = None
 
@@ -462,6 +510,17 @@ def _public_base_url(request: Request) -> str:
 
 def _mcp_agent_setup_bundle(base_url: str, token: str | None = None) -> dict:
     credential_env_var = "MEMEXAI_MCP_TOKEN"
+    claude_setup_steps = [
+        "Open Claude settings, then Customize > Connectors.",
+        "Choose Add custom connector and paste the Memexai MCP URL.",
+        "Name it Memexai, finish adding it, then click Connect.",
+        "Sign in with Google, approve Memexai access, and enable the connector in the chat.",
+    ]
+    claude_initial_prompt = (
+        "Use my Memexai connector. Start with get_mcp_session, then list_projects. "
+        "If a project matches my task, open its project context map before searching "
+        "source reports or transcript moments."
+    )
     hermes_config = [
         "mcp_servers:",
         "  memexai:",
@@ -483,9 +542,14 @@ def _mcp_agent_setup_bundle(base_url: str, token: str | None = None) -> dict:
         "Call get_agent_quickstart or read context://agent-quickstart.",
         "If the user has a personal brain, call get_brain_sync_contract or read context://brain-sync-contract.",
         "Use export_brain_digest or read context://brain-digest to sync compact saved-video digests into a personal brain.",
-        "Call list_video_library or read context://library before searching.",
+        "Call list_projects or read context://projects to identify explicit project scopes.",
+        "Call get_project_context_map when a project matches the user's task.",
+        "If granted project:write, call create_project only when the user asks for a new project scope.",
+        "If granted capture:write, call link_youtube_playlist_capture_source to attach a user-provided playlist URL to a project.",
+        "Use sync_capture_source with max_jobs=0 to preview playlist videos, then queue only after explicit confirmation.",
+        "Call list_video_library or read context://library before searching; pass project_id/project_slug when scoped.",
         "Call list_context_categories or read context://categories when you need filters.",
-        "Use search_video_concepts with retrieval_mode=hybrid for concepts, TLDRs, source reports, report sections, aliases, tools, and pitfalls before pulling timestamp clips.",
+        "Use search_video_concepts with retrieval_mode=hybrid for concepts, TLDRs, source reports, report sections, aliases, tools, and pitfalls before pulling timestamp clips; pass project_id/project_slug when scoped.",
         "Call get_video_knowledge_map for promising videos to inspect report sections, concepts, claims, decisions, timeline cues, and timestamp refs.",
         "Use search_transcript_text for exact phrases, names, acronyms, and product terms when keyword precision matters.",
         "Use get_repo_context_workflow or read context://repo-context-workflow for the repo-via-MCP collection flow.",
@@ -501,6 +565,17 @@ def _mcp_agent_setup_bundle(base_url: str, token: str | None = None) -> dict:
         "manifestUrl": f"{base_url}/mcp.json",
         "agentGuideUrl": f"{base_url}/llms.txt",
         "fullAgentGuideUrl": f"{base_url}/llms-full.txt",
+        "claudeCustomConnector": {
+            "name": "Memexai",
+            "url": f"{base_url}/mcp",
+            "setupSteps": claude_setup_steps,
+            "initialPrompt": claude_initial_prompt,
+            "authMode": "Remote MCP OAuth through Google sign-in and Memexai approval.",
+            "fallback": (
+                "If the Claude client cannot complete OAuth, create a scoped MCP token in "
+                "Settings and use a client that supports bearer-token MCP headers."
+            ),
+        },
         "tokenEnvironmentVariable": credential_env_var,
         "hermesConfig": "\n".join(hermes_config),
         "codexConfig": "\n".join(codex_config),
@@ -531,6 +606,26 @@ def _mcp_agent_setup_bundle(base_url: str, token: str | None = None) -> dict:
             {
                 "tool": "list_video_library",
                 "purpose": "Inspect only the videos granted to this user before searching.",
+            },
+            {
+                "tool": "list_projects",
+                "purpose": "Inspect user-created project scopes before scoped retrieval.",
+            },
+            {
+                "tool": "get_project_context_map",
+                "purpose": "Inspect a project-scoped video/context map before broader library search.",
+            },
+            {
+                "tool": "create_project",
+                "purpose": "Create a new user-owned project scope only after explicit user request.",
+            },
+            {
+                "tool": "link_youtube_playlist_capture_source",
+                "purpose": "Attach a user-provided YouTube playlist to an existing project as a standing capture source.",
+            },
+            {
+                "tool": "sync_capture_source",
+                "purpose": "Preview and, after confirmation, queue ingestion for a linked playlist capture source.",
             },
             {
                 "tool": "list_context_categories",
@@ -565,7 +660,8 @@ def _mcp_agent_setup_bundle(base_url: str, token: str | None = None) -> dict:
             "agentInstruction": (
                 "Do not treat shared canonical rows as globally searchable. Use only results "
                 "returned through the current MCP token and preserve accessScope/accessReason "
-                "when explaining provenance."
+                "when explaining provenance. Project scope is explicit per MCP call; do not "
+                "assume the web UI's current project."
             ),
         },
     }
@@ -602,8 +698,8 @@ def _public_mcp_manifest(base_url: str) -> dict:
         "title": "Memexai Context",
         "version": "0.1.0",
         "description": (
-            "Read-only saved-video context MCP with writable personal overlays and "
-            "optional scoped YouTube ingestion."
+            "Read-only saved-video context MCP with writable personal overlays, "
+            "optional scoped YouTube ingestion, project creation, and playlist capture sync."
         ),
         "transport": {
             "type": "streamable-http",
@@ -611,12 +707,24 @@ def _public_mcp_manifest(base_url: str) -> dict:
             "protocol": "json-rpc-2.0",
         },
         "auth": {
-            "type": "bearer",
+            "type": "oauth_or_bearer",
+            "preferred": "oauth_custom_connector",
             "setup": (
-                "Create an MCP token in the Memexai web app settings under Agent access, "
-                "then call get_mcp_session after connecting to confirm effective scopes."
+                "Preferred: add the Memexai remote MCP URL as a Claude custom connector "
+                "and complete OAuth with Google sign-in plus Memexai approval. Fallback: "
+                "create an MCP token in Settings under Agent access, then call "
+                "get_mcp_session after connecting to confirm effective scopes."
             ),
             "setupBundle": _mcp_agent_setup_bundle(base_url),
+            "oauth": {
+                "mcpEndpoint": f"{base_url}/mcp",
+                "protectedResourceMetadata": f"{base_url}/.well-known/oauth-protected-resource/mcp",
+                "authorizationServerMetadata": f"{base_url}/.well-known/oauth-authorization-server",
+                "clientRegistration": f"{base_url}/oauth/register",
+                "authorization": f"{base_url}/oauth/authorize",
+                "token": f"{base_url}/oauth/token",
+                "defaultScopes": ["context:read", "overlay:write"],
+            },
             "tokenManagement": {
                 "list": f"{base_url}/api/mcp/tokens",
                 "create": f"{base_url}/api/mcp/tokens",
@@ -638,12 +746,25 @@ def _public_mcp_manifest(base_url: str) -> dict:
                         "Playlist and channel URLs require allow_bulk=true."
                     ),
                 },
+                {
+                    "name": "capture:write",
+                    "description": (
+                        "Opt-in scope to link YouTube playlist capture sources and sync "
+                        "already-linked capture sources with explicit queue confirmation."
+                    ),
+                },
+                {
+                    "name": "project:write",
+                    "description": "Opt-in scope to create user-owned project scopes.",
+                },
             ],
         },
         "resources": [
             "context://agent-quickstart",
             "context://brain-sync-contract",
             "context://brain-digest",
+            "context://projects",
+            "context://project/{projectId}",
             "context://library",
             "context://repo-context-contract",
             "context://repo-context-workflow",
@@ -685,6 +806,7 @@ def _public_mcp_manifest(base_url: str) -> dict:
                 "semantic pgvector search over transcript chunks",
                 "keyword full-text search over transcript chunks and video titles",
                 "user-scoped access filtering through video/channel grants",
+                "explicit project-scoped retrieval through project_id or project_slug",
                 "category_filters over source-label facets",
                 "read-only source context resources",
                 "personal overlay notes and concepts",
@@ -721,27 +843,32 @@ def _public_mcp_manifest(base_url: str) -> dict:
         "repoContextWorkflow": repo_context_workflow_contract(),
         "brainSync": describe_brain_sync_contract(),
         "agentOnboarding": {
-            "preferred": "mcp_manifest_and_bearer_token",
+            "preferred": "oauth_custom_connector",
             "sessionTool": "get_mcp_session",
             "quickstartResource": "context://agent-quickstart",
             "quickstartTool": "get_agent_quickstart",
             "humanLightFlow": [
-                "Agent discovers /mcp.json or /llms.txt.",
+                "User adds https://api.memexai.xyz/mcp or the current MCP endpoint as a Claude custom connector.",
+                "Claude follows the OAuth challenge, opens Google sign-in, and asks for Memexai approval.",
+                "Agent calls get_mcp_session to confirm scopes and safe next calls after OAuth succeeds.",
+                "Agent uses context:read by default, overlay:write for notes, and write scopes only by explicit opt-in.",
+            ],
+            "fallbackFlow": [
                 "User creates a scoped MCP token once in Settings.",
                 "Agent configures the streamable HTTP MCP endpoint with that bearer token.",
                 "Agent calls get_mcp_session to confirm scopes and safe next calls.",
-                "Agent uses context:read by default, overlay:write for notes, and ingest:write only by explicit opt-in.",
             ],
             "future": [
-                "agent-assisted token bootstrap",
                 "service-account style workspaces",
-                "narrow capture:write or youtube:sync scopes",
+                "agent-assisted project and playlist setup onboarding",
             ],
         },
         "safety": {
             "sourceContext": "read-only",
             "overlayWrites": ["add_context_note", "upsert_personal_concept"],
             "bulkIngestion": "requires ingest:write and allow_bulk=true for playlists/channels",
+            "captureSync": "requires capture:write plus preview and explicit queue confirmation",
+            "projectCreation": "requires project:write",
         },
         "docs": {
             "llms": f"{base_url}/llms.txt",
@@ -766,14 +893,22 @@ def _llms_text(base_url: str, full: bool = False) -> str:
         "Brain digest export: context://brain-digest or export_brain_digest",
         "",
         "Authentication:",
-        "- Create a bearer MCP token in the web app settings under Agent access.",
+        "- Preferred Claude path: add this MCP endpoint as a Claude custom connector, sign in with Google, approve Memexai access, then enable the connector in the chat.",
+        "- Claude custom connector URL: " + f"{base_url}/mcp",
+        "- Fallback path: create a bearer MCP token in the web app settings under Agent access for clients that need explicit bearer-token config.",
         "- After connecting, call get_mcp_session to confirm token scopes and recommended next calls.",
         "- Default scopes: context:read, overlay:write.",
         "- Optional scope: ingest:write for queuing YouTube links from agent sessions.",
+        "- Optional scope: project:write for creating project scopes.",
+        "- Optional scope: capture:write for linking and syncing YouTube playlist capture sources.",
         "",
         "Core rule:",
         "- Source video context is read-only. Do not rewrite transcripts, source labels, source concepts, source edges, or generated artifacts.",
         "- Search is limited to the MCP token owner's user_videos/user_channels grants, even though canonical video rows may be shared.",
+        "- Project scope is explicit per call. Use list_projects and pass project_id or project_slug when the user is working in a project.",
+        "- Create projects only with project:write and explicit user intent.",
+        "- Link playlists only with capture:write, a user-provided YouTube playlist URL, and a user-owned project target.",
+        "- Preview capture sync with max_jobs=0, then queue only after explicit confirmation.",
         "- Search clips, library videos, and video context include accessScope, accessSource, and accessReason so agents can explain why a shared canonical video is visible.",
         "- Write only personal overlay notes or personal concepts unless explicitly queuing ingestion.",
         "- If the user has an external personal brain, sync compact source refs and digests through context://brain-sync-contract rather than direct database access.",
@@ -795,21 +930,26 @@ def _llms_text(base_url: str, full: bool = False) -> str:
         "2. Read context://agent-quickstart or call get_agent_quickstart.",
         "3. Read context://brain-sync-contract or call get_brain_sync_contract when syncing an external personal brain.",
         "4. Pull export_brain_digest or context://brain-digest when the user wants external-brain sync.",
-        "5. Call list_video_library or read context://library.",
-        "6. Call list_context_categories or read context://categories.",
-        "7. Call list_capture_sources or read context://capture-sources when you need to understand standing YouTube inputs.",
-        "8. Call list_workflow_runs or read context://workflows when following long-running platform work.",
-        "9. Use search_video_concepts with retrieval_mode=hybrid for source reports, concepts, report sections, aliases, tools, methods, pitfalls, and timestamp refs.",
-        "10. Call get_video_knowledge_map or read context://video-map/{videoId} for candidate videos before pulling transcript clips.",
-        "11. Use search_video_moments with retrieval_mode=hybrid for timestamp evidence, or retrieval_mode=semantic/keyword for narrower follow-up. Inspect accessScope/accessReason on returned clips, library videos, and video context.",
-        "12. Use search_transcript_text for exact phrases, names, acronyms, and product terms without embedding/LLM spend.",
-        "13. Use get_video_context/include_transcript only when the map and timestamp clips are insufficient.",
-        "14. Use get_repo_context_workflow or context://repo-context-workflow when you need the repo collection flow.",
-        "15. Use get_repo_context_contract or context://repo-context-contract when you need the repo_context schema.",
-        "16. Optional: use prompts/get collect_repo_context to gather validated repo_context with the agent's own repo tools.",
-        "17. Call validate_repo_context and follow readiness.suggestedAgentNextSteps before implementation planning.",
-        "18. Use build_agent_brief for product specs, implementation plans, and agent prompts.",
-        "19. Use add_context_note or upsert_personal_concept for durable personalized takeaways.",
+        "5. Call list_projects or read context://projects to identify explicit project scopes.",
+        "6. Call get_project_context_map when the task maps to a project; otherwise broaden to the full library intentionally.",
+        "7. If the user asks for a new workstream, call create_project with project:write.",
+        "8. If the user gives a playlist for a project, call link_youtube_playlist_capture_source with capture:write.",
+        "9. Preview playlist sync with sync_capture_source max_jobs=0, then queue only after explicit confirmation.",
+        "10. Call list_video_library or read context://library.",
+        "11. Call list_context_categories or read context://categories.",
+        "12. Call list_capture_sources or read context://capture-sources when you need to understand standing YouTube inputs.",
+        "13. Call list_workflow_runs or read context://workflows when following long-running platform work.",
+        "14. Use search_video_concepts with retrieval_mode=hybrid for source reports, concepts, report sections, aliases, tools, methods, pitfalls, and timestamp refs. Pass project_id/project_slug when scoped.",
+        "15. Call get_video_knowledge_map or read context://video-map/{videoId} for candidate videos before pulling transcript clips.",
+        "16. Use search_video_moments with retrieval_mode=hybrid for timestamp evidence, or retrieval_mode=semantic/keyword for narrower follow-up. Inspect accessScope/accessReason on returned clips, library videos, and video context.",
+        "17. Use search_transcript_text for exact phrases, names, acronyms, and product terms without embedding/LLM spend.",
+        "18. Use get_video_context/include_transcript only when the map and timestamp clips are insufficient.",
+        "19. Use get_repo_context_workflow or context://repo-context-workflow when you need the repo collection flow.",
+        "20. Use get_repo_context_contract or context://repo-context-contract when you need the repo_context schema.",
+        "21. Optional: use prompts/get collect_repo_context to gather validated repo_context with the agent's own repo tools.",
+        "19. Call validate_repo_context and follow readiness.suggestedAgentNextSteps before implementation planning.",
+        "20. Use build_agent_brief for product specs, implementation plans, and agent prompts.",
+        "21. Use add_context_note or upsert_personal_concept for durable personalized takeaways.",
     ]
     if full:
         lines.extend(
@@ -825,6 +965,8 @@ def _llms_text(base_url: str, full: bool = False) -> str:
                 "- context://agent-quickstart: machine-readable first steps for connected agents.",
                 "- context://brain-sync-contract: contract for syncing compact saved-video knowledge into an external personal brain.",
                 "- context://brain-digest: compact incremental digest for external personal brains.",
+                "- context://projects: explicit user project scopes for saved videos.",
+                "- context://project/{projectId}: project-scoped video/context map.",
                 "- context://library: indexed channels and saved videos.",
                 "- context://repo-context-contract: schema for caller-supplied repo_context.",
                 "- context://repo-context-workflow: readiness gate and expected output for caller-supplied repo_context collection.",
@@ -1118,10 +1260,24 @@ def search_for_user(
     x_api_key: str | None = None,
     category_filters: dict | None = None,
     retrieval_mode: str = "hybrid",
+    project_id: str | None = None,
+    project_slug: str | None = None,
 ) -> dict:
     """Run a scoped semantic search and log hosted usage when applicable."""
     supabase, api_key, used_own_key = resolve_search_execution(user_id, limit, x_api_key)
-    result = search(query, user_id, api_key, limit, category_filters, retrieval_mode)
+    if project_id or project_slug:
+        result = search(
+            query,
+            user_id,
+            api_key,
+            limit,
+            category_filters,
+            retrieval_mode,
+            project_id,
+            project_slug,
+        )
+    else:
+        result = search(query, user_id, api_key, limit, category_filters, retrieval_mode)
 
     try:
         if supabase is not None:
@@ -1136,8 +1292,153 @@ LIBRARY_CACHE_CONTROL = "private, max-age=30, stale-while-revalidate=120"
 LIBRARY_ARTIFACT_CACHE_CONTROL = "private, max-age=300, stale-while-revalidate=600"
 
 
+@app.get("/api/projects")
+async def projects_endpoint(
+    response: Response,
+    limit: int = 50,
+    user: dict = Depends(get_request_user),
+):
+    """List user projects that can scope saved-video context."""
+    response.headers["Cache-Control"] = LIBRARY_CACHE_CONTROL
+    if not is_supabase_mode():
+        return {
+            "projects": [],
+            "archivedProjects": [],
+            "totalProjects": 0,
+            "totalArchivedProjects": 0,
+            "limit": max(1, min(limit, 100)),
+        }
+    return list_projects(get_supabase(), user["sub"], limit)
+
+
+@app.post("/api/projects")
+async def create_project_endpoint(
+    request: ProjectRequest,
+    user: dict = Depends(get_request_user),
+):
+    """Create a user-owned project scope."""
+    if not is_supabase_mode():
+        raise HTTPException(status_code=404, detail="Projects are available in hosted mode")
+    try:
+        project = create_project(
+            get_supabase(),
+            user["sub"],
+            request.name,
+            request.description,
+            request.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"project": project}
+
+
+@app.patch("/api/projects/{project_id}")
+async def update_project_endpoint(
+    project_id: str,
+    request: ProjectUpdateRequest,
+    user: dict = Depends(get_request_user),
+):
+    """Update project display/status fields."""
+    if not is_supabase_mode():
+        raise HTTPException(status_code=404, detail="Projects are available in hosted mode")
+    try:
+        project = update_project(
+            get_supabase(),
+            user["sub"],
+            project_id,
+            name=request.name,
+            description=request.description,
+            status=request.status,
+            metadata=request.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"project": project}
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project_endpoint(
+    project_id: str,
+    user: dict = Depends(get_request_user),
+):
+    """Delete a project and its memberships without deleting source videos."""
+    if not is_supabase_mode():
+        raise HTTPException(status_code=404, detail="Projects are available in hosted mode")
+    if not delete_project(get_supabase(), user["sub"], project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"deleted": True}
+
+
+@app.post("/api/projects/{project_id}/videos")
+async def add_project_videos_endpoint(
+    project_id: str,
+    request: ProjectVideosRequest,
+    user: dict = Depends(get_request_user),
+):
+    """Assign existing accessible library videos to a project."""
+    if not is_supabase_mode():
+        raise HTTPException(status_code=404, detail="Projects are available in hosted mode")
+    try:
+        return add_videos_to_project(
+            get_supabase(),
+            user["sub"],
+            project_id,
+            video_ids=request.video_ids,
+            youtube_video_ids=request.youtube_video_ids,
+            added_source=request.added_source,
+        )
+    except ValueError as exc:
+        status = 404 if "not found" in str(exc).lower() else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+@app.delete("/api/projects/{project_id}/videos/{video_id}")
+async def remove_project_video_endpoint(
+    project_id: str,
+    video_id: str,
+    user: dict = Depends(get_request_user),
+):
+    """Remove one video from a project only."""
+    if not is_supabase_mode():
+        raise HTTPException(status_code=404, detail="Projects are available in hosted mode")
+    if not remove_video_from_project(get_supabase(), user["sub"], project_id, video_id):
+        raise HTTPException(status_code=404, detail="Project video not found")
+    return {"removed": True}
+
+
+@app.get("/api/projects/{project_id}/context-map")
+async def project_context_map_endpoint(
+    project_id: str,
+    response: Response,
+    detail_level: str = "compact",
+    max_chars: int | None = None,
+    user: dict = Depends(get_request_user),
+):
+    """Return a compact project-scoped context map."""
+    response.headers["Cache-Control"] = LIBRARY_CACHE_CONTROL
+    if not is_supabase_mode():
+        raise HTTPException(status_code=404, detail="Projects are available in hosted mode")
+    try:
+        return build_project_context_map(
+            get_supabase(),
+            user["sub"],
+            project_id=project_id,
+            detail_level=detail_level,
+            max_chars=max_chars,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/api/library")
-async def library_endpoint(response: Response, user: dict = Depends(get_request_user)):
+async def library_endpoint(
+    response: Response,
+    project_id: str | None = None,
+    project_slug: str | None = None,
+    user: dict = Depends(get_request_user),
+):
     """
     Get the authenticated user's indexed videos organized by channel.
 
@@ -1150,7 +1451,10 @@ async def library_endpoint(response: Response, user: dict = Depends(get_request_
     """
     response.headers["Cache-Control"] = LIBRARY_CACHE_CONTROL
     user_id = user["sub"]
-    return get_library(user_id)
+    try:
+        return get_library(user_id, project_id, project_slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/library/graph")
@@ -1158,6 +1462,8 @@ async def library_graph_endpoint(
     response: Response,
     limit: int = 50,
     include_content: bool = False,
+    project_id: str | None = None,
+    project_slug: str | None = None,
     user: dict = Depends(get_request_user),
 ):
     """Return the user's inspectable source graph snapshot."""
@@ -1192,14 +1498,22 @@ async def library_graph_endpoint(
         }
 
     bounded_limit = max(1, min(limit, 100))
-    return build_library_source_graph(
-        get_supabase(),
-        user["sub"],
-        bounded_limit,
-        include_artifact_content=include_content,
-        include_auxiliary_nodes=False,
-        include_review_flags=False,
-    )
+    try:
+        graph_kwargs = {
+            "include_artifact_content": include_content,
+            "include_auxiliary_nodes": False,
+            "include_review_flags": False,
+        }
+        if project_id or project_slug:
+            graph_kwargs.update({"project_id": project_id, "project_slug": project_slug})
+        return build_library_source_graph(
+            get_supabase(),
+            user["sub"],
+            bounded_limit,
+            **graph_kwargs,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/library/artifacts/{artifact_id}")
@@ -1225,6 +1539,8 @@ async def library_components_search_endpoint(
     q: str = "",
     limit: int = 20,
     component_types: str | None = None,
+    project_id: str | None = None,
+    project_slug: str | None = None,
     user: dict = Depends(get_request_user),
 ):
     """Keyword-search source graph components without embeddings or an LLM answer."""
@@ -1254,13 +1570,26 @@ async def library_components_search_endpoint(
             },
             "guidance": "Component search is available in hosted Supabase mode.",
         }
-    return search_library_components(
-        get_supabase(),
-        user["sub"],
-        q,
-        bounded_limit,
-        selected_types,
-    )
+    try:
+        if project_id or project_slug:
+            return search_library_components(
+                get_supabase(),
+                user["sub"],
+                q,
+                bounded_limit,
+                selected_types,
+                project_id=project_id,
+                project_slug=project_slug,
+            )
+        return search_library_components(
+            get_supabase(),
+            user["sub"],
+            q,
+            bounded_limit,
+            selected_types,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.delete("/api/video/{video_id}")
@@ -1334,7 +1663,12 @@ async def transcript_endpoint(
 
 
 @app.get("/api/videos/{video_id}/context")
-async def video_context_endpoint(video_id: str, user: dict = Depends(get_request_user)):
+async def video_context_endpoint(
+    video_id: str,
+    project_id: str | None = None,
+    project_slug: str | None = None,
+    user: dict = Depends(get_request_user),
+):
     """
     Return source-derived context for a video in the user's library.
 
@@ -1347,9 +1681,18 @@ async def video_context_endpoint(video_id: str, user: dict = Depends(get_request
             status_code=404, detail="Structured video context is only available in hosted mode"
         )
 
-    context = get_video_context(get_supabase(), user["sub"], video_id)
-    if not context:
-        raise HTTPException(status_code=404, detail="Video not found in your library")
+    try:
+        context = get_video_context(
+            get_supabase(),
+            user["sub"],
+            video_id,
+            project_id=project_id,
+            project_slug=project_slug,
+        )
+        if not context:
+            raise HTTPException(status_code=404, detail="Video not found in your library")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return context
 
 
@@ -1578,12 +1921,53 @@ async def create_capture_source_endpoint(
             user["sub"],
             request.playlist_url,
             request.title,
+            request.project_id,
             request.created_by,
             request.created_by_client,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    return {"captureSource": source}
+
+
+@app.delete("/api/capture/sources/{source_id}")
+async def delete_capture_source_endpoint(
+    source_id: str,
+    user: dict = Depends(get_request_user),
+):
+    """Delete one capture source. Already indexed videos stay in the user's library."""
+    if not is_supabase_mode():
+        raise HTTPException(
+            status_code=404, detail="Capture sources are only available in hosted mode"
+        )
+    if not delete_capture_source(get_supabase(), user["sub"], source_id):
+        raise HTTPException(status_code=404, detail="Capture source not found")
+    return {"deleted": True}
+
+
+@app.patch("/api/capture/sources/{source_id}/project")
+async def set_capture_source_project_endpoint(
+    source_id: str,
+    request: CaptureSourceProjectRequest,
+    user: dict = Depends(get_request_user),
+):
+    """Attach or detach a capture playlist's default project target."""
+    if not is_supabase_mode():
+        raise HTTPException(
+            status_code=404, detail="Capture sources are only available in hosted mode"
+        )
+    try:
+        source = set_capture_source_project(
+            get_supabase(),
+            user["sub"],
+            source_id,
+            request.project_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not source:
+        raise HTTPException(status_code=404, detail="Capture source not found")
     return {"captureSource": source}
 
 
@@ -1729,8 +2113,20 @@ async def mcp_endpoint(
         limit: int,
         category_filters: dict | None = None,
         retrieval_mode: str = "hybrid",
+        project_id: str | None = None,
+        project_slug: str | None = None,
     ) -> dict:
         try:
+            if project_id or project_slug:
+                return search_for_user(
+                    query,
+                    user["sub"],
+                    limit,
+                    category_filters=category_filters,
+                    retrieval_mode=retrieval_mode,
+                    project_id=project_id,
+                    project_slug=project_slug,
+                )
             return search_for_user(
                 query,
                 user["sub"],
@@ -1747,8 +2143,19 @@ async def mcp_endpoint(
         query: str,
         limit: int,
         category_filters: dict | None = None,
+        project_id: str | None = None,
+        project_slug: str | None = None,
     ) -> dict:
         try:
+            if project_id or project_slug:
+                return search_transcript_text(
+                    query,
+                    user["sub"],
+                    limit,
+                    category_filters=category_filters,
+                    project_id=project_id,
+                    project_slug=project_slug,
+                )
             return search_transcript_text(
                 query,
                 user["sub"],
@@ -1765,6 +2172,7 @@ async def mcp_endpoint(
             raise ValueError(f"Source knowledge embedding failed: {exc}") from exc
 
     queued_ingestion_jobs: list[dict] = []
+    queued_capture_sync_jobs: list[dict] = []
     loop = asyncio.get_event_loop()
     response, status_code = await loop.run_in_executor(
         None,
@@ -1781,11 +2189,14 @@ async def mcp_endpoint(
                 "search_transcript_text": run_mcp_transcript_text_search,
                 "embed_source_query": embed_mcp_source_query,
                 "queued_ingestion_jobs": queued_ingestion_jobs,
+                "queued_capture_sync_jobs": queued_capture_sync_jobs,
             },
         ),
     )
     for job in queued_ingestion_jobs:
         schedule_hosted_ingestion_job(background_tasks, job, source="mcp")
+    for job in queued_capture_sync_jobs:
+        schedule_hosted_ingestion_job(background_tasks, job, source="mcp-capture-sync")
 
     if response is None:
         return Response(status_code=status_code)
@@ -1968,16 +2379,19 @@ async def search_endpoint(
                 request.query,
                 user_id,
                 request.limit,
-                x_api_key,
-                request.category_filters,
-                request.retrieval_mode,
+                x_api_key=x_api_key,
+                category_filters=request.category_filters,
+                retrieval_mode=request.retrieval_mode,
+                project_id=request.project_id,
+                project_slug=request.project_slug,
             ),
         )
         return result
     except HTTPException:
         raise
     except ValueError as e:
-        # API key not set or other config error
+        if "project" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=401, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")

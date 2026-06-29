@@ -30,7 +30,7 @@ export interface Env {
   WORKFLOW_INTERNAL_SECRET?: string;
 }
 
-const API_INSTANCE_ID = 'production-7d054f3';
+const API_INSTANCE_ID = 'production-20260625-claude-connector';
 
 export class MemexaiApiContainer extends Container {
   defaultPort = 8080;
@@ -81,6 +81,14 @@ export default {
     }
 
     const container = getContainer(runtimeEnv.API_CONTAINER, API_INSTANCE_ID);
+    await container.startAndWaitForPorts({
+      ports: [8080],
+      cancellationOptions: {
+        instanceGetTimeoutMS: 10000,
+        portReadyTimeoutMS: 45000,
+        waitInterval: 500,
+      },
+    });
     return container.fetch(request);
   },
 };

@@ -34,6 +34,7 @@ const App: React.FC = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [allowUserKeys, setAllowUserKeys] = useState(false);
   const [storageMode, setStorageMode] = useState<StorageMode>('supabase');
+  const [initialLibraryProjectId, setInitialLibraryProjectId] = useState<string>('');
   const { toast, showToast, hideToast } = useToast();
   const [searchState, setSearchState] = useState<SearchState>({
     status: 'idle',
@@ -122,6 +123,7 @@ const App: React.FC = () => {
     } else if (next !== 'home' && window.location.pathname === '/home') {
       window.history.pushState({}, '', '/');
     }
+    if (next === 'library') setInitialLibraryProjectId('');
     setMode(next);
     setMobileMenuOpen(false);
   };
@@ -130,6 +132,7 @@ const App: React.FC = () => {
     { label: 'Home', target: 'home', isActive: mode === 'home' },
     { label: 'Dashboard', target: 'unified', isActive: mode === 'unified' || mode === 'search' },
     { label: 'Library', target: 'library', isActive: mode === 'library' },
+    { label: 'Projects', target: 'projects', isActive: mode === 'projects' },
     ...(showJobs ? [{ label: 'Jobs', target: 'jobs' as AppMode, isActive: mode === 'jobs' }] : []),
   ];
 
@@ -307,10 +310,18 @@ const App: React.FC = () => {
                 setActiveClip(active?.videoId ? active : null);
                 setMode('search'); // Switch to show results
               }}
-              onOpenLibrary={() => setMode('library')}
+              onOpenLibrary={(projectId) => {
+                setInitialLibraryProjectId(projectId || '');
+                setMode('library');
+              }}
+              onOpenProjects={() => {
+                setInitialLibraryProjectId('');
+                setMode('projects');
+              }}
               onOpenJobs={() => setMode('jobs')}
               onConnectYouTube={connectYouTube}
               onIndexComplete={() => {
+                setInitialLibraryProjectId('');
                 setMode('library');
               }}
               onOpenSettings={() => setSettingsOpen(true)}
@@ -318,7 +329,18 @@ const App: React.FC = () => {
           </div>
         ) : mode === 'library' ? (
           <div className="py-8">
-            <LibraryView onIndexMore={() => setMode('unified')} />
+            <LibraryView
+              initialProjectId={initialLibraryProjectId}
+              onIndexMore={() => setMode('unified')}
+            />
+          </div>
+        ) : mode === 'projects' ? (
+          <div className="py-8">
+            <LibraryView
+              initialSurface="projects"
+              initialProjectId={initialLibraryProjectId}
+              onIndexMore={() => setMode('unified')}
+            />
           </div>
         ) : mode === 'jobs' ? (
           <div className="py-8">

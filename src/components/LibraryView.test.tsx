@@ -2,26 +2,43 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LibraryView } from './LibraryView';
 import {
+  addProjectVideos,
+  createCaptureSource,
+  createProject,
   fetchIngestionJobs,
   fetchLibrary,
+  fetchProjects,
   getCachedIngestionJobs,
   getCachedLibrary,
   getSearchHistory,
 } from '../services/api';
 
 vi.mock('./LibraryKnowledgeGraph', () => ({
-  LibraryKnowledgeGraph: ({ activeView }: { activeView: string }) => (
-    <div data-testid="library-graph">{activeView}</div>
+  LibraryKnowledgeGraph: ({
+    activeView,
+    projectId,
+  }: {
+    activeView: string;
+    projectId?: string;
+  }) => (
+    <div data-testid="library-graph">
+      {activeView}
+      {projectId ? `:${projectId}` : ''}
+    </div>
   ),
 }));
 
 vi.mock('../services/api', () => ({
+  addProjectVideos: vi.fn(),
   clearSearchHistory: vi.fn(),
+  createCaptureSource: vi.fn(),
+  createProject: vi.fn(),
   deleteSearchHistoryEntry: vi.fn(),
   deleteVideo: vi.fn(),
   downloadTranscript: vi.fn(),
   fetchIngestionJobs: vi.fn(),
   fetchLibrary: vi.fn(),
+  fetchProjects: vi.fn(),
   getCachedIngestionJobs: vi.fn(),
   getCachedLibrary: vi.fn(),
   getSearchHistory: vi.fn(),
@@ -36,6 +53,10 @@ describe('LibraryView', () => {
     });
     vi.mocked(getCachedLibrary).mockResolvedValue(null);
     vi.mocked(getCachedIngestionJobs).mockResolvedValue(null);
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+    vi.mocked(createProject).mockResolvedValue(null);
+    vi.mocked(createCaptureSource).mockResolvedValue(null);
+    vi.mocked(addProjectVideos).mockResolvedValue(null);
     vi.mocked(fetchIngestionJobs).mockResolvedValue([
       {
         id: 'job-1',
@@ -67,6 +88,28 @@ describe('LibraryView', () => {
     expect(screen.getByText('failed')).toBeInTheDocument();
     expect(screen.getByText('video')).toBeInTheDocument();
     expect(screen.getByText('Source channel could not be prepared.')).toBeInTheDocument();
+  });
+
+  it('renders the projects management view even when no videos are indexed', async () => {
+    vi.mocked(fetchProjects).mockResolvedValue([
+      {
+        id: 'project-1',
+        name: 'Agent harness research',
+        slug: 'agent-harness-research',
+        description: 'Reliability and eval videos',
+        videoCount: 0,
+      },
+    ]);
+
+    render(<LibraryView initialSurface="projects" onIndexMore={() => undefined} />);
+
+    expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument();
+    expect(screen.queryByText('No videos indexed yet')).not.toBeInTheDocument();
+    expect(screen.getByText('Manage projects')).toBeInTheDocument();
+    expect(screen.getByText('Project view')).toBeInTheDocument();
+    expect(
+      screen.getAllByRole('button', { name: /Agent harness research/i }).length,
+    ).toBeGreaterThan(0);
   });
 
   it('shows a retry state when the library endpoint fails', async () => {
@@ -170,5 +213,58 @@ describe('LibraryView', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Recent searches/i }));
     expect(screen.getByText('No recent searches')).toBeInTheDocument();
+  });
+
+  it('opens with an initial project scope and lets users search project cards', async () => {
+    vi.mocked(fetchProjects).mockResolvedValue([
+      {
+        id: 'project-1',
+        name: 'Agent harness research',
+        slug: 'agent-harness-research',
+        description: 'Reliability and eval videos',
+        videoCount: 2,
+      },
+      {
+        id: 'project-2',
+        name: 'Synthetic data',
+        slug: 'synthetic-data',
+        description: 'Post-training data videos',
+        videoCount: 1,
+      },
+    ]);
+    vi.mocked(fetchLibrary).mockResolvedValue({
+      channels: [
+        {
+          name: 'Research Channel',
+          videoCount: 1,
+          videos: [
+            {
+              videoId: 'video-1',
+              title: 'Saved video',
+              thumbnailUrl: 'thumb.jpg',
+              clipCount: 4,
+              indexedAt: 1782300000,
+            },
+          ],
+        },
+      ],
+      totalVideos: 1,
+      totalClips: 4,
+    });
+    vi.mocked(fetchIngestionJobs).mockResolvedValue([]);
+
+    render(<LibraryView initialProjectId="project-1" onIndexMore={() => undefined} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('library-graph')).toHaveTextContent('videos:project-1');
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('Search projects'), {
+      target: { value: 'synthetic' },
+    });
+    expect(screen.getByRole('button', { name: /Synthetic data/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Agent harness research/i }),
+    ).not.toBeInTheDocument();
   });
 });

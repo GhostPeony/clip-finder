@@ -134,7 +134,7 @@ def test_oauth_authorization_code_exchange_issues_mcp_token(monkeypatch):
             "redirect_uri": "http://localhost:31337/oauth/callback",
             "code_challenge": challenge,
             "code_challenge_method": "S256",
-            "scope": "context:read overlay:write ingest:write admin",
+            "scope": "context:read overlay:write ingest:write capture:write project:write admin",
             "state": "state-1",
         },
     )
@@ -155,7 +155,7 @@ def test_oauth_authorization_code_exchange_issues_mcp_token(monkeypatch):
 
     assert token["access_token"] == expected_access_token
     assert token["token_type"] == "Bearer"  # noqa: S105 - OAuth token type, not a secret.
-    assert token["scope"] == "context:read overlay:write ingest:write"
+    assert token["scope"] == ("context:read overlay:write ingest:write capture:write project:write")
     assert supabase.tables[mcp_oauth.CODE_TABLE][0]["consumed_at"] is not None
 
 

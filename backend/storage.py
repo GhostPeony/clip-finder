@@ -60,8 +60,19 @@ def search(
     limit: int = 5,
     category_filters: dict | None = None,
     retrieval_mode: str = "hybrid",
+    project_id: str | None = None,
+    project_slug: str | None = None,
 ) -> dict:
-    return search_pg(query, user_id, api_key, limit, category_filters, retrieval_mode)
+    return search_pg(
+        query,
+        user_id,
+        api_key,
+        limit,
+        category_filters,
+        retrieval_mode,
+        project_id,
+        project_slug,
+    )
 
 
 def search_transcript_text(
@@ -69,12 +80,20 @@ def search_transcript_text(
     user_id: str = LOCAL_USER_ID,
     limit: int = 5,
     category_filters: dict | None = None,
+    project_id: str | None = None,
+    project_slug: str | None = None,
 ) -> dict:
-    return search_transcript_text_pg(query, user_id, limit, category_filters)
+    return search_transcript_text_pg(
+        query, user_id, limit, category_filters, project_id, project_slug
+    )
 
 
-def get_library(user_id: str = LOCAL_USER_ID) -> dict:
-    return get_library_pg(user_id)
+def get_library(
+    user_id: str = LOCAL_USER_ID,
+    project_id: str | None = None,
+    project_slug: str | None = None,
+) -> dict:
+    return get_library_pg(user_id, project_id, project_slug)
 
 
 def delete_video(video_id: str, user_id: str = LOCAL_USER_ID) -> dict:

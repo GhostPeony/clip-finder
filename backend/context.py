@@ -15,6 +15,7 @@ try:
         labels_match_category_filters,
         normalize_category_filters,
     )
+    from .projects import resolve_project_scope
     from .repo_context import normalize_repo_context, validate_repo_context
 except ImportError:
     from brain_sync import queue_brain_sync_event
@@ -24,6 +25,7 @@ except ImportError:
         labels_match_category_filters,
         normalize_category_filters,
     )
+    from projects import resolve_project_scope
     from repo_context import normalize_repo_context, validate_repo_context
 
 
@@ -156,6 +158,33 @@ def _context_access_metadata(
     }
 
 
+def _resolve_optional_project_scope(
+    supabase: Any,
+    user_id: str,
+    project_id: str | None = None,
+    project_slug: str | None = None,
+) -> dict | None:
+    return resolve_project_scope(supabase, user_id, project_id, project_slug)
+
+
+def _project_scope_response(scope: dict | None) -> dict:
+    if not scope:
+        return {
+            "scope": "all_library",
+            "projectId": None,
+            "projectSlug": None,
+            "projectName": None,
+            "videoCount": None,
+        }
+    return {
+        "scope": "project",
+        "projectId": scope.get("id"),
+        "projectSlug": scope.get("slug"),
+        "projectName": scope.get("name"),
+        "videoCount": len(scope.get("videoIds") or []),
+    }
+
+
 def _select_video_for_user(supabase: Any, user_id: str, youtube_video_id: str) -> dict | None:
     video = _first_video_with_optional_legacy_owner(
         lambda columns: (
@@ -248,10 +277,19 @@ def _select_video_by_db_id_for_user(
     }
 
 
-def get_video_context(supabase: Any, user_id: str, youtube_video_id: str) -> dict | None:
+def get_video_context(
+    supabase: Any,
+    user_id: str,
+    youtube_video_id: str,
+    project_id: str | None = None,
+    project_slug: str | None = None,
+) -> dict | None:
     """Return source-derived context for a video if it belongs to the user's library."""
+    project_scope = _resolve_optional_project_scope(supabase, user_id, project_id, project_slug)
     video = _select_video_for_user(supabase, user_id, youtube_video_id)
     if not video:
+        return None
+    if project_scope and video.get("id") not in set(project_scope.get("videoIds") or []):
         return None
 
     video_id = video["id"]
@@ -310,13 +348,26 @@ def get_video_context(supabase: Any, user_id: str, youtube_video_id: str) -> dic
         "sourceConcepts": concepts,
         "sourceEdges": edges,
         "knowledgeArtifacts": artifacts,
+        "projectScope": _project_scope_response(project_scope),
     }
 
 
-def list_video_library_context(supabase: Any, user_id: str, limit: int = 50) -> dict:
+def list_video_library_context(
+    supabase: Any,
+    user_id: str,
+    limit: int = 50,
+    project_id: str | None = None,
+    project_slug: str | None = None,
+) -> dict:
     """Return indexed channels and recent videos available to the current user."""
     normalized_limit = max(1, min(limit, 100))
-    videos = _user_video_rows(supabase, user_id, normalized_limit)
+    project_scope = _resolve_optional_project_scope(supabase, user_id, project_id, project_slug)
+    videos = _user_video_rows(
+        supabase,
+        user_id,
+        normalized_limit,
+        scope_video_ids=project_scope.get("videoIds") if project_scope else None,
+    )
     channel_ids = sorted(
         {
             video.get("channel_id")
@@ -330,9 +381,14 @@ def list_video_library_context(supabase: Any, user_id: str, limit: int = 50) -> 
             "totalChannels": 0,
             "returnedVideos": 0,
             "limit": normalized_limit,
+            "projectScope": _project_scope_response(project_scope),
             "guidance": (
-                "No indexed channels were found for this user. Ingest videos in the app "
-                "before asking agents to use saved video context."
+                "No indexed videos were found in this project scope."
+                if project_scope
+                else (
+                    "No indexed channels were found for this user. Ingest videos in the app "
+                    "before asking agents to use saved video context."
+                )
             ),
         }
 
@@ -380,6 +436,7 @@ def list_video_library_context(supabase: Any, user_id: str, limit: int = 50) -> 
         "totalChannels": len(channels),
         "returnedVideos": len(videos),
         "limit": normalized_limit,
+        "projectScope": _project_scope_response(project_scope),
         "guidance": (
             "Use videoId with get_video_context for full transcript-derived context, "
             "search_video_moments with retrieval_mode=hybrid for timestamp search, or build_agent_brief "
@@ -1027,10 +1084,18 @@ def build_library_source_graph(
     include_artifact_content: bool = True,
     include_auxiliary_nodes: bool = True,
     include_review_flags: bool = True,
+    project_id: str | None = None,
+    project_slug: str | None = None,
 ) -> dict:
     """Return a user-scoped graph snapshot for library source inspection."""
     normalized_limit = max(1, min(limit, 100))
-    videos = _user_video_rows(supabase, user_id, normalized_limit)
+    project_scope = _resolve_optional_project_scope(supabase, user_id, project_id, project_slug)
+    videos = _user_video_rows(
+        supabase,
+        user_id,
+        normalized_limit,
+        scope_video_ids=project_scope.get("videoIds") if project_scope else None,
+    )
     channel_by_id = _channel_map(supabase, videos)
     video_by_id = {
         video.get("id"): _digest_video(video, channel_by_id) for video in videos if video.get("id")
@@ -1060,6 +1125,7 @@ def build_library_source_graph(
             "sourceTruth": "read_only",
             "provenanceFields": ["accessScope", "accessSource", "accessReason"],
         },
+        "projectScope": _project_scope_response(project_scope),
         "videos": list(video_by_id.values()),
         "componentCounts": {
             "videos": len(video_by_id),
@@ -1090,16 +1156,29 @@ def search_library_components(
     query: str,
     limit: int = 20,
     component_types: list[str] | None = None,
+    project_id: str | None = None,
+    project_slug: str | None = None,
 ) -> dict:
     """Search graph components with deterministic keyword matching only."""
     normalized_query = " ".join(str(query or "").split())
     normalized_limit = max(1, min(limit, 50))
     selected_types = _normalize_component_types(component_types)
+    project_scope = _resolve_optional_project_scope(supabase, user_id, project_id, project_slug)
     terms = _library_search_terms(normalized_query)
     if not normalized_query or not terms:
-        return _empty_library_component_search(normalized_query, normalized_limit, selected_types)
+        return _empty_library_component_search(
+            normalized_query,
+            normalized_limit,
+            selected_types,
+            project_scope,
+        )
 
-    videos = _user_video_rows(supabase, user_id, max(normalized_limit * 3, normalized_limit))
+    videos = _user_video_rows(
+        supabase,
+        user_id,
+        max(normalized_limit * 3, normalized_limit),
+        scope_video_ids=project_scope.get("videoIds") if project_scope else None,
+    )
     channel_by_id = _channel_map(supabase, videos)
     video_by_id = {
         video.get("id"): _digest_video(video, channel_by_id) for video in videos if video.get("id")
@@ -1108,6 +1187,17 @@ def search_library_components(
 
     results: list[dict] = []
     for video in video_by_id.values():
+        video_id = str(video.get("videoId") or "")
+        channel_name = str(video.get("channel", {}).get("name") or "")
+        video_summary = " ".join(
+            item
+            for item in [
+                channel_name,
+                video_id,
+                video.get("youtubeUrl"),
+            ]
+            if item
+        )
         _append_component_result(
             results,
             selected_types,
@@ -1115,11 +1205,12 @@ def search_library_components(
             video.get("id"),
             "video_metadata",
             video.get("title", ""),
-            video.get("channel", {}).get("name", ""),
+            video_summary,
             video,
             [],
             terms,
             ["title", "summary"],
+            metadata={"youtubeVideoId": video_id, "youtubeUrl": video.get("youtubeUrl")},
         )
 
     for label in rows["source_labels"]:
@@ -1270,8 +1361,9 @@ def search_library_components(
         "retrievalMode": "component_keyword",
         "results": results,
         "componentTypes": sorted(selected_types),
+        "projectScope": _project_scope_response(project_scope),
         "accessModel": {
-            "scope": "current_user_grants",
+            "scope": "project" if project_scope else "current_user_grants",
             "embeddingUsed": False,
             "llmAnswerUsed": False,
         },
@@ -1927,14 +2019,20 @@ def _library_edge_case_handling() -> list[dict]:
     ]
 
 
-def _empty_library_component_search(query: str, limit: int, component_types: set[str]) -> dict:
+def _empty_library_component_search(
+    query: str,
+    limit: int,
+    component_types: set[str],
+    project_scope: dict | None = None,
+) -> dict:
     return {
         "query": query,
         "retrievalMode": "component_keyword",
         "results": [],
         "componentTypes": sorted(component_types),
+        "projectScope": _project_scope_response(project_scope),
         "accessModel": {
-            "scope": "current_user_grants",
+            "scope": "project" if project_scope else "current_user_grants",
             "embeddingUsed": False,
             "llmAnswerUsed": False,
         },
@@ -2095,7 +2193,13 @@ def _fit_brain_digest_to_budget(payload: dict, max_chars: int) -> dict:
     return payload
 
 
-def _user_video_rows(supabase: Any, user_id: str, limit: int) -> list[dict]:
+def _user_video_rows(
+    supabase: Any,
+    user_id: str,
+    limit: int,
+    *,
+    scope_video_ids: list[str] | None = None,
+) -> list[dict]:
     subscriptions = _rows(
         supabase.table("user_channels").select("channel_id").eq("user_id", user_id).execute()
     )
@@ -2113,8 +2217,26 @@ def _user_video_rows(supabase: Any, user_id: str, limit: int) -> list[dict]:
 
     videos = []
     seen_video_ids = set()
+    scoped_ids = (
+        [str(video_id) for video_id in scope_video_ids if video_id]
+        if scope_video_ids is not None
+        else None
+    )
 
-    if channel_ids:
+    if scoped_ids is not None:
+        if scoped_ids:
+            videos.extend(
+                _video_rows_with_optional_legacy_owner(
+                    lambda columns: (
+                        supabase.table("videos")
+                        .select(columns)
+                        .in_("id", scoped_ids)
+                        .order("indexed_at", desc=True)
+                        .limit(limit)
+                    )
+                )
+            )
+    elif channel_ids:
         videos.extend(
             _video_rows_with_optional_legacy_owner(
                 lambda columns: (
@@ -2128,7 +2250,7 @@ def _user_video_rows(supabase: Any, user_id: str, limit: int) -> list[dict]:
         )
 
     remaining_limit = max(0, limit - len(videos))
-    if explicit_video_ids and remaining_limit:
+    if scoped_ids is None and explicit_video_ids and remaining_limit:
         videos.extend(
             _video_rows_with_optional_legacy_owner(
                 lambda columns: (
@@ -2142,7 +2264,7 @@ def _user_video_rows(supabase: Any, user_id: str, limit: int) -> list[dict]:
         )
 
     remaining_limit = max(0, limit - len(videos))
-    if remaining_limit:
+    if scoped_ids is None and remaining_limit:
         try:
             videos.extend(
                 _rows(
@@ -2165,13 +2287,20 @@ def _user_video_rows(supabase: Any, user_id: str, limit: int) -> list[dict]:
         if not video_id or video_id in seen_video_ids:
             continue
         seen_video_ids.add(video_id)
+        has_channel_access = video.get("channel_id") in channel_ids
+        video_grant = explicit_grants_by_video_id.get(video_id)
+        legacy_owner_access = video.get("indexed_by") == user_id
+        if scoped_ids is not None and not (
+            has_channel_access or video_grant or legacy_owner_access
+        ):
+            continue
         deduped.append(
             {
                 **video,
                 "access": _context_access_metadata(
-                    video.get("channel_id") in channel_ids,
-                    explicit_grants_by_video_id.get(video_id),
-                    video.get("indexed_by") == user_id,
+                    has_channel_access,
+                    video_grant,
+                    legacy_owner_access,
                 ),
             }
         )
@@ -2184,9 +2313,15 @@ def _list_user_source_context(
     query: str,
     limit: int,
     category_filters: dict | None = None,
+    project_scope: dict | None = None,
 ) -> dict:
     """Return source-derived concepts/artifacts from videos the user can access."""
-    videos = _user_video_rows(supabase, user_id, max(limit * 4, limit))
+    videos = _user_video_rows(
+        supabase,
+        user_id,
+        max(limit * 4, limit),
+        scope_video_ids=project_scope.get("videoIds") if project_scope else None,
+    )
     video_ids = [video.get("id") for video in videos if video.get("id")]
     normalized_filters = normalize_category_filters(category_filters)
     if not video_ids:
@@ -2197,6 +2332,7 @@ def _list_user_source_context(
             "sourceEdges": [],
             "knowledgeArtifacts": [],
             "categoryFilters": normalized_filters,
+            "projectScope": _project_scope_response(project_scope),
         }
 
     source_labels = _rows(
@@ -2230,6 +2366,7 @@ def _list_user_source_context(
             "sourceEdges": [],
             "knowledgeArtifacts": [],
             "categoryFilters": normalized_filters,
+            "projectScope": _project_scope_response(project_scope),
         }
 
     terms = _query_terms(query)
@@ -2304,6 +2441,7 @@ def _list_user_source_context(
         "sourceEdges": matched_edges,
         "knowledgeArtifacts": matched_artifacts,
         "categoryFilters": normalized_filters,
+        "projectScope": _project_scope_response(project_scope),
         "categoryFilterGuidance": (
             "categoryFilters use OR within one facet and AND across facets. "
             "Call list_context_categories when you need available labels."
@@ -2333,6 +2471,8 @@ def search_source_knowledge(
     *,
     retrieval_mode: str = "hybrid",
     embedding_provider: Any | None = None,
+    project_id: str | None = None,
+    project_slug: str | None = None,
 ) -> dict:
     """Search indexed source knowledge with hybrid retrieval and keyword fallback."""
     normalized_limit = max(1, min(limit, 20))
@@ -2341,6 +2481,7 @@ def search_source_knowledge(
     effective_max_chars = response_char_budget(normalized_detail, max_chars, max_context_tokens)
     normalized_filters = normalize_category_filters(category_filters)
     normalized_mode = _normalize_source_knowledge_retrieval_mode(retrieval_mode)
+    project_scope = _resolve_optional_project_scope(supabase, user_id, project_id, project_slug)
     embedding_calls = 0
     embedding_error = ""
     query_embedding = None
@@ -2360,8 +2501,12 @@ def search_source_knowledge(
         normalized_filters,
         normalized_mode,
         query_embedding,
+        project_scope.get("id") if project_scope else None,
     )
-    if index_rows is not None:
+    use_keyword_empty_fallback = (
+        index_rows is not None and not index_rows and normalized_mode == "keyword"
+    )
+    if index_rows is not None and not use_keyword_empty_fallback:
         terms = _query_terms(query)
         results = [
             _format_source_index_result(row, terms, detail_budget, normalized_detail, query)
@@ -2372,6 +2517,7 @@ def search_source_knowledge(
             "retrievalMode": normalized_mode,
             "detailLevel": normalized_detail,
             "categoryFilters": normalized_filters,
+            "projectScope": _project_scope_response(project_scope),
             "results": results,
             "retrievalPlan": {
                 "primary": (
@@ -2417,12 +2563,17 @@ def search_source_knowledge(
         detail_budget,
         effective_max_chars,
         max_context_tokens,
+        project_scope,
     )
     fallback_payload["retrievalMode"] = normalized_mode
     fallback_payload["retrievalPlan"]["fallbackUsed"] = True
     fallback_payload["retrievalPlan"]["fallbackReason"] = (
-        embedding_error
-        or "source_knowledge_index RPC unavailable or not yet deployed; searched legacy source tables."
+        "source_knowledge_index keyword search returned no matches; searched legacy source tables."
+        if use_keyword_empty_fallback
+        else (
+            embedding_error
+            or "source_knowledge_index RPC unavailable or not yet deployed; searched legacy source tables."
+        )
     )
     fallback_payload["retrievalBudget"]["embeddingCalls"] = embedding_calls
     return fallback_payload
@@ -2438,6 +2589,7 @@ def _search_source_knowledge_keyword_fallback(
     detail_budget: dict,
     effective_max_chars: int,
     max_context_tokens: int | None,
+    project_scope: dict | None = None,
 ) -> dict:
     source_context = _list_user_source_context(
         supabase,
@@ -2445,6 +2597,7 @@ def _search_source_knowledge_keyword_fallback(
         query,
         normalized_limit,
         normalized_filters,
+        project_scope,
     )
     video_by_id = {
         video.get("id"): video for video in source_context.get("videos", []) if video.get("id")
@@ -2552,6 +2705,7 @@ def _search_source_knowledge_keyword_fallback(
         "retrievalMode": "keyword",
         "detailLevel": normalized_detail,
         "categoryFilters": normalized_filters,
+        "projectScope": _project_scope_response(project_scope),
         "results": results,
         "retrievalPlan": {
             "primary": "legacy_source_concepts_and_artifacts_keyword",
@@ -2605,6 +2759,7 @@ def _search_source_knowledge_index_rows(
     category_filters: dict,
     retrieval_mode: str,
     query_embedding: list[float] | None,
+    project_id: str | None = None,
 ) -> list[dict] | None:
     if retrieval_mode in {"hybrid", "semantic"} and query_embedding is None:
         return None
@@ -2620,6 +2775,7 @@ def _search_source_knowledge_index_rows(
                 "match_limit": limit * 4,
                 "category_filters": category_filters,
                 "retrieval_mode": retrieval_mode,
+                "match_project_id": project_id,
             },
         ).execute()
     except Exception as exc:  # noqa: BLE001 - local/older DBs fall back to legacy tables.
@@ -2761,12 +2917,20 @@ def build_video_knowledge_map(
     detail_level: str = "compact",
     max_chars: int | None = None,
     max_context_tokens: int | None = None,
+    project_id: str | None = None,
+    project_slug: str | None = None,
 ) -> dict:
     """Return a compact navigable table of contents for one saved video."""
     normalized_detail = normalize_detail_level(detail_level)
     detail_budget = DETAIL_LEVEL_BUDGETS[normalized_detail]
     effective_max_chars = response_char_budget(normalized_detail, max_chars, max_context_tokens)
-    context = get_video_context(supabase, user_id, youtube_video_id)
+    context = get_video_context(
+        supabase,
+        user_id,
+        youtube_video_id,
+        project_id=project_id,
+        project_slug=project_slug,
+    )
     if not context:
         return {
             "found": False,
@@ -2813,6 +2977,7 @@ def build_video_knowledge_map(
         "version": "memexai-video-knowledge-map-v1",
         "detailLevel": normalized_detail,
         "video": video,
+        "projectScope": context.get("projectScope") or _project_scope_response(None),
         "reportSections": report_sections,
         "knowledgeArtifacts": artifacts,
         "coreConcepts": concepts,
@@ -2834,6 +2999,8 @@ def build_video_knowledge_map(
                 "query": "<topic, claim, section, or tool from this map>",
                 "retrieval_mode": "hybrid",
                 "limit": 5,
+                "project_id": project_id,
+                "project_slug": project_slug,
             },
         },
         "fallback_mcp_call": {
@@ -2843,6 +3010,8 @@ def build_video_knowledge_map(
                 "youtube_video_id": video.get("videoId"),
                 "include_transcript": True,
                 "detail_level": normalized_detail,
+                "project_id": project_id,
+                "project_slug": project_slug,
             },
         },
         "retrievalBudget": {
@@ -3189,10 +3358,22 @@ def _fit_video_knowledge_map_to_budget(payload: dict, max_chars: int) -> dict:
     return payload
 
 
-def list_context_categories(supabase: Any, user_id: str, limit: int = 100) -> dict:
+def list_context_categories(
+    supabase: Any,
+    user_id: str,
+    limit: int = 100,
+    project_id: str | None = None,
+    project_slug: str | None = None,
+) -> dict:
     """Return browsable source and personal categories for agent discovery."""
     normalized_limit = max(1, min(limit, 200))
-    videos = _user_video_rows(supabase, user_id, normalized_limit)
+    project_scope = _resolve_optional_project_scope(supabase, user_id, project_id, project_slug)
+    videos = _user_video_rows(
+        supabase,
+        user_id,
+        normalized_limit,
+        scope_video_ids=project_scope.get("videoIds") if project_scope else None,
+    )
     video_ids = [video.get("id") for video in videos if video.get("id")]
     video_by_id = {video.get("id"): video for video in videos if video.get("id")}
 
@@ -3250,6 +3431,7 @@ def list_context_categories(supabase: Any, user_id: str, limit: int = 100) -> di
         "taxonomy": get_category_taxonomy(),
         "filterExamples": category_filter_examples(),
         "personalConcepts": personal_concepts,
+        "projectScope": _project_scope_response(project_scope),
         "videoCount": len(videos),
         "sourceLabelCount": len(source_labels),
         "guidance": (
@@ -3258,6 +3440,152 @@ def list_context_categories(supabase: Any, user_id: str, limit: int = 100) -> di
             "user-specific overlay context. Source labels are read-only."
         ),
     }
+
+
+def build_project_context_map(
+    supabase: Any,
+    user_id: str,
+    project_id: str | None = None,
+    project_slug: str | None = None,
+    limit: int = 50,
+    detail_level: str = "compact",
+    max_chars: int | None = None,
+    max_context_tokens: int | None = None,
+) -> dict:
+    """Return a compact navigable map for one project-scoped video context set."""
+    normalized_detail = normalize_detail_level(detail_level)
+    normalized_limit = max(1, min(int(limit or 50), 100))
+    effective_max_chars = response_char_budget(normalized_detail, max_chars, max_context_tokens)
+    project_scope = _resolve_optional_project_scope(supabase, user_id, project_id, project_slug)
+    if not project_scope:
+        return {
+            "found": False,
+            "projectId": project_id,
+            "projectSlug": project_slug,
+            "detailLevel": normalized_detail,
+            "guidance": "Project scope is required. Call list_projects first if the user intent is ambiguous.",
+        }
+
+    library = list_video_library_context(
+        supabase,
+        user_id,
+        limit=normalized_limit,
+        project_id=project_scope.get("id"),
+    )
+    graph = build_library_source_graph(
+        supabase,
+        user_id,
+        limit=normalized_limit,
+        include_artifact_content=False,
+        include_auxiliary_nodes=False,
+        include_review_flags=False,
+        project_id=project_scope.get("id"),
+    )
+    categories = list_context_categories(
+        supabase,
+        user_id,
+        limit=100,
+        project_id=project_scope.get("id"),
+    )
+    videos = [
+        {
+            "videoId": video.get("videoId"),
+            "title": video.get("title"),
+            "channel": channel.get("name"),
+            "transcriptSeconds": video.get("transcriptSeconds"),
+            "indexedAt": video.get("indexedAt"),
+            "next_mcp_call": {
+                "name": "get_video_knowledge_map",
+                "arguments": {
+                    "youtube_video_id": video.get("videoId"),
+                    "project_id": project_scope.get("id"),
+                    "detail_level": normalized_detail,
+                },
+            },
+        }
+        for channel in library.get("channels", [])
+        for video in channel.get("videos", [])
+    ]
+    payload = {
+        "found": True,
+        "version": "memexai-project-context-map-v1",
+        "detailLevel": normalized_detail,
+        "project": {
+            "id": project_scope.get("id"),
+            "name": project_scope.get("name"),
+            "slug": project_scope.get("slug"),
+            "description": project_scope.get("description", ""),
+            "status": project_scope.get("status", "active"),
+            "videoCount": len(project_scope.get("videoIds") or []),
+            "captureSources": project_scope.get("captureSources", []),
+        },
+        "videos": videos,
+        "componentCounts": graph.get("componentCounts", {}),
+        "facets": categories.get("facets", {}),
+        "suggestedFollowUpQueries": _project_follow_up_queries(
+            project_scope,
+            videos,
+            categories.get("categories", []),
+        ),
+        "next_mcp_call": {
+            "name": "search_video_concepts",
+            "reason": "Search generated reports, concepts, aliases, and timestamp refs within this project.",
+            "argumentsTemplate": {
+                "query": "<specific project topic or user question>",
+                "project_id": project_scope.get("id"),
+                "retrieval_mode": "hybrid",
+                "limit": 8,
+            },
+        },
+        "fallback_mcp_call": {
+            "name": "search_video_concepts",
+            "reason": "Broaden only after scoped recall is weak or the user asks across all saved videos.",
+            "argumentsTemplate": {
+                "query": "<same query>",
+                "retrieval_mode": "hybrid",
+                "limit": 8,
+            },
+        },
+        "retrievalBudget": {
+            "embeddingCalls": 0,
+            "llmCalls": 0,
+            "limit": normalized_limit,
+            "maxChars": effective_max_chars,
+            "maxContextTokens": max_context_tokens,
+        },
+        "guidance": (
+            "Use this project map before searching when the user's request maps to a "
+            "specific workstream. Ask the user to choose a project when intent is ambiguous."
+        ),
+    }
+    return _fit_results_to_budget(payload, "videos", effective_max_chars)
+
+
+def _project_follow_up_queries(
+    project_scope: dict,
+    videos: list[dict],
+    categories: list[dict],
+) -> list[str]:
+    queries = []
+    project_name = project_scope.get("name") or "this project"
+    for category in categories[:5]:
+        label = category.get("label")
+        if label:
+            queries.append(f"{label} in {project_name}")
+    for video in videos[:3]:
+        title = video.get("title")
+        if title:
+            queries.append(f"key takeaways from {title}")
+    queries.append(f"what should I know for {project_name}?")
+    seen = set()
+    deduped = []
+    for query in queries:
+        normalized = query.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(query)
+    return deduped[:8]
 
 
 def _aggregate_source_categories(
@@ -3441,6 +3769,9 @@ def build_agent_brief(
     repo_context: dict | None = None,
     limit: int = 8,
     category_filters: dict | None = None,
+    *,
+    embedding_provider: Any | None = None,
+    retrieval_mode: str = "hybrid",
 ) -> dict:
     """Build a spec/prompt-oriented brief from source knowledge and personal overlay."""
     bundle = build_context_bundle(
@@ -3457,26 +3788,27 @@ def build_agent_brief(
     personal_concepts = bundle["personalConcepts"]
     agent_notes = bundle["agentNotes"]
     effective_repo_context = normalize_repo_context(repo_context)
+    indexed_source = _brief_source_knowledge_search(
+        supabase,
+        user_id,
+        query,
+        effective_repo_context,
+        limit,
+        category_filters,
+        embedding_provider,
+        retrieval_mode,
+    )
 
-    key_concepts = [
-        {
-            "name": concept.get("name", ""),
-            "type": concept.get("concept_type", "concept"),
-            "summary": concept.get("summary", ""),
-            "source_refs": concept.get("source_refs", []),
-        }
-        for concept in concepts[:limit]
-    ]
-    source_highlights = [
-        {
-            "title": artifact.get("title", ""),
-            "artifactType": artifact.get("artifact_type", ""),
-            "summary": artifact.get("summary", ""),
-            "contentExcerpt": str(artifact.get("content", ""))[:900],
-            "source_refs": artifact.get("source_refs", []),
-        }
-        for artifact in artifacts[:limit]
-    ]
+    if indexed_source and indexed_source.get("results"):
+        key_concepts, source_highlights = _brief_items_from_source_results(
+            indexed_source.get("results", []),
+            concepts,
+            artifacts,
+            limit,
+        )
+    else:
+        key_concepts = _brief_key_concepts_from_legacy(concepts, limit)
+        source_highlights = _brief_highlights_from_legacy(artifacts, limit)
     repo_touchpoints = _repo_touchpoints(effective_repo_context)
     repo_target_map = _repo_target_map(effective_repo_context)
     repo_readiness = bundle["repoContextValidation"].get("readiness", {})
@@ -3499,6 +3831,15 @@ def build_agent_brief(
         },
         "keyConcepts": key_concepts,
         "sourceHighlights": source_highlights,
+        "sourceRetrieval": {
+            "usedSourceKnowledgeIndex": bool(indexed_source and indexed_source.get("results")),
+            "retrievalMode": (indexed_source or {}).get("retrievalMode") or "legacy_keyword",
+            "fallbackUsed": (indexed_source or {}).get("retrievalPlan", {}).get("fallbackUsed"),
+            "embeddingCalls": (indexed_source or {})
+            .get("retrievalBudget", {})
+            .get("embeddingCalls", 0),
+            "resultCount": len((indexed_source or {}).get("results") or []),
+        },
         "implementationGuidance": _implementation_guidance(key_concepts, repo_touchpoints),
         "personalOverlay": {
             "concepts": personal_concepts[:limit],
@@ -3507,6 +3848,123 @@ def build_agent_brief(
         "citations": _collect_source_refs(key_concepts, source_highlights, limit),
         "suggestedNextActions": _brief_next_actions(repo_readiness),
     }
+
+
+def _brief_source_knowledge_search(
+    supabase: Any,
+    user_id: str,
+    query: str,
+    repo_context: dict,
+    limit: int,
+    category_filters: dict | None,
+    embedding_provider: Any | None,
+    retrieval_mode: str,
+) -> dict | None:
+    if embedding_provider is None and retrieval_mode != "keyword":
+        return None
+    try:
+        return search_source_knowledge(
+            supabase,
+            user_id,
+            _brief_retrieval_query(query, repo_context),
+            limit,
+            category_filters,
+            detail_level="standard",
+            max_chars=16_000,
+            retrieval_mode=retrieval_mode,
+            embedding_provider=embedding_provider,
+        )
+    except Exception:  # noqa: BLE001 - brief generation must keep legacy fallback available.
+        return None
+
+
+def _brief_retrieval_query(query: str, repo_context: dict) -> str:
+    parts = [query]
+    for key in ("features", "modules", "symbols", "entrypoints"):
+        parts.extend(_repo_values(repo_context, key)[:6])
+
+    deduped = []
+    seen = set()
+    for part in parts:
+        normalized = " ".join(str(part).split())
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized)
+    return " ".join(deduped)[:900]
+
+
+def _brief_items_from_source_results(
+    results: list[dict],
+    fallback_concepts: list[dict],
+    fallback_artifacts: list[dict],
+    limit: int,
+) -> tuple[list[dict], list[dict]]:
+    key_concepts = []
+    source_highlights = []
+    for result in results[: max(limit * 2, limit)]:
+        source_refs = result.get("sourceRefs") if isinstance(result.get("sourceRefs"), list) else []
+        result_type = result.get("resultType")
+        if result_type == "source_concept":
+            key_concepts.append(
+                {
+                    "name": result.get("name") or result.get("title", ""),
+                    "type": result.get("conceptType")
+                    or result.get("metadata", {}).get("conceptType")
+                    or "concept",
+                    "summary": result.get("summary", ""),
+                    "source_refs": source_refs,
+                }
+            )
+        else:
+            source_highlights.append(
+                {
+                    "title": result.get("title") or result.get("sectionHeading", ""),
+                    "artifactType": (
+                        result.get("artifactType")
+                        or result.get("metadata", {}).get("artifactType")
+                        or result_type
+                        or ""
+                    ),
+                    "summary": result.get("summary") or result.get("contentExcerpt", ""),
+                    "contentExcerpt": result.get("contentExcerpt", ""),
+                    "source_refs": source_refs,
+                }
+            )
+
+    if not key_concepts:
+        key_concepts = _brief_key_concepts_from_legacy(fallback_concepts, limit)
+    if not source_highlights:
+        source_highlights = _brief_highlights_from_legacy(fallback_artifacts, limit)
+    return key_concepts[:limit], source_highlights[:limit]
+
+
+def _brief_key_concepts_from_legacy(concepts: list[dict], limit: int) -> list[dict]:
+    return [
+        {
+            "name": concept.get("name", ""),
+            "type": concept.get("concept_type", "concept"),
+            "summary": concept.get("summary", ""),
+            "source_refs": concept.get("source_refs", []),
+        }
+        for concept in concepts[:limit]
+    ]
+
+
+def _brief_highlights_from_legacy(artifacts: list[dict], limit: int) -> list[dict]:
+    return [
+        {
+            "title": artifact.get("title", ""),
+            "artifactType": artifact.get("artifact_type", ""),
+            "summary": artifact.get("summary", ""),
+            "contentExcerpt": str(artifact.get("content", ""))[:900],
+            "source_refs": artifact.get("source_refs", []),
+        }
+        for artifact in artifacts[:limit]
+    ]
 
 
 def _repo_touchpoints(repo_context: dict) -> list[str]:

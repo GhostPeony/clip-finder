@@ -336,6 +336,71 @@ def test_worker_processes_job_and_records_events(monkeypatch):
     assert event_kwargs["idempotency_key"] == "video.ingested:job-1"
 
 
+def test_worker_assigns_successful_agent_video_ingestion_to_requested_project(monkeypatch):
+    from backend import worker
+
+    supabase = Supabase([{"id": "job-1"}])
+    project_calls = []
+
+    monkeypatch.setattr(
+        worker,
+        "ingest_url",
+        lambda source_url, user_id, api_key=None, used_own_key=False, digest_depth="standard": iter(
+            [
+                "Found 1 videos",
+                "1 new videos to index",
+                "  Indexed 8 clips",
+            ]
+        ),
+    )
+    monkeypatch.setattr(worker, "queue_brain_sync_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        worker,
+        "add_videos_to_project",
+        lambda supabase, user_id, project_id, **kwargs: (
+            project_calls.append((supabase, user_id, project_id, kwargs)) or {"addedCount": 1}
+        ),
+    )
+
+    summary = worker.process_ingestion_job(
+        supabase,
+        {
+            "id": "job-1",
+            "user_id": "user-1",
+            "source_url": "https://www.youtube.com/watch?v=uCKhOmth2ms",
+            "source_type": "video",
+            "cost_estimate": {
+                "mcp": {
+                    "requestedProject": {
+                        "id": "project-1",
+                        "name": "Agent Project",
+                    }
+                }
+            },
+        },
+    )
+
+    assert summary["status"] == "completed"
+    assert project_calls == [
+        (
+            supabase,
+            "user-1",
+            "project-1",
+            {"youtube_video_ids": ["uCKhOmth2ms"], "added_source": "agent"},
+        )
+    ]
+    event_inserts = [
+        call[2]
+        for call in supabase.calls
+        if call[0] == "ingestion_job_events" and call[1] == "insert"
+    ]
+    assert any(
+        event.get("youtube_video_id") == "uCKhOmth2ms"
+        and "Assigned indexed video to project Agent Project" in event.get("message", "")
+        for event in event_inserts
+    )
+
+
 def test_worker_failure_marks_job_with_failed_video_count(monkeypatch):
     from backend import worker
 
