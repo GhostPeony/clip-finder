@@ -190,7 +190,7 @@ First slice implemented:
 - `repo_context.locations` lets agents pass compact path/symbol/line anchors from repo MCP tools without sending file contents.
 - `build_agent_brief` returns `repoFit.targetMap` so agents can consume repo targets by category instead of re-parsing a flat touchpoint list.
 - Source-context RLS now honors precise `user_videos` grants as well as channel grants, and the linked Supabase project has migrations 001-013 applied.
-- Hermes routing skill and MCP config snippet live under `integrations/hermes/`, with the skill also installed locally at `C:\Users\Cade\AppData\Local\hermes\skills\memexai-context\SKILL.md`.
+- Hermes routing skill and MCP config snippet live under `integrations/hermes/`, with the skill install path documented in [HERMES_SETUP.md](HERMES_SETUP.md).
 
 References:
 

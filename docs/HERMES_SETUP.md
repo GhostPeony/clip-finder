@@ -4,16 +4,16 @@ Memexai should be exposed to Hermes as a native HTTP MCP server plus a small rou
 
 ## Local Paths
 
-Observed on this Windows machine:
+Example local desktop paths:
 
-- Hermes home: `C:\Users\Cade\AppData\Local\hermes`
-- Config: `C:\Users\Cade\AppData\Local\hermes\config.yaml`
-- Skills: `C:\Users\Cade\AppData\Local\hermes\skills`
+- Hermes home: `C:\Users\<you>\AppData\Local\hermes`
+- Config: `C:\Users\<you>\AppData\Local\hermes\config.yaml`
+- Skills: `C:\Users\<you>\AppData\Local\hermes\skills`
 
-When using the Hermes GX10 launcher where Ponyo/GX10 runs the backend process, configure the remote Hermes environment too:
+When using a remote Hermes launcher where another machine runs the backend process, configure that remote Hermes environment too:
 
-- `/home/ponyo/.hermes/config.yaml`
-- `/home/ponyo/.hermes/skills/memexai-context/SKILL.md`
+- `/home/<you>/.hermes/config.yaml`
+- `/home/<you>/.hermes/skills/memexai-context/SKILL.md`
 
 ## Skill
 
@@ -24,7 +24,7 @@ Versioned repo copy:
 Local desktop install target:
 
 ```text
-C:\Users\Cade\AppData\Local\hermes\skills\memexai-context\SKILL.md
+C:\Users\<you>\AppData\Local\hermes\skills\memexai-context\SKILL.md
 ```
 
 The skill is only a routing layer. The MCP server remains the source of truth.

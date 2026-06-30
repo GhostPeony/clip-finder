@@ -23,7 +23,6 @@ import {
 } from '../services/api';
 import {
   CaptureSource,
-  CaptureSourceItem,
   CreatedMcpToken,
   McpSetupBundle,
   McpTokenRecord,
@@ -149,7 +148,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           />
         ) : (
           <>
-            <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,20rem)]">
               <CaptureSourcesSection onConnectYouTube={onConnectYouTube} />
               <UsageQuotaCard usage={usage} onUpgrade={() => setSettingsView('plans')} />
             </div>
@@ -449,9 +448,9 @@ function UsageQuotaCard({ usage, onUpgrade }: { usage: UsageInfo | null; onUpgra
 
   if (usage === null) {
     return (
-      <section className="rounded-xl border border-ink/10 bg-surface p-4">
+      <section className="min-w-0 rounded-xl border border-ink/10 bg-surface p-4">
         <h3 className="font-serif text-2xl font-medium text-ink">Usage</h3>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
           {['Searches', 'Videos', 'Transcript hours', 'Import size'].map((label) => (
             <div key={label} className="rounded-xl bg-cream p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
@@ -524,7 +523,7 @@ function UsageQuotaCard({ usage, onUpgrade }: { usage: UsageInfo | null; onUpgra
   };
 
   return (
-    <section className="rounded-xl border border-ink/10 bg-surface p-4">
+    <section className="min-w-0 rounded-xl border border-ink/10 bg-surface p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="font-serif text-2xl font-medium text-ink">Usage</h3>
@@ -555,13 +554,15 @@ function UsageQuotaCard({ usage, onUpgrade }: { usage: UsageInfo | null; onUpgra
       {billingError ? (
         <p className="mt-2 text-xs leading-5 text-rose-deep">{billingError}</p>
       ) : null}
-      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
         {metrics.map((metric) => (
-          <div key={metric.label} className="rounded-xl bg-cream p-3">
+          <div key={metric.label} className="min-w-0 rounded-xl bg-cream p-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
               {metric.label}
             </p>
-            <p className="mt-1 font-mono text-sm font-semibold text-ink">{metric.value}</p>
+            <p className="mt-1 break-words font-mono text-sm font-semibold text-ink">
+              {metric.value}
+            </p>
           </div>
         ))}
       </div>
@@ -602,6 +603,8 @@ interface PendingCaptureSync {
   source: CaptureSource;
   pendingCount: number;
 }
+
+const DEFAULT_MCP_TOKEN_NAME = 'My MCP agent';
 
 function buildLocalMcpSetupBundle(
   mcpServerUrl: string,
@@ -907,7 +910,7 @@ const CaptureSourcesSection: React.FC<{
   };
 
   return (
-    <section className="rounded-xl border border-ink/10 bg-surface p-4">
+    <section className="min-w-0 rounded-xl border border-ink/10 bg-surface p-4">
       <div className="mb-4">
         <h3 className="font-serif text-2xl font-medium text-ink">YouTube capture inbox</h3>
         <p className="mt-1 text-xs leading-5 text-bark">
@@ -997,34 +1000,43 @@ const CaptureSourcesSection: React.FC<{
       ) : null}
 
       <div className="mt-4">
-        <h4 className="mb-2 text-sm font-semibold text-ink">Connected sources</h4>
+        <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <h4 className="text-sm font-semibold text-ink">Connected playlists</h4>
+            <p className="mt-1 text-xs leading-5 text-bark">
+              Detailed playlist and project management lives in Library.
+            </p>
+          </div>
+          {sources.length > 0 ? (
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+              {sources.length} linked
+            </p>
+          ) : null}
+        </div>
         {sourceState.status === 'loading' ? (
           <p className="text-xs text-bark">Loading capture sources...</p>
         ) : sources.length > 0 ? (
           <div className="space-y-2">
             {sources.map((source) => (
               <div key={source.id} className="min-w-0 overflow-hidden rounded-xl bg-cream p-3">
-                <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <p className="break-words text-sm font-semibold text-ink">{source.title}</p>
-                    <p className="break-all text-xs text-bark">{source.source_url}</p>
-                    <p className="mt-1 text-xs text-muted">
-                      {source.status} - Last sync {formatCaptureDate(source.last_synced_at)}
-                    </p>
+                    <p className="truncate text-sm font-semibold text-ink">{source.title}</p>
+                    <p className="mt-1 text-xs text-muted">{formatCaptureSourceSummary(source)}</p>
                     {source.last_error ? (
                       <p className="mt-1 text-xs font-semibold text-rose-deep">
                         {source.last_error}
                       </p>
                     ) : null}
                   </div>
-                  <div className="flex shrink-0 flex-col gap-2 sm:items-end">
+                  <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
                     <button
                       type="button"
                       onClick={() => handleSync(source)}
                       disabled={
                         syncingSourceId === source.id || disconnectingSourceId === source.id
                       }
-                      className="btn btn-secondary min-h-0 w-full px-4 py-2 text-sm sm:w-auto"
+                      className="btn btn-secondary min-h-0 px-4 py-2 text-sm"
                     >
                       {syncingSourceId === source.id ? 'Syncing...' : 'Sync'}
                     </button>
@@ -1032,7 +1044,7 @@ const CaptureSourcesSection: React.FC<{
                       type="button"
                       onClick={() => setPendingDisconnectSource(source)}
                       disabled={disconnectingSourceId === source.id}
-                      className="link-quiet min-h-0 w-full text-sm disabled:opacity-50 sm:w-auto"
+                      className="link-quiet min-h-0 text-sm disabled:opacity-50"
                     >
                       {disconnectingSourceId === source.id
                         ? 'Disconnecting'
@@ -1040,7 +1052,6 @@ const CaptureSourcesSection: React.FC<{
                     </button>
                   </div>
                 </div>
-                <RecentCaptureItems items={source.recentItems ?? []} />
               </div>
             ))}
           </div>
@@ -1071,7 +1082,7 @@ const CaptureSourcesSection: React.FC<{
 
 const AgentAccessSection: React.FC = () => {
   const [tokenState, setTokenState] = useState<McpTokenState>({ status: 'loading' });
-  const [tokenName, setTokenName] = useState('Hermes on ponyo');
+  const [tokenName, setTokenName] = useState(DEFAULT_MCP_TOKEN_NAME);
   const [allowAgentIngest, setAllowAgentIngest] = useState(false);
   const [allowAgentProjectSetup, setAllowAgentProjectSetup] = useState(false);
   const [allowAgentPlaylistSync, setAllowAgentPlaylistSync] = useState(false);
@@ -1299,7 +1310,7 @@ const AgentAccessSection: React.FC = () => {
               value={tokenName}
               onChange={(event) => setTokenName(event.target.value)}
               className="input w-full px-3 py-2 text-sm"
-              placeholder="Hermes on ponyo"
+              placeholder={DEFAULT_MCP_TOKEN_NAME}
             />
           </label>
           <button
@@ -1475,24 +1486,12 @@ function formatCaptureDate(value?: string | null): string {
   });
 }
 
-function RecentCaptureItems({ items }: { items: CaptureSourceItem[] }) {
-  const recentItems = items.slice(0, 3);
-  if (recentItems.length === 0) {
-    return <p className="mt-3 text-xs text-bark">No discovered videos yet.</p>;
+function formatCaptureSourceSummary(source: CaptureSource): string {
+  const status = source.status.replace(/^\w/, (char) => char.toUpperCase());
+  const itemCount = source.recentItems?.length ?? 0;
+  const parts = [`${status}`, `Last sync ${formatCaptureDate(source.last_synced_at)}`];
+  if (itemCount > 0) {
+    parts.push(`${itemCount} recent video${itemCount === 1 ? '' : 's'} tracked`);
   }
-
-  return (
-    <ul className="mt-3 space-y-1">
-      {recentItems.map((item) => (
-        <li key={item.id} className="flex gap-2 text-xs leading-5 text-bark">
-          <span className="font-mono text-muted">{item.status}</span>
-          <span className="min-w-0 truncate">
-            {typeof item.metadata?.title === 'string' && item.metadata.title.trim()
-              ? item.metadata.title
-              : item.youtube_video_id}
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
+  return parts.join(' / ');
 }

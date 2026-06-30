@@ -645,7 +645,7 @@ describe('api client', () => {
             token: 'emt_visible_secret',
             tokenRecord: {
               id: 'token-1',
-              name: 'Hermes on ponyo',
+              name: 'My MCP agent',
               tokenPrefix: 'emt_visible',
               scopes: ['context:read', 'overlay:write'],
             },
@@ -688,7 +688,7 @@ describe('api client', () => {
           tokens: [
             {
               id: 'token-1',
-              name: 'Hermes on ponyo',
+              name: 'My MCP agent',
               tokenPrefix: 'emt_visible',
               scopes: ['context:read', 'overlay:write'],
             },
@@ -699,8 +699,8 @@ describe('api client', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(fetchMcpTokens()).resolves.toHaveLength(1);
-    await expect(createMcpToken('Hermes on ponyo')).resolves.toMatchObject({
-      tokenRecord: { name: 'Hermes on ponyo' },
+    await expect(createMcpToken('My MCP agent')).resolves.toMatchObject({
+      tokenRecord: { name: 'My MCP agent' },
       setup: {
         accessModel: {
           searchScope: 'current_user_grants',
@@ -718,7 +718,7 @@ describe('api client', () => {
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
-          name: 'Hermes on ponyo',
+          name: 'My MCP agent',
           scopes: ['context:read', 'overlay:write'],
         }),
       }),

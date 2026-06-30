@@ -320,7 +320,8 @@ async function captureLanding(browser) {
       reducedMotion: 'reduce',
     });
     const page = await context.newPage();
-    await page.goto(BASE_URL, { waitUntil: 'networkidle' });
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.waitForLoadState('load', { timeout: 15_000 }).catch(() => undefined);
     await page.waitForTimeout(800);
     await shoot(page, 'landing', 'landing-full', vp.name, true);
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight * 0.45));

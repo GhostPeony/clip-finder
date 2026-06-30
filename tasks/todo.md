@@ -1,5 +1,12 @@
 # Production Hosted Setup
 
+# Settings Capture Source Density Fix
+
+- [x] Compact connected playlists in Settings so long URLs and video rows do not crowd Usage.
+- [x] Keep Sync and Disconnect controls available without turning Settings into a management view.
+- [x] Add regression coverage for hiding playlist/video detail in the modal.
+- [x] Run focused frontend verification.
+
 # Anonymous Auth And MCP Playlist Sync Assessment
 
 - [x] Verify current Supabase anonymous sign-in behavior, conversion semantics, and security constraints from primary docs.

@@ -635,15 +635,15 @@ Job status example:
 
 ## Hermes Notes
 
-The local Hermes install supports native MCP through the `mcp_servers` config key. On this Windows machine, the local desktop config is:
+The local Hermes install supports native MCP through the `mcp_servers` config key. Example local desktop paths are:
 
-- `C:\Users\Cade\AppData\Local\hermes\config.yaml`
-- `C:\Users\Cade\AppData\Local\hermes\skills\memexai-context\SKILL.md`
+- `C:\Users\<you>\AppData\Local\hermes\config.yaml`
+- `C:\Users\<you>\AppData\Local\hermes\skills\memexai-context\SKILL.md`
 
-When using the `Hermes GX10` launcher, the PC runs the GUI while Ponyo/GX10 runs the backend through the tunnel. In that mode, configure the backend agent process on Ponyo:
+When using a remote Hermes launcher, the PC runs the GUI while another machine runs the backend through the tunnel. In that mode, configure the backend agent process too:
 
-- `/home/ponyo/.hermes/config.yaml`
-- `/home/ponyo/.hermes/skills/memexai-context/SKILL.md`
+- `/home/<you>/.hermes/config.yaml`
+- `/home/<you>/.hermes/skills/memexai-context/SKILL.md`
 
 Repo-managed setup artifacts:
 

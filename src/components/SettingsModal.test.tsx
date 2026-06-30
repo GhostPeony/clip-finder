@@ -175,7 +175,7 @@ describe('SettingsModal', () => {
       token: 'emt_visible_secret',
       tokenRecord: {
         id: 'token-1',
-        name: 'Hermes on ponyo',
+        name: 'My MCP agent',
         tokenPrefix: 'emt_visible',
         scopes: ['context:read', 'overlay:write'],
       },
@@ -236,7 +236,7 @@ describe('SettingsModal', () => {
     apiMocks.fetchMcpTokens.mockResolvedValueOnce([]).mockResolvedValueOnce([
       {
         id: 'token-1',
-        name: 'Hermes on ponyo',
+        name: 'My MCP agent',
         tokenPrefix: 'emt_visible',
         scopes: ['context:read', 'overlay:write'],
       },
@@ -258,8 +258,9 @@ describe('SettingsModal', () => {
     expect(screen.getByRole('button', { name: /copy codex config/i })).toBeInTheDocument();
     expect(screen.getByText('Setup bundle')).toBeInTheDocument();
     expect(screen.getByText('Hermes config with token')).toBeInTheDocument();
-    expect(screen.getByText('Hermes on ponyo')).toBeInTheDocument();
-    expect(apiMocks.createMcpToken).toHaveBeenCalledWith('Hermes on ponyo', [
+    expect(screen.getByText('My MCP agent')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue(/ponyo/i)).not.toBeInTheDocument();
+    expect(apiMocks.createMcpToken).toHaveBeenCalledWith('My MCP agent', [
       'context:read',
       'overlay:write',
     ]);
@@ -385,7 +386,9 @@ describe('SettingsModal', () => {
     render(<SettingsModal isOpen onClose={() => undefined} allowUserKeys={false} />);
 
     expect(await screen.findByText('Research inbox')).toBeInTheDocument();
-    expect(screen.getByText('Sierra product harness')).toBeInTheDocument();
+    expect(screen.getByText(/1 recent video tracked/i)).toBeInTheDocument();
+    expect(screen.queryByText('Sierra product harness')).not.toBeInTheDocument();
+    expect(screen.queryByText(captureSource.source_url)).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/playlist url/i), {
       target: { value: 'https://www.youtube.com/playlist?list=PLabcdef123456' },
@@ -494,7 +497,7 @@ describe('SettingsModal', () => {
       token: 'emt_visible_secret',
       tokenRecord: {
         id: 'token-1',
-        name: 'Hermes on ponyo',
+        name: 'My MCP agent',
         tokenPrefix: 'emt_visible',
         scopes: ['context:read', 'overlay:write', 'ingest:write'],
       },
@@ -507,7 +510,7 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /create token/i }));
 
     await waitFor(() => {
-      expect(apiMocks.createMcpToken).toHaveBeenCalledWith('Hermes on ponyo', [
+      expect(apiMocks.createMcpToken).toHaveBeenCalledWith('My MCP agent', [
         'context:read',
         'overlay:write',
         'ingest:write',
@@ -520,7 +523,7 @@ describe('SettingsModal', () => {
       token: 'emt_visible_secret',
       tokenRecord: {
         id: 'token-1',
-        name: 'Hermes on ponyo',
+        name: 'My MCP agent',
         tokenPrefix: 'emt_visible',
         scopes: ['context:read', 'overlay:write', 'project:write', 'capture:write'],
       },
@@ -534,7 +537,7 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /create token/i }));
 
     await waitFor(() => {
-      expect(apiMocks.createMcpToken).toHaveBeenCalledWith('Hermes on ponyo', [
+      expect(apiMocks.createMcpToken).toHaveBeenCalledWith('My MCP agent', [
         'context:read',
         'overlay:write',
         'project:write',
