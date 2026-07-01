@@ -57,3 +57,4 @@
 - Project management needs an explicit named destination in primary navigation. A helper panel inside Library is not discoverable enough once projects become a core way to organize saved-video context.
 - Never ship personal machine, client, pet, or local agent names as customer-facing defaults or test fixture expectations. Defaults like MCP token names must be generic and fixtures should assert private names do not leak.
 - Claude/Codex "always allow" tool permissions are not Memexai MCP OAuth scopes. If an MCP tool returns missing `capture:write`, `ingest:write`, or `project:write`, the connector token must be reauthorized or recreated with that server-side scope.
+- Prefer MCP-native guidance over client-specific skill dependencies for Memexai agent workflows. Put proven retrieval flow in tool schemas, `next_mcp_call`, compact resources, and optional prompts, then enforce safety with hard tool arguments/budgets.

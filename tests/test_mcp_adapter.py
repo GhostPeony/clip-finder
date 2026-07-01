@@ -142,12 +142,43 @@ def test_mcp_prompts_list_exposes_agent_workflows(monkeypatch):
     assert response.status_code == 200
     prompts = response.json()["result"]["prompts"]
     names = {prompt["name"] for prompt in prompts}
+    assert "retrieve_video_insight" in names
     assert "source_report_from_saved_video" in names
     assert "study_guide_from_saved_video" not in names
     assert "repo_implementation_brief" in names
     assert "collect_repo_context" in names
     assert "categorize_saved_video" in names
     assert "capture_personal_context" in names
+
+
+def test_mcp_prompts_get_returns_retrieve_video_insight_playbook(monkeypatch):
+    client = _client(monkeypatch)
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 91,
+            "method": "prompts/get",
+            "params": {
+                "name": "retrieve_video_insight",
+                "arguments": {
+                    "question": "How does Dwarkesh explain computer use?",
+                    "video_id": "20p5-kQXF_Q",
+                    "project_id": "project-1",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    text = result["messages"][0]["content"]["text"]
+    assert result["description"] == "Retrieve a saved-video insight with bounded MCP calls."
+    assert "How does Dwarkesh explain computer use?" in text
+    assert "pass youtube_video_id=20p5-kQXF_Q" in text
+    assert "Project scope: pass project_id=project-1" in text
+    assert "get_transcript_window instead of get_video_context/include_transcript" in text
 
 
 def test_mcp_prompts_get_returns_repo_implementation_workflow(monkeypatch):
@@ -641,6 +672,122 @@ def test_mcp_get_video_context_omits_transcript_until_explicitly_requested(monke
     assert deep["responseBudget"]["detailLevel"] == "standard"
 
 
+def test_mcp_get_video_context_enforces_structured_content_budget(monkeypatch):
+    from backend import mcp_adapter
+
+    def fake_video_context(supabase, user_id, video_id):
+        del supabase, user_id
+        return {
+            "video": {"videoId": video_id, "title": "Long Transcript"},
+            "transcriptLines": [
+                {"id": f"line-{index}", "content": "line content " * 120} for index in range(80)
+            ],
+            "transcriptChunks": [
+                {"id": f"chunk-{index}", "content": "chunk content " * 120} for index in range(80)
+            ],
+            "sourceConcepts": [{"name": "Computer use", "summary": "Replayable simulators."}],
+            "knowledgeArtifacts": [
+                {"title": "TLDR", "content": "Computer use requires sandboxes."}
+            ],
+        }
+
+    supabase = Supabase()
+    monkeypatch.setattr(mcp_adapter, "get_video_context", fake_video_context)
+    client = _client(monkeypatch, supabase)
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 140,
+            "method": "tools/call",
+            "params": {
+                "name": "get_video_context",
+                "arguments": {
+                    "youtube_video_id": "yt-long",
+                    "include_transcript": True,
+                    "detail_level": "standard",
+                    "max_chars": 5000,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    structured = response.json()["result"]["structuredContent"]
+    assert structured["responseBudget"]["maxChars"] == 5000
+    assert structured["responseBudget"]["estimatedResponseChars"] <= 5000
+    assert structured["responseBudget"]["truncatedToBudget"] is True
+    assert structured["transcriptBudget"]["returnedTranscriptLines"] < 50
+    assert structured["transcriptBudget"]["returnedTranscriptChunks"] < 50
+
+
+def test_mcp_get_transcript_window_returns_bounded_timestamp_slice(monkeypatch):
+    from backend import mcp_adapter
+
+    def fake_video_context(supabase, user_id, video_id, project_id=None, project_slug=None):
+        del supabase, user_id, project_id, project_slug
+        return {
+            "video": {"videoId": video_id, "title": "Dwarkesh clip"},
+            "projectScope": {"scope": "project", "projectId": "project-1"},
+            "transcriptLines": [
+                {"id": "line-1", "content": "before", "start_seconds": 80, "end_seconds": 99},
+                {
+                    "id": "line-2",
+                    "content": "computer use is verifiable",
+                    "start_seconds": 144,
+                    "end_seconds": 190,
+                },
+                {
+                    "id": "line-3",
+                    "content": "deterministic replayable simulator",
+                    "start_seconds": 196,
+                    "end_seconds": 259,
+                },
+                {"id": "line-4", "content": "after", "start_seconds": 400, "end_seconds": 420},
+            ],
+            "transcriptChunks": [
+                {
+                    "id": "chunk-1",
+                    "content": "computer use needs grindable environments",
+                    "start_seconds": 144,
+                    "end_seconds": 212,
+                },
+                {"id": "chunk-2", "content": "unrelated", "start_seconds": 500, "end_seconds": 560},
+            ],
+        }
+
+    supabase = Supabase()
+    monkeypatch.setattr(mcp_adapter, "get_video_context", fake_video_context)
+    client = _client(monkeypatch, supabase)
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 141,
+            "method": "tools/call",
+            "params": {
+                "name": "get_transcript_window",
+                "arguments": {
+                    "youtube_video_id": "20p5-kQXF_Q",
+                    "start_seconds": 140,
+                    "end_seconds": 260,
+                    "max_chars": 4000,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    structured = response.json()["result"]["structuredContent"]
+    assert structured["found"] is True
+    assert structured["timeWindow"]["youtubeUrl"].endswith("20p5-kQXF_Q&t=140s")
+    assert [line["id"] for line in structured["transcriptLines"]] == ["line-2", "line-3"]
+    assert [chunk["id"] for chunk in structured["transcriptChunks"]] == ["chunk-1"]
+    assert structured["next_mcp_call"]["name"] == "search_video_moments"
+
+
 def test_mcp_resources_read_returns_context_categories(monkeypatch):
     from backend import mcp_adapter
 
@@ -840,6 +987,7 @@ def test_mcp_tools_list_exposes_context_tools_only(monkeypatch):
     assert "get_video_knowledge_map" in names
     assert "search_video_moments" in names
     assert "get_video_context" in names
+    assert "get_transcript_window" in names
     assert "build_context_bundle" in names
     assert "build_agent_brief" in names
     assert "create_project" in names
@@ -860,6 +1008,9 @@ def test_mcp_tools_list_exposes_context_tools_only(monkeypatch):
     search_tool = next(tool for tool in tools if tool["name"] == "search_video_concepts")
     assert search_tool["inputSchema"]["properties"]["retrieval_mode"]["default"] == "hybrid"
     assert "project_id" in search_tool["inputSchema"]["properties"]
+    transcript_tool = next(tool for tool in tools if tool["name"] == "search_transcript_text")
+    assert transcript_tool["inputSchema"]["properties"]["retrieval_mode"]["enum"] == ["keyword"]
+    assert "youtube_video_id" in transcript_tool["inputSchema"]["properties"]
 
 
 def test_mcp_list_video_library_returns_user_library(monkeypatch):
@@ -2298,10 +2449,25 @@ def test_mcp_search_video_moments_uses_scoped_search_runner(monkeypatch):
         x_api_key=None,
         category_filters=None,
         retrieval_mode="hybrid",
+        project_id=None,
+        project_slug=None,
+        youtube_video_id=None,
     ):
-        calls.append((query, user_id, limit, x_api_key, category_filters, retrieval_mode))
+        calls.append(
+            (
+                query,
+                user_id,
+                limit,
+                x_api_key,
+                category_filters,
+                retrieval_mode,
+                project_id,
+                project_slug,
+                youtube_video_id,
+            )
+        )
         return {
-            "answer": "Reward models need evaluation loops. [[clip_0]]",
+            "answer": "Reward models need evaluation loops. [[clip_3]]",
             "retrievalMode": retrieval_mode,
             "retrievalPlan": {
                 "primary": "hybrid_vector_keyword_rrf",
@@ -2309,20 +2475,25 @@ def test_mcp_search_video_moments_uses_scoped_search_runner(monkeypatch):
                 "llmAnswerUsed": True,
             },
             "categoryFilters": category_filters or {},
+            "videoScope": {
+                "scope": "video" if youtube_video_id else "all_videos",
+                "youtubeVideoId": youtube_video_id,
+            },
             "relevantClips": [
                 {
-                    "id": "clip_0",
+                    "id": f"clip_{index}",
                     "videoId": "yt123",
                     "title": "RLHF lesson",
                     "channelName": "AI Channel",
-                    "startSeconds": 120,
-                    "endSeconds": 180,
-                    "content": "Reward models need evaluation loops.",
+                    "startSeconds": 120 + index * 90,
+                    "endSeconds": 180 + index * 90,
+                    "content": "Reward models need evaluation loops. " * 80,
                     "accessScope": "video",
                     "accessSource": "shared_existing",
                     "accessReason": "Visible through an explicit saved-video grant.",
                     "matchType": "hybrid",
                 }
+                for index in range(6)
             ],
         }
 
@@ -2343,6 +2514,7 @@ def test_mcp_search_video_moments_uses_scoped_search_runner(monkeypatch):
                     "detail_level": "compact",
                     "max_context_tokens": 250,
                     "limit": 999,
+                    "youtube_video_id": "yt123",
                 },
             },
         },
@@ -2351,13 +2523,26 @@ def test_mcp_search_video_moments_uses_scoped_search_runner(monkeypatch):
     assert response.status_code == 200
     structured = response.json()["result"]["structuredContent"]
     assert calls == [
-        ("reward model eval loops", "local", 20, None, {"task_fit": ["product spec"]}, "hybrid")
+        (
+            "reward model eval loops",
+            "local",
+            20,
+            None,
+            {"task_fit": ["product spec"]},
+            "hybrid",
+            None,
+            None,
+            "yt123",
+        )
     ]
     assert structured["categoryFilters"] == {"task_fit": ["product spec"]}
     assert structured["retrievalMode"] == "hybrid"
     assert structured["retrievalPlan"]["primary"] == "hybrid_vector_keyword_rrf"
     assert structured["retrievalBudget"]["detailLevel"] == "compact"
     assert structured["retrievalBudget"]["maxChars"] == 1000
+    assert structured["videoScope"] == {"scope": "video", "youtubeVideoId": "yt123"}
+    assert structured["answer"] == ""
+    assert "answerOmittedReason" in structured["retrievalBudget"]
     assert structured["relevantClips"][0]["videoId"] == "yt123"
     assert structured["relevantClips"][0]["matchType"] == "hybrid"
     assert structured["relevantClips"][0]["accessScope"] == "video"
@@ -2739,8 +2924,23 @@ def test_mcp_search_video_moments_can_request_keyword_mode(monkeypatch):
         x_api_key=None,
         category_filters=None,
         retrieval_mode="hybrid",
+        project_id=None,
+        project_slug=None,
+        youtube_video_id=None,
     ):
-        calls.append((query, user_id, limit, x_api_key, category_filters, retrieval_mode))
+        calls.append(
+            (
+                query,
+                user_id,
+                limit,
+                x_api_key,
+                category_filters,
+                retrieval_mode,
+                project_id,
+                project_slug,
+                youtube_video_id,
+            )
+        )
         return {
             "answer": "",
             "retrievalMode": retrieval_mode,
@@ -2791,7 +2991,7 @@ def test_mcp_search_video_moments_can_request_keyword_mode(monkeypatch):
 
     assert response.status_code == 200
     structured = response.json()["result"]["structuredContent"]
-    assert calls == [("exact acronym", "local", 3, None, None, "keyword")]
+    assert calls == [("exact acronym", "local", 3, None, None, "keyword", None, None, None)]
     assert structured["retrievalMode"] == "keyword"
     assert structured["retrievalPlan"]["embeddingUsed"] is False
     assert structured["retrievalBudget"]["embeddingCalls"] == 0
@@ -2808,11 +3008,20 @@ def test_mcp_search_transcript_text_uses_keyword_runner_without_embedding_spend(
         user_id,
         limit,
         category_filters=None,
+        project_id=None,
+        project_slug=None,
+        youtube_video_id=None,
     ):
-        calls.append((query, user_id, limit, category_filters))
+        calls.append(
+            (query, user_id, limit, category_filters, project_id, project_slug, youtube_video_id)
+        )
         return {
             "retrievalMode": "keyword",
             "categoryFilters": category_filters or {},
+            "videoScope": {
+                "scope": "video" if youtube_video_id else "all_videos",
+                "youtubeVideoId": youtube_video_id,
+            },
             "retrievalPlan": {
                 "primary": "keyword_full_text",
                 "embeddingUsed": False,
@@ -2855,6 +3064,7 @@ def test_mcp_search_transcript_text_uses_keyword_runner_without_embedding_spend(
                 "arguments": {
                     "query": "China Robotics Open-Source AI",
                     "category_filters": {"topic": ["robotics"]},
+                    "youtube_video_id": "yt-china",
                     "max_chars": 3000,
                     "limit": 999,
                 },
@@ -2864,8 +3074,19 @@ def test_mcp_search_transcript_text_uses_keyword_runner_without_embedding_spend(
 
     assert response.status_code == 200
     structured = response.json()["result"]["structuredContent"]
-    assert calls == [("China Robotics Open-Source AI", "local", 20, {"topic": ["robotics"]})]
+    assert calls == [
+        (
+            "China Robotics Open-Source AI",
+            "local",
+            20,
+            {"topic": ["robotics"]},
+            None,
+            None,
+            "yt-china",
+        )
+    ]
     assert structured["retrievalMode"] == "keyword"
+    assert structured["videoScope"] == {"scope": "video", "youtubeVideoId": "yt-china"}
     assert structured["retrievalBudget"]["embeddingCalls"] == 0
     assert structured["retrievalBudget"]["llmCalls"] == 0
     assert structured["retrievalBudget"]["maxChars"] == 3000

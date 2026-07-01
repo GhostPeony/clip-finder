@@ -551,12 +551,13 @@ def _mcp_agent_setup_bundle(base_url: str, token: str | None = None) -> dict:
         "Call list_context_categories or read context://categories when you need filters.",
         "Use search_video_concepts with retrieval_mode=hybrid for concepts, TLDRs, source reports, report sections, aliases, tools, and pitfalls before pulling timestamp clips; pass project_id/project_slug when scoped.",
         "Call get_video_knowledge_map for promising videos to inspect report sections, concepts, claims, decisions, timeline cues, and timestamp refs.",
-        "Use search_transcript_text for exact phrases, names, acronyms, and product terms when keyword precision matters.",
+        "Use search_transcript_text for exact phrases, names, acronyms, and product terms when keyword precision matters; pass youtube_video_id/video_id for known-video questions.",
+        "Use get_transcript_window for direct evidence around a known timestamp before pulling full transcript context.",
         "Use get_repo_context_workflow or read context://repo-context-workflow for the repo-via-MCP collection flow.",
         "Use get_repo_context_contract or read context://repo-context-contract for the expected repo_context shape.",
         "Optional: use prompts/get collect_repo_context to gather repo_context with the agent's own repo MCP.",
         "Call validate_repo_context and follow readiness.suggestedAgentNextSteps before implementation planning.",
-        "Use search_video_moments with retrieval_mode=hybrid for timestamp evidence and inspect accessScope/accessReason.",
+        "Use search_video_moments with retrieval_mode=hybrid for timestamp evidence and inspect accessScope/accessReason; pass youtube_video_id/video_id for known-video questions.",
         "Call build_agent_brief with a query and validated repo_context.",
     ]
     setup = {
@@ -941,15 +942,16 @@ def _llms_text(base_url: str, full: bool = False) -> str:
         "13. Call list_workflow_runs or read context://workflows when following long-running platform work.",
         "14. Use search_video_concepts with retrieval_mode=hybrid for source reports, concepts, report sections, aliases, tools, methods, pitfalls, and timestamp refs. Pass project_id/project_slug when scoped.",
         "15. Call get_video_knowledge_map or read context://video-map/{videoId} for candidate videos before pulling transcript clips.",
-        "16. Use search_video_moments with retrieval_mode=hybrid for timestamp evidence, or retrieval_mode=semantic/keyword for narrower follow-up. Inspect accessScope/accessReason on returned clips, library videos, and video context.",
-        "17. Use search_transcript_text for exact phrases, names, acronyms, and product terms without embedding/LLM spend.",
-        "18. Use get_video_context/include_transcript only when the map and timestamp clips are insufficient.",
-        "19. Use get_repo_context_workflow or context://repo-context-workflow when you need the repo collection flow.",
-        "20. Use get_repo_context_contract or context://repo-context-contract when you need the repo_context schema.",
-        "21. Optional: use prompts/get collect_repo_context to gather validated repo_context with the agent's own repo tools.",
-        "19. Call validate_repo_context and follow readiness.suggestedAgentNextSteps before implementation planning.",
-        "20. Use build_agent_brief for product specs, implementation plans, and agent prompts.",
-        "21. Use add_context_note or upsert_personal_concept for durable personalized takeaways.",
+        "16. Use search_video_moments with retrieval_mode=hybrid for timestamp evidence, or retrieval_mode=semantic/keyword for narrower follow-up. Pass youtube_video_id/video_id when the user asks about one known video. Inspect accessScope/accessReason on returned clips, library videos, and video context.",
+        "17. Use search_transcript_text for exact phrases, names, acronyms, and product terms without embedding/LLM spend. Pass youtube_video_id/video_id for known-video questions.",
+        "18. Use get_transcript_window for direct evidence around a returned timestamp before pulling broader context.",
+        "19. Use get_video_context/include_transcript only when the map, searches, and transcript window are insufficient.",
+        "20. Use get_repo_context_workflow or context://repo-context-workflow when you need the repo collection flow.",
+        "21. Use get_repo_context_contract or context://repo-context-contract when you need the repo_context schema.",
+        "22. Optional: use prompts/get collect_repo_context to gather validated repo_context with the agent's own repo tools.",
+        "23. Call validate_repo_context and follow readiness.suggestedAgentNextSteps before implementation planning.",
+        "24. Use build_agent_brief for product specs, implementation plans, and agent prompts.",
+        "25. Use add_context_note or upsert_personal_concept for durable personalized takeaways.",
     ]
     if full:
         lines.extend(
@@ -1262,6 +1264,7 @@ def search_for_user(
     retrieval_mode: str = "hybrid",
     project_id: str | None = None,
     project_slug: str | None = None,
+    youtube_video_id: str | None = None,
 ) -> dict:
     """Run a scoped semantic search and log hosted usage when applicable."""
     supabase, api_key, used_own_key = resolve_search_execution(user_id, limit, x_api_key)
@@ -1275,9 +1278,18 @@ def search_for_user(
             retrieval_mode,
             project_id,
             project_slug,
+            youtube_video_id,
         )
     else:
-        result = search(query, user_id, api_key, limit, category_filters, retrieval_mode)
+        result = search(
+            query,
+            user_id,
+            api_key,
+            limit,
+            category_filters,
+            retrieval_mode,
+            youtube_video_id=youtube_video_id,
+        )
 
     try:
         if supabase is not None:
@@ -2115,6 +2127,7 @@ async def mcp_endpoint(
         retrieval_mode: str = "hybrid",
         project_id: str | None = None,
         project_slug: str | None = None,
+        youtube_video_id: str | None = None,
     ) -> dict:
         try:
             if project_id or project_slug:
@@ -2126,6 +2139,7 @@ async def mcp_endpoint(
                     retrieval_mode=retrieval_mode,
                     project_id=project_id,
                     project_slug=project_slug,
+                    youtube_video_id=youtube_video_id,
                 )
             return search_for_user(
                 query,
@@ -2133,6 +2147,7 @@ async def mcp_endpoint(
                 limit,
                 category_filters=category_filters,
                 retrieval_mode=retrieval_mode,
+                youtube_video_id=youtube_video_id,
             )
         except HTTPException as exc:
             raise ValueError(str(exc.detail)) from exc
@@ -2145,6 +2160,7 @@ async def mcp_endpoint(
         category_filters: dict | None = None,
         project_id: str | None = None,
         project_slug: str | None = None,
+        youtube_video_id: str | None = None,
     ) -> dict:
         try:
             if project_id or project_slug:
@@ -2155,12 +2171,14 @@ async def mcp_endpoint(
                     category_filters=category_filters,
                     project_id=project_id,
                     project_slug=project_slug,
+                    youtube_video_id=youtube_video_id,
                 )
             return search_transcript_text(
                 query,
                 user["sub"],
                 limit,
                 category_filters=category_filters,
+                youtube_video_id=youtube_video_id,
             )
         except Exception as exc:
             raise ValueError(f"Keyword transcript search failed: {exc}") from exc

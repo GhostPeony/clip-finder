@@ -62,6 +62,7 @@ def search(
     retrieval_mode: str = "hybrid",
     project_id: str | None = None,
     project_slug: str | None = None,
+    youtube_video_id: str | None = None,
 ) -> dict:
     return search_pg(
         query,
@@ -72,6 +73,7 @@ def search(
         retrieval_mode,
         project_id,
         project_slug,
+        youtube_video_id,
     )
 
 
@@ -82,9 +84,16 @@ def search_transcript_text(
     category_filters: dict | None = None,
     project_id: str | None = None,
     project_slug: str | None = None,
+    youtube_video_id: str | None = None,
 ) -> dict:
     return search_transcript_text_pg(
-        query, user_id, limit, category_filters, project_id, project_slug
+        query,
+        user_id,
+        limit,
+        category_filters,
+        project_id,
+        project_slug,
+        youtube_video_id=youtube_video_id,
     )
 
 

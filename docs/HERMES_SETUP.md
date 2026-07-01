@@ -108,6 +108,8 @@ shared video is available.
 Preferred retrieval order: call `search_video_concepts` with `retrieval_mode: "hybrid"` for indexed
 source reports, concepts, report sections, aliases, and timestamp refs; call
 `get_video_knowledge_map` for candidate videos; then call `search_video_moments` with
-`retrieval_mode: "hybrid"` for timestamped evidence. Use `search_transcript_text` or
-`retrieval_mode: "keyword"` for exact terms or zero embedding spend, and use `detail_level`,
-`max_chars`, or `max_context_tokens` when the agent needs to stay inside a smaller context budget.
+`retrieval_mode: "hybrid"` for timestamped evidence. For questions about one known video, pass
+`youtube_video_id`/`video_id` to `search_transcript_text` and `search_video_moments`, then call
+`get_transcript_window` for direct evidence around the returned timestamp. Use
+`get_video_context/include_transcript` only when the map, searches, and transcript window are
+insufficient.

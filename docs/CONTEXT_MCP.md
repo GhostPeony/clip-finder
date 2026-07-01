@@ -240,8 +240,9 @@ The first tool set is intentionally small:
 - `validate_repo_context`: validate and normalize caller-supplied repo context before building a bundle or brief.
 - `search_video_concepts`: search indexed source concepts, TLDRs, source reports, report sections, aliases, and timestamp refs. `retrieval_mode` supports `hybrid` by default, `semantic`, and `keyword`; keyword mode makes zero embedding calls and all modes avoid LLM calls.
 - `get_video_knowledge_map`: inspect a compact navigable table of contents for one video, including report sections, concepts, people/orgs/tools, claims, decisions, timeline cues, timestamp refs, and suggested follow-up queries.
-- `search_video_moments`: search the user's indexed transcript chunks and return timestamped clips with access provenance. `retrieval_mode` supports `hybrid` (default vector + keyword/title fusion), `semantic`, and `keyword`, optionally narrowed by `category_filters`.
-- `get_video_context`: read source-derived concepts, edges, and artifacts for a video in the user's library. Transcript lines/chunks are omitted by default over MCP; pass `include_transcript: true` with `detail_level`/`max_chars` only for deeper source inspection.
+- `search_video_moments`: search the user's indexed transcript chunks and return timestamped clips with access provenance. `retrieval_mode` supports `hybrid` (default vector + keyword/title fusion), `semantic`, and `keyword`, optionally narrowed by `category_filters`; pass `youtube_video_id`/`video_id` for known-video questions.
+- `get_transcript_window`: read a bounded transcript slice for one saved video between `start_seconds` and `end_seconds` after search or a video map identifies the relevant timestamp.
+- `get_video_context`: read source-derived concepts, edges, and artifacts for a video in the user's library. Transcript lines/chunks are omitted by default over MCP; pass `include_transcript: true` with `detail_level`/`max_chars` only when maps, search clips, and transcript windows are insufficient.
 - `list_agent_notes`: read recent personal overlay notes.
 - `add_context_note`: write an agent note to the personal overlay only.
 - `upsert_personal_concept`: write or update a user-specific concept in the personal overlay only.
@@ -690,7 +691,7 @@ The skill/plugin layer should describe agent behavior, for example:
 - call `get_workflow_run`, `list_workflow_runs`, `get_ingestion_job`, or `list_ingestion_jobs` to follow up on queued ingestion status before assuming a new video is searchable
 - call `build_context_bundle` before writing a product spec, implementation plan, or agent prompt that should use the user's saved video knowledge
 - call `build_agent_brief` when the agent needs an actionable spec/prompt brief rather than raw context
-- call `search_video_concepts` first with `retrieval_mode: "hybrid"` for source knowledge, then `get_video_knowledge_map` for candidate videos, then `search_video_moments` with `retrieval_mode: "hybrid"` when the agent needs timestamped evidence. Use `search_video_concepts` or `search_video_moments` with `retrieval_mode: "keyword"` when exact terms matter or embedding spend should be zero.
+- call `search_video_concepts` first with `retrieval_mode: "hybrid"` for source knowledge, then `get_video_knowledge_map` for candidate videos, then `search_video_moments` with `retrieval_mode: "hybrid"` when the agent needs timestamped evidence. For known-video questions, pass `youtube_video_id`/`video_id` to transcript and moment search. Use `search_transcript_text` or keyword retrieval for exact terms, and call `get_transcript_window` before `get_video_context/include_transcript`.
 - pass repo details from the agent's own repo/filesystem/GitHub MCP as `repo_context`
 - read `repoFit.targetMap` from agent briefs when mapping saved-video ideas onto files, symbols, commands, tests, and runtime constraints
 - cite `source_refs` when turning a video idea into a spec or plan

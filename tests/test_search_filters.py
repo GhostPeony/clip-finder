@@ -159,11 +159,65 @@ def test_search_pg_defaults_to_hybrid_rpc_with_scores(monkeypatch):
     assert "Hybrid match" in clip["relevanceReason"]
 
 
+def test_search_pg_can_scope_results_to_known_youtube_video(monkeypatch):
+    supabase = Supabase(
+        rpc_data=[
+            {
+                "youtube_video_id": "other-video",
+                "title": "Nearby agent video",
+                "channel_name": "AI Channel",
+                "start_seconds": 120,
+                "end_seconds": 180,
+                "content": "Browser agents and MCP tools.",
+                "thumbnail_url": "thumb",
+                "similarity": 0.91,
+            },
+            {
+                "youtube_video_id": "dwarkesh-video",
+                "title": "What does the next training paradigm look like?",
+                "channel_name": "Dwarkesh Patel",
+                "start_seconds": 196,
+                "end_seconds": 259,
+                "content": "Computer use needs deterministic replayable simulators.",
+                "thumbnail_url": "thumb",
+                "similarity": 0.86,
+            },
+        ]
+    )
+    answer_calls = []
+
+    class FakeEmbeddings:
+        def embed_query(self, query):
+            return [0.1, 0.2, 0.3]
+
+    def fake_answer(query, clips, api_key=None):
+        answer_calls.append((query, [clip["videoId"] for clip in clips], api_key))
+        return "answer"
+
+    monkeypatch.setattr(rag, "get_supabase", lambda: supabase)
+    monkeypatch.setattr(rag, "_get_embeddings", lambda api_key=None: FakeEmbeddings())
+    monkeypatch.setattr(rag, "generate_answer", fake_answer)
+
+    result = rag.search_pg(
+        "computer use",
+        "user-1",
+        api_key="key",
+        limit=3,
+        youtube_video_id="dwarkesh-video",
+    )
+
+    assert supabase.rpc_calls[0][1]["match_limit"] == 100
+    assert [clip["videoId"] for clip in result["relevantClips"]] == ["dwarkesh-video"]
+    assert result["videoScope"] == {"scope": "video", "youtubeVideoId": "dwarkesh-video"}
+    assert result["retrievalPlan"]["videoScoped"] is True
+    assert answer_calls == [("computer use", ["dwarkesh-video"], "key")]
+
+
 def test_search_pg_keyword_mode_uses_keyword_path_without_embedding(monkeypatch):
     calls = []
 
-    def fake_keyword(query, user_id, limit, category_filters=None):
-        calls.append((query, user_id, limit, category_filters))
+    def fake_keyword(query, user_id, limit, category_filters=None, **kwargs):
+        calls.append((query, user_id, limit, category_filters, kwargs))
         return {
             "answer": "",
             "relevantClips": [],
@@ -186,7 +240,7 @@ def test_search_pg_keyword_mode_uses_keyword_path_without_embedding(monkeypatch)
         retrieval_mode="keyword",
     )
 
-    assert calls == [("exact term", "user-1", 3, None)]
+    assert calls == [("exact term", "user-1", 3, None, {"youtube_video_id": None})]
     assert result["retrievalMode"] == "keyword"
     assert result["retrievalBudget"]["embeddingCalls"] == 0
 
@@ -281,6 +335,53 @@ def test_search_transcript_text_pg_uses_keyword_rpc_without_embeddings(monkeypat
     assert clip["keywordRank"] == 0.78
     assert clip["matchType"] == "title_keyword"
     assert clip["accessSource"] == "playlist"
+
+
+def test_search_transcript_text_pg_can_scope_results_to_known_youtube_video(monkeypatch):
+    supabase = Supabase(
+        rpc_data=[
+            {
+                "youtube_video_id": "other-video",
+                "title": "The best AI agents are simpler than you think",
+                "channel_name": "LangChain",
+                "start_seconds": 1213,
+                "end_seconds": 1281,
+                "content": "Agents browsing websites with tools.",
+                "thumbnail_url": "thumb",
+                "keyword_rank": 0.92,
+                "match_type": "transcript_keyword",
+            },
+            {
+                "youtube_video_id": "dwarkesh-video",
+                "title": "What does the next training paradigm look like?",
+                "channel_name": "Dwarkesh Patel",
+                "start_seconds": 144,
+                "end_seconds": 212,
+                "content": "Why has progress on computer use been slower?",
+                "thumbnail_url": "thumb",
+                "keyword_rank": 0.8,
+                "match_type": "transcript_keyword",
+            },
+        ]
+    )
+
+    def fail_embeddings(*_args, **_kwargs):
+        raise AssertionError("keyword search should not embed the query")
+
+    monkeypatch.setattr(rag, "get_supabase", lambda: supabase)
+    monkeypatch.setattr(rag, "_get_embeddings", fail_embeddings)
+
+    result = rag.search_transcript_text_pg(
+        "computer use",
+        "user-1",
+        limit=3,
+        youtube_video_id="dwarkesh-video",
+    )
+
+    assert supabase.rpc_calls[0][1]["match_limit"] == 100
+    assert [clip["videoId"] for clip in result["relevantClips"]] == ["dwarkesh-video"]
+    assert result["videoScope"] == {"scope": "video", "youtubeVideoId": "dwarkesh-video"}
+    assert result["retrievalPlan"]["videoScoped"] is True
 
 
 def test_search_transcript_text_pg_retries_shorter_keyword_query_without_embeddings(monkeypatch):

@@ -143,6 +143,7 @@ READ_TOOL_NAMES = {
     "list_workflow_runs",
     "list_video_library",
     "get_video_context",
+    "get_transcript_window",
     "list_agent_notes",
     "build_context_bundle",
     "build_agent_brief",
@@ -676,10 +677,16 @@ def _agent_quickstart_payload() -> dict:
             },
             {
                 "step": "retrieve_timestamp_evidence",
-                "use": ["search_video_moments", "search_transcript_text", "get_video_context"],
+                "use": [
+                    "search_video_moments",
+                    "search_transcript_text",
+                    "get_transcript_window",
+                    "get_video_context",
+                ],
                 "why": (
                     "Use timestamp clips to verify selected map items. Use transcript text for "
-                    "exact phrases and full video context only when the map/clips are insufficient."
+                    "exact phrases. For known videos, pass youtube_video_id/video_id and pull "
+                    "only the relevant transcript window; full video context is a last resort."
                 ),
             },
             {
@@ -854,6 +861,20 @@ def _agent_quickstart_payload() -> dict:
                         "project_id": "project_id",
                         "title": "Agent project inbox",
                         "created_by_client": "agent-name",
+                    },
+                },
+            },
+            "knownVideoRetrieval": {
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/call",
+                "params": {
+                    "name": "search_transcript_text",
+                    "arguments": {
+                        "query": "exact phrase or concept",
+                        "youtube_video_id": "VIDEO_ID",
+                        "retrieval_mode": "keyword",
+                        "max_chars": 4000,
                     },
                 },
             },
@@ -1290,6 +1311,92 @@ def _get_video_context_tool(
     )
 
 
+def _get_transcript_window_tool(
+    supabase: Any, user_id: str, arguments: dict, tool_context: dict
+) -> dict:
+    del tool_context
+    _ensure_allowed_args(
+        arguments,
+        {
+            "youtube_video_id",
+            "video_id",
+            "start_seconds",
+            "end_seconds",
+            "detail_level",
+            "max_chars",
+            "max_context_tokens",
+            "project_id",
+            "project_slug",
+        },
+    )
+    video_id = _optional_video_id(arguments)
+    if not video_id:
+        raise McpAdapterError(INVALID_PARAMS, "youtube_video_id is required")
+    start_seconds = _bounded_int(
+        arguments.get("start_seconds", 0),
+        minimum=0,
+        maximum=86_399,
+        name="start_seconds",
+    )
+    raw_end_seconds = arguments.get("end_seconds", start_seconds + 180)
+    end_seconds = _bounded_int(raw_end_seconds, minimum=1, maximum=86_400, name="end_seconds")
+    if end_seconds <= start_seconds:
+        raise McpAdapterError(INVALID_PARAMS, "end_seconds must be greater than start_seconds")
+    budget = _budget_args(arguments)
+    project_id = _optional_string(arguments, "project_id")
+    project_slug = _optional_string(arguments, "project_slug")
+    context = get_video_context(
+        supabase,
+        user_id,
+        video_id,
+        project_id=project_id,
+        project_slug=project_slug,
+    )
+    if not context:
+        return _tool_response({"found": False, "videoId": video_id})
+
+    transcript_lines = _items_overlapping_window(
+        context.get("transcriptLines") or [], start_seconds, end_seconds
+    )
+    transcript_chunks = _items_overlapping_window(
+        context.get("transcriptChunks") or [], start_seconds, end_seconds
+    )
+    payload = {
+        "found": True,
+        "video": context.get("video", {}),
+        "projectScope": context.get("projectScope"),
+        "timeWindow": {
+            "startSeconds": start_seconds,
+            "endSeconds": end_seconds,
+            "youtubeUrl": _youtube_timestamp_url(video_id, start_seconds),
+        },
+        "transcriptLines": transcript_lines,
+        "transcriptChunks": transcript_chunks,
+        "transcriptBudget": {
+            "includeTranscript": True,
+            "availableTranscriptLines": len(transcript_lines),
+            "availableTranscriptChunks": len(transcript_chunks),
+            "returnedTranscriptLines": len(transcript_lines),
+            "returnedTranscriptChunks": len(transcript_chunks),
+            "guidance": (
+                "Use this bounded transcript window for direct evidence after "
+                "search_video_moments, search_transcript_text, or get_video_knowledge_map "
+                "identifies a relevant timestamp."
+            ),
+        },
+        "next_mcp_call": {
+            "name": "search_video_moments",
+            "when": "if_this_window_is_not_enough",
+            "arguments": {
+                "query": "narrow follow-up question",
+                "youtube_video_id": video_id,
+                "retrieval_mode": "hybrid",
+            },
+        },
+    }
+    return _tool_response(_budget_transcript_payload(payload, budget))
+
+
 def _list_video_library_tool(
     supabase: Any, user_id: str, arguments: dict, tool_context: dict
 ) -> dict:
@@ -1339,8 +1446,6 @@ def _get_project_context_map_tool(
             "detail_level",
             "max_chars",
             "max_context_tokens",
-            "project_id",
-            "project_slug",
         },
     )
     project_id = _optional_string(arguments, "project_id")
@@ -2378,6 +2483,8 @@ def _search_transcript_text_tool(
             "max_context_tokens",
             "project_id",
             "project_slug",
+            "youtube_video_id",
+            "video_id",
         },
     )
     query = _required_string(arguments, "query").strip()
@@ -2402,11 +2509,19 @@ def _search_transcript_text_tool(
 
     project_id = _optional_string(arguments, "project_id")
     project_slug = _optional_string(arguments, "project_slug")
+    video_id = _optional_video_id(arguments)
     try:
         if project_id or project_slug:
-            result = search_runner(query, limit, category_filters, project_id, project_slug)
+            result = search_runner(
+                query,
+                limit,
+                category_filters,
+                project_id,
+                project_slug,
+                video_id,
+            )
         else:
-            result = search_runner(query, limit, category_filters)
+            result = search_runner(query, limit, category_filters, youtube_video_id=video_id)
     except ValueError as exc:
         raise McpAdapterError(SERVER_ERROR, str(exc)) from exc
 
@@ -2416,6 +2531,10 @@ def _search_transcript_text_tool(
         "detailLevel": budget["detailLevel"],
         "categoryFilters": result.get("categoryFilters", category_filters or {}),
         "projectScope": result.get("projectScope"),
+        "videoScope": result.get(
+            "videoScope",
+            {"scope": "video" if video_id else "all_videos", "youtubeVideoId": video_id},
+        ),
         "relevantClips": [
             _budget_clip({**clip, "matchType": clip.get("matchType", "transcript_keyword")}, budget)
             for clip in result.get("relevantClips", [])
@@ -2439,7 +2558,9 @@ def _search_transcript_text_tool(
         "guidance": (
             "Use this for exact names, acronyms, product terms, and phrase searches. "
             "It does not spend embedding or LLM calls. If results are sparse, call "
-            "search_video_moments with retrieval_mode=hybrid for timestamp neighbors."
+            "search_video_moments with retrieval_mode=hybrid for timestamp neighbors. "
+            "When the user names a specific video, pass youtube_video_id/video_id to keep "
+            "results inside that video."
         ),
     }
     return _tool_response(_apply_retrieval_budget(payload, "relevantClips", budget))
@@ -2461,6 +2582,8 @@ def _search_video_moments_tool(
             "max_context_tokens",
             "project_id",
             "project_slug",
+            "youtube_video_id",
+            "video_id",
         },
     )
     query = _required_string(arguments, "query").strip()
@@ -2479,6 +2602,7 @@ def _search_video_moments_tool(
 
     project_id = _optional_string(arguments, "project_id")
     project_slug = _optional_string(arguments, "project_slug")
+    video_id = _optional_video_id(arguments)
     try:
         if project_id or project_slug:
             result = search_runner(
@@ -2488,9 +2612,16 @@ def _search_video_moments_tool(
                 retrieval_mode,
                 project_id,
                 project_slug,
+                video_id,
             )
         else:
-            result = search_runner(query, limit, category_filters, retrieval_mode)
+            result = search_runner(
+                query,
+                limit,
+                category_filters,
+                retrieval_mode,
+                youtube_video_id=video_id,
+            )
     except ValueError as exc:
         raise McpAdapterError(SERVER_ERROR, str(exc)) from exc
 
@@ -2501,6 +2632,10 @@ def _search_video_moments_tool(
         "detailLevel": budget["detailLevel"],
         "categoryFilters": result.get("categoryFilters", category_filters or {}),
         "projectScope": result.get("projectScope"),
+        "videoScope": result.get(
+            "videoScope",
+            {"scope": "video" if video_id else "all_videos", "youtubeVideoId": video_id},
+        ),
         "answer": answer,
         "relevantClips": [
             _budget_clip(
@@ -2542,7 +2677,8 @@ def _search_video_moments_tool(
             "and accessScope/accessReason explaining why it is visible to this user."
             " For exact phrases, names, acronyms, and product terms, use "
             "search_transcript_text first to avoid embedding/LLM spend. For concepts, "
-            "source reports, TLDRs, methods, tools, or pitfalls, call search_video_concepts."
+            "source reports, TLDRs, methods, tools, or pitfalls, call search_video_concepts. "
+            "When answering about one known video, pass youtube_video_id/video_id."
         ),
     }
     return _tool_response(_apply_retrieval_budget(payload, "relevantClips", budget))
@@ -2704,6 +2840,15 @@ def _optional_string(arguments: dict, name: str) -> str | None:
     return value
 
 
+def _optional_video_id(arguments: dict) -> str | None:
+    value = _optional_string(arguments, "youtube_video_id") or _optional_string(
+        arguments, "video_id"
+    )
+    if value is None:
+        return None
+    return value.strip() or None
+
+
 def _optional_list_of_objects(arguments: dict, name: str) -> list[dict]:
     value = arguments.get(name, [])
     if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
@@ -2779,6 +2924,20 @@ PROJECT_SCOPE_TOOL_PROPERTIES = {
     "project_slug": {
         "type": "string",
         "description": "Optional user project slug to scope search/context.",
+    },
+}
+
+VIDEO_SCOPE_TOOL_PROPERTIES = {
+    "youtube_video_id": {
+        "type": "string",
+        "description": (
+            "Optional YouTube video ID to constrain retrieval to one known saved video. "
+            "Use this whenever the user asks about a specific video."
+        ),
+    },
+    "video_id": {
+        "type": "string",
+        "description": "Alias for youtube_video_id.",
     },
 }
 
@@ -2863,6 +3022,7 @@ def _budget_clip(clip: dict, budget: dict) -> dict:
 
 def _apply_retrieval_budget(payload: dict, list_key: str, budget: dict) -> dict:
     retrieval_budget = dict(payload.get("retrievalBudget") or {})
+    original_answer = payload.get("answer")
     retrieval_budget.update(
         {
             "detailLevel": budget["detailLevel"],
@@ -2883,6 +3043,17 @@ def _apply_retrieval_budget(payload: dict, list_key: str, budget: dict) -> dict:
         if retrieval_budget["estimatedResponseChars"] > budget["maxChars"]:
             retrieval_budget["truncatedToBudget"] = True
         retrieval_budget["returnedResults"] = len(results)
+
+    if retrieval_budget.get("truncatedToBudget") and original_answer:
+        payload["answer"] = ""
+        retrieval_budget["answerOmittedReason"] = (
+            "Generated answer omitted because response budgeting removed one or more clips; "
+            "use the returned clips as timestamp evidence or retry with a larger max_chars."
+        )
+        retrieval_plan = payload.get("retrievalPlan")
+        if isinstance(retrieval_plan, dict):
+            retrieval_plan["llmAnswerVisible"] = False
+        retrieval_budget["estimatedResponseChars"] = _estimated_response_chars(payload)
 
     return payload
 
@@ -2923,6 +3094,74 @@ def _apply_response_budget(payload: dict, budget: dict) -> dict:
 VIDEO_TRANSCRIPT_ITEM_LIMITS = {"compact": 10, "standard": 50, "deep": 200}
 
 
+def _items_overlapping_window(
+    items: list[dict], start_seconds: int, end_seconds: int
+) -> list[dict]:
+    windowed: list[dict] = []
+    for item in items:
+        item_start = item.get("start_seconds", item.get("startSeconds"))
+        item_end = item.get("end_seconds", item.get("endSeconds"))
+        if not isinstance(item_start, (int, float)) or not isinstance(item_end, (int, float)):
+            continue
+        if item_start < end_seconds and item_end > start_seconds:
+            windowed.append(item)
+    return windowed
+
+
+def _youtube_timestamp_url(youtube_video_id: str, start_seconds: int) -> str:
+    return f"https://www.youtube.com/watch?v={youtube_video_id}&t={max(0, int(start_seconds))}s"
+
+
+def _budget_transcript_payload(payload: dict, budget: dict) -> dict:
+    budgeted = _apply_response_budget(payload, budget)
+    return _fit_payload_lists_to_response_budget(
+        budgeted,
+        budget,
+        ["transcriptChunks", "transcriptLines"],
+        transcript_budget_key="transcriptBudget",
+    )
+
+
+def _fit_payload_lists_to_response_budget(
+    payload: dict,
+    budget: dict,
+    list_keys: list[str],
+    transcript_budget_key: str | None = None,
+) -> dict:
+    response_budget = dict(payload.get("responseBudget") or {})
+    response_budget.update(
+        {
+            "detailLevel": budget["detailLevel"],
+            "maxChars": budget["maxChars"],
+            "maxContextTokens": budget["maxContextTokens"],
+            "estimatedResponseChars": _estimated_response_chars(payload),
+            "truncatedToBudget": bool(response_budget.get("truncatedToBudget")),
+        }
+    )
+    payload["responseBudget"] = response_budget
+
+    for key in list_keys:
+        items = payload.get(key)
+        if not isinstance(items, list):
+            continue
+        while items and response_budget["estimatedResponseChars"] > budget["maxChars"]:
+            items.pop()
+            response_budget["truncatedToBudget"] = True
+            response_budget["estimatedResponseChars"] = _estimated_response_chars(payload)
+
+    if transcript_budget_key and isinstance(payload.get(transcript_budget_key), dict):
+        transcript_budget = payload[transcript_budget_key]
+        if isinstance(payload.get("transcriptLines"), list):
+            transcript_budget["returnedTranscriptLines"] = len(payload["transcriptLines"])
+        if isinstance(payload.get("transcriptChunks"), list):
+            transcript_budget["returnedTranscriptChunks"] = len(payload["transcriptChunks"])
+
+    response_budget["estimatedResponseChars"] = _estimated_response_chars(payload)
+    if response_budget["estimatedResponseChars"] > budget["maxChars"]:
+        response_budget["truncatedToBudget"] = True
+    return payload
+
+
 def _budget_video_context_payload(
     payload: dict,
     budget: dict,
@@ -2955,7 +3194,19 @@ def _budget_video_context_payload(
         "returnedTranscriptChunks": len(budgeted.get("transcriptChunks") or []),
         "guidance": transcript_note,
     }
-    return _apply_response_budget(budgeted, budget)
+    budgeted = _apply_response_budget(budgeted, budget)
+    return _fit_payload_lists_to_response_budget(
+        budgeted,
+        budget,
+        [
+            "transcriptChunks",
+            "transcriptLines",
+            "sourceEdges",
+            "sourceConcepts",
+            "knowledgeArtifacts",
+        ],
+        transcript_budget_key="transcriptBudget",
+    )
 
 
 TOOLS = [
@@ -3188,13 +3439,15 @@ TOOLS = [
         "description": (
             "Keyword-search the current user's indexed transcripts and titles without "
             "embedding or LLM spend. Use this for exact phrases, entities, acronyms, "
-            "product names, or when semantic search returns noisy results. Results are "
-            "limited to user_videos/user_channels grants and include access provenance."
+            "product names, or when semantic search returns noisy results. Pass "
+            "youtube_video_id/video_id when the user asks about one known video. Results "
+            "are limited to user_videos/user_channels grants and include access provenance."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
+                **VIDEO_SCOPE_TOOL_PROPERTIES,
                 "category_filters": {
                     "type": "object",
                     "additionalProperties": {
@@ -3217,11 +3470,10 @@ TOOLS = [
                 },
                 "retrieval_mode": {
                     "type": "string",
-                    "enum": ["hybrid", "semantic", "keyword"],
-                    "default": "hybrid",
+                    "enum": ["keyword"],
+                    "default": "keyword",
                     "description": (
-                        "hybrid fuses vector and keyword/title candidates; semantic uses "
-                        "vector search only; keyword avoids embedding spend."
+                        "Keyword-only search. This tool makes zero embedding and zero LLM calls."
                     ),
                 },
                 **PROJECT_SCOPE_TOOL_PROPERTIES,
@@ -3317,14 +3569,16 @@ TOOLS = [
             "Search the current user's indexed video transcripts and return timestamped "
             "clips with optional cited answer text. retrieval_mode defaults to hybrid "
             "vector + keyword/title fusion; semantic and keyword are available for "
-            "narrower follow-up. Use category_filters to narrow search to source-label "
-            "facets discovered with list_context_categories. Results are limited to "
-            "user_videos/user_channels grants and include access provenance fields."
+            "narrower follow-up. Pass youtube_video_id/video_id when the user asks about "
+            "one known video. Use category_filters to narrow search to source-label facets "
+            "discovered with list_context_categories. Results are limited to user_videos/"
+            "user_channels grants and include access provenance fields."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
+                **VIDEO_SCOPE_TOOL_PROPERTIES,
                 "category_filters": {
                     "type": "object",
                     "additionalProperties": {
@@ -3552,7 +3806,9 @@ TOOLS = [
         "title": "Get Video Context",
         "description": (
             "Read source-derived transcript lines, chunks, concepts, edges, and artifacts "
-            "for a video in the current user's library."
+            "for a video in the current user's library. Prefer get_video_knowledge_map, "
+            "search_video_moments/search_transcript_text with youtube_video_id, or "
+            "get_transcript_window before requesting full transcript context."
         ),
         "inputSchema": {
             "type": "object",
@@ -3572,6 +3828,45 @@ TOOLS = [
                         "When false, return concepts/artifacts and omit transcript lines/chunks. "
                         "Set true only for deeper source inspection."
                     ),
+                },
+                **PROJECT_SCOPE_TOOL_PROPERTIES,
+                **BUDGET_TOOL_PROPERTIES,
+            },
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
+    },
+    {
+        "name": "get_transcript_window",
+        "title": "Get Transcript Window",
+        "description": (
+            "Return a bounded transcript slice for one saved video between start_seconds "
+            "and end_seconds. Use this after search_video_moments, search_transcript_text, "
+            "or get_video_knowledge_map identifies the relevant timestamp; avoid pulling "
+            "the full transcript for local grepping."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "youtube_video_id": {
+                    "type": "string",
+                    "description": "The YouTube video ID to inspect.",
+                },
+                "video_id": {
+                    "type": "string",
+                    "description": "Alias for youtube_video_id.",
+                },
+                "start_seconds": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 86400,
+                    "default": 0,
+                },
+                "end_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 86400,
+                    "description": "Exclusive end of the transcript window in seconds.",
                 },
                 **PROJECT_SCOPE_TOOL_PROPERTIES,
                 **BUDGET_TOOL_PROPERTIES,
@@ -3929,6 +4224,31 @@ TOOLS = [
 
 PROMPTS = [
     {
+        "name": "retrieve_video_insight",
+        "title": "Retrieve Video Insight",
+        "description": (
+            "Use Memexai's proven retrieval path for a user question, especially when "
+            "the user names a specific saved video."
+        ),
+        "arguments": [
+            {
+                "name": "question",
+                "description": "The user's question about saved video context.",
+                "required": True,
+            },
+            {
+                "name": "video_id",
+                "description": "Optional YouTube video ID if the user already selected one.",
+                "required": False,
+            },
+            {
+                "name": "project_id",
+                "description": "Optional Memexai project ID for project-scoped retrieval.",
+                "required": False,
+            },
+        ],
+    },
+    {
         "name": "source_report_from_saved_video",
         "title": "Source Report From Saved Video",
         "description": (
@@ -4056,6 +4376,41 @@ def _study_guide_prompt(arguments: dict) -> dict:
     )
 
 
+def _retrieve_video_insight_prompt(arguments: dict) -> dict:
+    question = _required_prompt_arg(arguments, "question")
+    video_id = _prompt_arg(arguments, "video_id", "")
+    project_id = _prompt_arg(arguments, "project_id", "")
+    scope_instruction = (
+        f"Known video: pass youtube_video_id={video_id} to transcript and moment search tools."
+        if video_id
+        else "If the user named a video but not an ID, call list_video_library or search_video_concepts to identify the video first."
+    )
+    project_instruction = (
+        f"Project scope: pass project_id={project_id} where supported."
+        if project_id
+        else "If the user named a project, call list_projects and pass the selected project_id/project_slug."
+    )
+    return _prompt_response(
+        "Retrieve a saved-video insight with bounded MCP calls.",
+        "\n".join(
+            [
+                "Use Memexai as a saved-video knowledge MCP. Keep retrieval bounded and source-backed.",
+                f"Question: {question}",
+                scope_instruction,
+                project_instruction,
+                "Preferred path:",
+                "1. Call search_video_concepts with retrieval_mode=hybrid for source reports, sections, concepts, aliases, and timestamp refs.",
+                "2. For a candidate video, call get_video_knowledge_map to inspect sections and timestamp-backed concepts.",
+                "3. For exact phrases, call search_transcript_text with retrieval_mode=keyword; pass youtube_video_id/video_id for known-video questions.",
+                "4. For timestamp evidence, call search_video_moments with retrieval_mode=hybrid; pass youtube_video_id/video_id for known-video questions.",
+                "5. If a timestamp window needs more direct evidence, call get_transcript_window instead of get_video_context/include_transcript.",
+                "6. Use get_video_context/include_transcript only when the map, search results, and transcript window are insufficient.",
+                "Return a concise answer with timestamps and mention uncertainty when evidence is sparse.",
+            ]
+        ),
+    )
+
+
 def _repo_implementation_prompt(arguments: dict) -> dict:
     query = _required_prompt_arg(arguments, "query")
     repo_hint = _prompt_arg(
@@ -4174,6 +4529,7 @@ def _required_prompt_arg(arguments: dict, name: str) -> str:
 
 
 PROMPT_BUILDERS = {
+    "retrieve_video_insight": _retrieve_video_insight_prompt,
     "source_report_from_saved_video": _study_guide_prompt,
     "study_guide_from_saved_video": _study_guide_prompt,
     "repo_implementation_brief": _repo_implementation_prompt,
@@ -4206,6 +4562,7 @@ TOOL_HANDLERS = {
     "search_transcript_text": _search_transcript_text_tool,
     "search_video_moments": _search_video_moments_tool,
     "get_video_context": _get_video_context_tool,
+    "get_transcript_window": _get_transcript_window_tool,
     "list_agent_notes": _list_agent_notes_tool,
     "add_context_note": _add_context_note_tool,
     "upsert_personal_concept": _upsert_personal_concept_tool,

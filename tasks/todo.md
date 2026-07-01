@@ -1,5 +1,13 @@
 # Production Hosted Setup
 
+# MCP Known-Video Retrieval Hardening
+
+- [x] Add known-video filters to MCP transcript/moment search so "this video" questions do not drift across a project.
+- [x] Add a transcript-window MCP tool for bounded timestamp evidence instead of full transcript pulls.
+- [x] Enforce response budgets on `structuredContent`, especially `get_video_context/include_transcript`.
+- [x] Prevent generated answers from citing clips that are not returned after budgeting.
+- [x] Add regression coverage for the Claude MCP usage failure modes and run focused verification.
+
 # Settings Capture Source Density Fix
 
 - [x] Compact connected playlists in Settings so long URLs and video rows do not crowd Usage.

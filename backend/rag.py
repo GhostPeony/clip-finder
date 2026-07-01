@@ -155,6 +155,7 @@ def search_pg(
     retrieval_mode: str = "hybrid",
     project_id: str | None = None,
     project_slug: str | None = None,
+    youtube_video_id: str | None = None,
 ) -> dict:
     """
     Semantic search scoped to a user's authorized video library.
@@ -174,6 +175,7 @@ def search_pg(
     normalized_mode = _normalize_retrieval_mode(retrieval_mode)
     supabase = get_supabase()
     project_scope = resolve_project_scope(supabase, user_id, project_id, project_slug)
+    scoped_youtube_video_id = _clean_video_scope(youtube_video_id)
     if normalized_mode == "keyword":
         if project_scope:
             return search_transcript_text_pg(
@@ -182,14 +184,21 @@ def search_pg(
                 limit,
                 category_filters,
                 project_scope=project_scope,
+                youtube_video_id=scoped_youtube_video_id,
             )
-        return search_transcript_text_pg(query, user_id, limit, category_filters)
+        return search_transcript_text_pg(
+            query,
+            user_id,
+            limit,
+            category_filters,
+            youtube_video_id=scoped_youtube_video_id,
+        )
 
     normalized_filters = normalize_category_filters(category_filters)
     print(
         f"[SEARCH_PG] Starting search for: {query[:50]}... "
         f"(user={user_id[:8]}, limit={limit}, mode={normalized_mode}, "
-        f"filters={bool(normalized_filters)})"
+        f"filters={bool(normalized_filters)}, video={scoped_youtube_video_id or 'any'})"
     )
 
     # 1. Embed the query
@@ -204,7 +213,7 @@ def search_pg(
     rpc_payload = {
         "query_embedding": query_vector,
         "match_user_id": user_id,
-        "match_limit": limit * 4,
+        "match_limit": _match_limit_for_scope(limit, scoped_youtube_video_id),
         "min_start_seconds": 0,
         "category_filters": normalized_filters,
     }
@@ -219,6 +228,8 @@ def search_pg(
     ).execute()
 
     rows = result.data or []
+    if scoped_youtube_video_id:
+        rows = _filter_rows_by_youtube_video_id(rows, scoped_youtube_video_id)
     print(f"[SEARCH_PG] RPC returned {len(rows)} rows")
 
     # 3. Map to VideoClip dicts, then apply shared selection + cited answer.
@@ -254,6 +265,7 @@ def search_pg(
         "categoryFilters": normalized_filters,
         "retrievalMode": normalized_mode,
         "projectScope": _project_scope_response(project_scope),
+        "videoScope": _video_scope_response(scoped_youtube_video_id),
         "retrievalPlan": {
             "primary": (
                 "hybrid_vector_keyword_rrf"
@@ -264,6 +276,7 @@ def search_pg(
             "llmAnswerUsed": bool(answer),
             "candidateMultiplier": 4,
             "projectScoped": bool(project_scope),
+            "videoScoped": bool(scoped_youtube_video_id),
             "fallback": (
                 "Use search_transcript_text for exact phrase checks or "
                 "search_video_concepts for source concepts and generated artifacts."
@@ -286,6 +299,7 @@ def search_transcript_text_pg(
     project_id: str | None = None,
     project_slug: str | None = None,
     project_scope: dict | None = None,
+    youtube_video_id: str | None = None,
 ) -> dict:
     """
     Keyword/entity search scoped to a user's authorized video library.
@@ -295,12 +309,14 @@ def search_transcript_text_pg(
     terms, and title/entity-heavy agent searches.
     """
     normalized_filters = normalize_category_filters(category_filters)
+    scoped_youtube_video_id = _clean_video_scope(youtube_video_id)
     supabase = get_supabase()
     if project_scope is None:
         project_scope = resolve_project_scope(supabase, user_id, project_id, project_slug)
     print(
         f"[SEARCH_TEXT_PG] Starting keyword search for: {query[:50]}... "
-        f"(user={user_id[:8]}, limit={limit}, filters={bool(normalized_filters)})"
+        f"(user={user_id[:8]}, limit={limit}, filters={bool(normalized_filters)}, "
+        f"video={scoped_youtube_video_id or 'any'})"
     )
 
     rows = _search_keyword_rpc(
@@ -310,6 +326,7 @@ def search_transcript_text_pg(
         limit,
         normalized_filters,
         project_scope.get("id") if project_scope else None,
+        scoped_youtube_video_id,
     )
     fallback_query = None
     if not rows:
@@ -323,6 +340,7 @@ def search_transcript_text_pg(
                 limit,
                 normalized_filters,
                 project_scope.get("id") if project_scope else None,
+                scoped_youtube_video_id,
             )
             if fallback_rows:
                 rows = fallback_rows
@@ -359,12 +377,14 @@ def search_transcript_text_pg(
         "categoryFilters": normalized_filters,
         "retrievalMode": "keyword",
         "projectScope": _project_scope_response(project_scope),
+        "videoScope": _video_scope_response(scoped_youtube_video_id),
         "retrievalPlan": {
             "primary": "keyword_full_text",
             "embeddingUsed": False,
             "llmAnswerUsed": False,
             "fallbackQuery": fallback_query,
             "projectScoped": bool(project_scope),
+            "videoScoped": bool(scoped_youtube_video_id),
             "fallback": "Use search_video_moments for semantic neighbors if exact search is sparse.",
         },
         "retrievalBudget": {
@@ -383,18 +403,46 @@ def _search_keyword_rpc(
     limit: int,
     normalized_filters: dict,
     project_id: str | None = None,
+    youtube_video_id: str | None = None,
 ) -> list[dict]:
     payload = {
         "search_query": query,
         "match_user_id": user_id,
-        "match_limit": limit * 4,
+        "match_limit": _match_limit_for_scope(limit, youtube_video_id),
         "min_start_seconds": 0,
         "category_filters": normalized_filters,
     }
     if project_id:
         payload["match_project_id"] = project_id
     result = supabase.rpc("search_chunks_keyword", payload).execute()
-    return result.data or []
+    rows = result.data or []
+    if youtube_video_id:
+        rows = _filter_rows_by_youtube_video_id(rows, youtube_video_id)
+    return rows
+
+
+def _clean_video_scope(youtube_video_id: str | None) -> str | None:
+    if not isinstance(youtube_video_id, str):
+        return None
+    cleaned = youtube_video_id.strip()
+    return cleaned or None
+
+
+def _match_limit_for_scope(limit: int, youtube_video_id: str | None = None) -> int:
+    if youtube_video_id:
+        return max(limit * 20, 100)
+    return limit * 4
+
+
+def _filter_rows_by_youtube_video_id(rows: list[dict], youtube_video_id: str) -> list[dict]:
+    return [row for row in rows if row.get("youtube_video_id") == youtube_video_id]
+
+
+def _video_scope_response(youtube_video_id: str | None) -> dict:
+    return {
+        "scope": "video" if youtube_video_id else "all_videos",
+        "youtubeVideoId": youtube_video_id,
+    }
 
 
 def _keyword_fallback_queries(query: str) -> list[str]:
