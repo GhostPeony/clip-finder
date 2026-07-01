@@ -7,6 +7,13 @@
 - [x] Add regression coverage for hiding playlist/video detail in the modal.
 - [x] Run focused frontend verification.
 
+# MCP OAuth Playlist Sync Scope Fix
+
+- [x] Let users explicitly grant optional MCP write scopes during OAuth approval.
+- [x] Add regression coverage proving approval can include `capture:write`.
+- [x] Update docs/guidance so connector reconnect is the recovery path for missing sync scope.
+- [x] Run focused frontend/backend verification.
+
 # Anonymous Auth And MCP Playlist Sync Assessment
 
 - [x] Verify current Supabase anonymous sign-in behavior, conversion semantics, and security constraints from primary docs.

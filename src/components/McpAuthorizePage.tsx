@@ -3,6 +3,25 @@ import { approveMcpOAuthAuthorization, ApproveMcpOAuthRequest } from '../service
 import { useAuth } from '../contexts/AuthContext';
 import { PRODUCT_NAME } from '../brand';
 
+const BASE_MCP_SCOPES = ['context:read', 'overlay:write'];
+const OPTIONAL_MCP_SCOPES = [
+  {
+    scope: 'ingest:write',
+    title: 'Link submissions',
+    description: 'Queue YouTube links when you ask the agent to import a video.',
+  },
+  {
+    scope: 'project:write',
+    title: 'Project setup',
+    description: 'Create project scopes when you ask the agent to organize work.',
+  },
+  {
+    scope: 'capture:write',
+    title: 'Playlist sync',
+    description: 'Link and sync saved YouTube playlists after explicit confirmation.',
+  },
+];
+
 export const McpAuthorizePage: React.FC = () => {
   const { user, loading, signInWithGoogle } = useAuth();
   const [submitting, setSubmitting] = useState(false);
@@ -10,7 +29,17 @@ export const McpAuthorizePage: React.FC = () => {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const request = useMemo(() => buildApproveRequest(params), [params]);
   const clientLabel = params.get('client_id') || 'your agent';
-  const scopeText = request?.scope || 'context:read overlay:write';
+  const requestedScopes = useMemo(() => parseScopeText(request?.scope), [request?.scope]);
+  const [optionalScopes, setOptionalScopes] = useState<string[]>(() =>
+    OPTIONAL_MCP_SCOPES.filter((item) => requestedScopes.includes(item.scope)).map(
+      (item) => item.scope,
+    ),
+  );
+  const approvedScopes = useMemo(
+    () => mergeScopes([...requestedScopes, ...optionalScopes]),
+    [requestedScopes, optionalScopes],
+  );
+  const scopeText = approvedScopes.join(' ');
 
   const handleSignIn = async () => {
     setError('');
@@ -25,7 +54,10 @@ export const McpAuthorizePage: React.FC = () => {
     }
     setSubmitting(true);
     setError('');
-    const result = await approveMcpOAuthAuthorization(request);
+    const result = await approveMcpOAuthAuthorization({
+      ...request,
+      scope: scopeText,
+    });
     setSubmitting(false);
     if (!result?.redirectUrl) {
       setError('Could not approve this agent connection.');
@@ -65,6 +97,38 @@ export const McpAuthorizePage: React.FC = () => {
               Source transcripts and generated video context stay read-only. Personal notes and
               concepts are writable only when the token includes overlay access.
             </p>
+          </div>
+
+          <div className="mt-4 rounded-xl bg-cream p-4">
+            <h2 className="text-sm font-semibold text-ink">Agent permissions</h2>
+            <div className="mt-3 space-y-2">
+              {OPTIONAL_MCP_SCOPES.map((item) => {
+                const checked = optionalScopes.includes(item.scope);
+                return (
+                  <label
+                    key={item.scope}
+                    className="flex items-start gap-3 rounded-xl bg-surface p-3"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(event) => {
+                        setOptionalScopes((current) =>
+                          event.target.checked
+                            ? mergeScopes([...current, item.scope])
+                            : current.filter((scope) => scope !== item.scope),
+                        );
+                      }}
+                      className="mt-1 h-4 w-4 accent-violet-deep"
+                    />
+                    <span>
+                      <span className="block text-sm font-semibold text-ink">{item.title}</span>
+                      <span className="block text-xs leading-5 text-bark">{item.description}</span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
           </div>
 
           {error ? <p className="mt-4 text-sm font-semibold text-rose-deep">{error}</p> : null}
@@ -123,6 +187,18 @@ function buildApproveRequest(params: URLSearchParams): ApproveMcpOAuthRequest | 
     state: params.get('state'),
     resource: params.get('resource'),
   };
+}
+
+function parseScopeText(value?: string | null): string[] {
+  const parsed = value ? value.replace(/,/g, ' ').split(/\s+/) : BASE_MCP_SCOPES;
+  return mergeScopes(parsed);
+}
+
+function mergeScopes(scopes: string[]): string[] {
+  const allowed = new Set([...BASE_MCP_SCOPES, ...OPTIONAL_MCP_SCOPES.map((item) => item.scope)]);
+  const ordered = [...BASE_MCP_SCOPES, ...OPTIONAL_MCP_SCOPES.map((item) => item.scope)];
+  const selected = new Set(scopes.filter((scope) => allowed.has(scope)));
+  return ordered.filter((scope) => selected.has(scope));
 }
 
 export default McpAuthorizePage;

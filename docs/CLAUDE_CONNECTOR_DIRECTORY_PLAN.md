@@ -11,6 +11,8 @@ Until Memexai is listed in the Claude Connectors Directory, users should add it 
 3. Paste `https://api.memexai.xyz/mcp`.
 4. Name it `Memexai`.
 5. Connect, sign in with Google, approve Memexai access, then enable the connector in the chat.
+   Enable `Playlist sync` on the Memexai approval screen when Claude should sync linked
+   YouTube capture sources; reconnect the connector if the current token lacks `capture:write`.
 
 Fallback for clients that do not complete remote MCP OAuth: create a scoped MCP token in Memexai Settings and configure the client with a bearer-token HTTP MCP header.
 

@@ -22,7 +22,8 @@ For a paid or user-specific remote MCP, some credential is expected. Local STDIO
 5. Client opens `/oauth/authorize?...`.
 6. Memexai redirects the user to the app route `/mcp/authorize?...`.
 7. User signs in with Google if needed. If this is a new user and hosted auth allows signups, this creates the Memexai account during the agent-initiated flow.
-8. User approves the agent request.
+8. User approves the agent request and can explicitly enable optional agent capabilities such
+   as link submissions, project setup, or playlist sync.
 9. Browser redirects back to the agent's registered callback with an authorization code.
 10. Client exchanges the code at `/oauth/token`.
 11. Memexai returns an opaque bearer token backed by the existing `mcp_tokens` table.
@@ -37,6 +38,9 @@ Until Memexai is listed in Claude's Connectors Directory, users add it manually:
 3. Paste `https://api.memexai.xyz/mcp`.
 4. Name it `Memexai`.
 5. Connect, sign in with Google, approve Memexai access, then enable the connector in the chat.
+   If the agent should sync linked YouTube playlists, enable `Playlist sync` on the Memexai
+   approval screen. If the connector was already authorized without it, disconnect/reconnect
+   the connector so a new MCP token is issued with `capture:write`.
 
 Recommended first prompt:
 
@@ -55,7 +59,9 @@ If OAuth fails in a specific client, the user can create a scoped MCP token in S
 - Codes expire after 10 minutes and are single-use.
 - OAuth-issued MCP access tokens expire after 30 days.
 - Default scopes are `context:read overlay:write`.
-- `ingest:write` is allowed only when requested and approved.
+- The Memexai approval screen can add optional write scopes when the user explicitly enables
+  them, even if the client did not request granular scopes up front.
+- `ingest:write`, `project:write`, and `capture:write` are allowed only when approved.
 
 ## Current Scope
 

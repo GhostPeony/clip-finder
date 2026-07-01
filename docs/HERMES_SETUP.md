@@ -62,8 +62,13 @@ Use the narrowest token that fits the task:
 - `context:read`: default for search, context bundles, briefs, categories, jobs, and workflows.
 - `overlay:write`: optional for durable notes and personal concepts.
 - `ingest:write`: optional for user-approved YouTube URL ingestion.
+- `project:write`: optional for creating user-owned project scopes.
+- `capture:write`: optional for linking and syncing YouTube playlist capture sources.
 
 Playlist and channel ingestion still require explicit `allow_bulk: true`.
+Playlist capture-source sync uses `capture:write`; if an OAuth connector was authorized before
+that scope was granted, reconnect the connector and enable `Playlist sync` on the Memexai approval
+screen.
 
 After Hermes connects, call `get_mcp_session` first. It returns the token's effective scopes,
 allowed capabilities, guardrails, and the recommended next MCP call without reading source data.

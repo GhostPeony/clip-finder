@@ -85,7 +85,7 @@ def test_create_mcp_token_returns_raw_token_once_and_stores_hash(monkeypatch):
     result = mcp_tokens.create_mcp_token(
         supabase,
         "user-1",
-        "Hermes on ponyo",
+        "My MCP agent",
         ["context:read", "overlay:write", "admin"],
     )
 
@@ -341,7 +341,7 @@ def test_create_mcp_token_endpoint_returns_raw_token_once(monkeypatch):
     try:
         response = TestClient(app).post(
             "/api/mcp/tokens",
-            json={"name": "Hermes on ponyo", "scopes": ["context:read"]},
+            json={"name": "My MCP agent", "scopes": ["context:read"]},
         )
     finally:
         app.dependency_overrides.clear()
@@ -349,7 +349,7 @@ def test_create_mcp_token_endpoint_returns_raw_token_once(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["token"] == sample_bearer
-    assert body["tokenRecord"]["name"] == "Hermes on ponyo"
+    assert body["tokenRecord"]["name"] == "My MCP agent"
     assert body["setup"]["mcpEndpoint"] == "http://testserver/mcp"
     assert body["setup"]["manifestUrl"] == "http://testserver/mcp.json"
     assert body["setup"]["accessModel"]["searchScope"] == "current_user_grants"

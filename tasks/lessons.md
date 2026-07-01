@@ -56,3 +56,4 @@
 - Project and capture-source management must be mobile-first, not settings-only. Long playlist URLs, project names, and action rows need `min-w-0`, wrapping, and direct project-scope entry points from Dashboard/Library so users can recover from pre-project playlist setup without database help.
 - Project management needs an explicit named destination in primary navigation. A helper panel inside Library is not discoverable enough once projects become a core way to organize saved-video context.
 - Never ship personal machine, client, pet, or local agent names as customer-facing defaults or test fixture expectations. Defaults like MCP token names must be generic and fixtures should assert private names do not leak.
+- Claude/Codex "always allow" tool permissions are not Memexai MCP OAuth scopes. If an MCP tool returns missing `capture:write`, `ingest:write`, or `project:write`, the connector token must be reauthorized or recreated with that server-side scope.
