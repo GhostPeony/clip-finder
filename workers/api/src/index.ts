@@ -30,7 +30,7 @@ export interface Env {
   WORKFLOW_INTERNAL_SECRET?: string;
 }
 
-const API_INSTANCE_ID = 'production-20260625-claude-connector';
+const API_INSTANCE_ID = 'production-20260630-mcp-retrieval';
 
 export class MemexaiApiContainer extends Container {
   defaultPort = 8080;
