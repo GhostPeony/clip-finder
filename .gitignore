@@ -46,3 +46,6 @@ screenshots/
 # Production eval outputs can contain user-specific library details or token metadata
 eval/results/
 *.stackdump
+
+# Local debug/screenshot artifacts
+artifacts/

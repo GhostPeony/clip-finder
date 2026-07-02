@@ -17,7 +17,7 @@
 - [x] Link OAuth-minted MCP tokens to their registered client (migration 030) and name them after the client.
 - [x] Default new dashboard MCP tokens to 90-day expiry and show expiry in Settings.
 - [x] Return `invalid_scope` instead of silently falling back to default scopes.
-- [ ] Show the registered client name on the MCP consent screen and default optional write scopes to unchecked.
+- [x] Show the registered client name on the MCP consent screen and default optional write scopes to unchecked.
 - [x] Gate MCP keyword search and transcript windows on the search quota; push window predicates into the DB query.
 - [x] Debounce MCP token `last_used_at` writes to once per minute.
 - [x] Extract shared `src/lib/jobs.ts` + `src/lib/time.ts` and kill the triplicated status/format helpers.
@@ -28,9 +28,9 @@
 - [x] Reuse the cited-answer experience (citation chips) in library search results.
 - [x] Reconcile the library empty state with total video count and disclose the 50-video graph cap.
 - [x] Fix UsageBar progressbar semantics, GuideModal focus management, and the unlabeled video-assignment select.
-- [ ] Split `LibraryKnowledgeGraph.tsx`, `LibraryView.tsx`, and `App.tsx` along existing seams (pure moves).
-- [ ] Derive the Cloudflare container instance id from the git SHA at deploy time (`scripts/deploy-api.mjs`).
-- [ ] Refresh CLAUDE.md: Supabase-only storage, corrected dev-run env, deploy notes, new frontend conventions.
+- [x] Split `LibraryKnowledgeGraph.tsx`, `LibraryView.tsx`, and `App.tsx` along existing seams (pure moves).
+- [x] Derive the Cloudflare container instance id from the git SHA at deploy time (`scripts/deploy-api.mjs`).
+- [x] Refresh CLAUDE.md: Supabase-only storage, corrected dev-run env, deploy notes, new frontend conventions.
 
 # MCP Known-Video Retrieval Hardening
 
@@ -142,7 +142,7 @@
 - [x] Backfill stale sparse source reports/topics for the production test library and re-run MCP quality checks.
 - [x] Reduce duplicated large MCP tool responses so `structuredContent` carries the full payload and text content stays compact.
 - [ ] Add a Cloudflare security/WAF skip or equivalent allow rule for `/mcp` so bare Python/default agent HTTP clients are not blocked with Error 1010.
-- [ ] Automate Cloudflare Container instance-id/version rotation so API deploys do not require a manual durable container name bump to pick up a new image immediately.
+- [x] Automate Cloudflare Container instance-id/version rotation so API deploys do not require a manual durable container name bump to pick up a new image immediately.
 
 # Playlist Capture Sync Bug
 
