@@ -25,6 +25,7 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET?: string;
   STRIPE_CANCEL_URL?: string;
   STRIPE_SUCCESS_URL?: string;
+  PROMO_TRIAL_CODES?: string;
   VITE_SUPABASE_ANON_KEY: string;
   VITE_SUPABASE_URL: string;
   WORKFLOW_INTERNAL_SECRET?: string;
@@ -62,6 +63,7 @@ export class MemexaiApiContainer extends Container {
     STRIPE_SUCCESS_URL: this.env.STRIPE_SUCCESS_URL || '',
     STRIPE_CANCEL_URL: this.env.STRIPE_CANCEL_URL || '',
     STRIPE_PORTAL_RETURN_URL: this.env.STRIPE_PORTAL_RETURN_URL || '',
+    PROMO_TRIAL_CODES: this.env.PROMO_TRIAL_CODES || '',
     VITE_SUPABASE_ANON_KEY: this.env.VITE_SUPABASE_ANON_KEY,
     VITE_SUPABASE_URL: this.env.VITE_SUPABASE_URL,
     WORKFLOW_INTERNAL_SECRET: this.env.WORKFLOW_INTERNAL_SECRET || '',

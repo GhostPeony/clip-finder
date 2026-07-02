@@ -7,6 +7,8 @@ import { VideoPlayer } from './components/VideoPlayer';
 import { LibraryView } from './components/LibraryView';
 import { IngestionJobsView } from './components/IngestionJobsView';
 import { SettingsModal } from './components/SettingsModal';
+import { PromoTrialBanner } from './components/PromoTrialBanner';
+import { capturePromoCodeFromUrl } from './lib/promo';
 import { Toast, useToast } from './components/Toast';
 import { LandingPage } from './components/LandingPage';
 import { ProductDashboard } from './components/ProductDashboard';
@@ -43,6 +45,11 @@ const App: React.FC = () => {
     relevantClips: [],
   });
   const [activeClip, setActiveClip] = useState<VideoClip | null>(null);
+
+  // Stash ?promo= codes before the auth gate so they survive the OAuth redirect.
+  useEffect(() => {
+    capturePromoCodeFromUrl();
+  }, []);
 
   // Load hosted runtime configuration after the authenticated app is available.
   useEffect(() => {
@@ -296,6 +303,7 @@ const App: React.FC = () => {
 
       {/* Main Content */}
       <main className="flex-1 w-full max-w-7xl mx-auto px-5 py-8">
+        {isSupabaseAuth && user && <PromoTrialBanner />}
         {mode === 'unified' ? (
           <div className="py-4">
             <ProductDashboard

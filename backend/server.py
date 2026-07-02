@@ -38,6 +38,7 @@ try:
         construct_stripe_event,
         create_checkout_session,
         create_portal_session,
+        describe_promo_trial,
         process_stripe_event,
         resolve_user_entitlements,
     )
@@ -157,6 +158,7 @@ except ImportError:
         construct_stripe_event,
         create_checkout_session,
         create_portal_session,
+        describe_promo_trial,
         process_stripe_event,
         resolve_user_entitlements,
     )
@@ -313,6 +315,7 @@ class CaptureSourceProjectRequest(BaseModel):
 
 class BillingCheckoutRequest(BaseModel):
     lookupKey: str = Field(..., min_length=1)
+    promoCode: str | None = None
 
 
 class ApiKeyRequest(BaseModel):
@@ -2505,7 +2508,18 @@ async def billing_checkout_endpoint(
     """Create a Stripe-hosted Checkout session for a paid subscription."""
     if not is_supabase_mode():
         raise HTTPException(status_code=404, detail="Billing is only available in hosted mode")
-    return create_checkout_session(get_supabase(), user, request.lookupKey)
+    return create_checkout_session(get_supabase(), user, request.lookupKey, request.promoCode)
+
+
+@app.get("/api/billing/promo/{promo_code}")
+async def billing_promo_endpoint(promo_code: str):
+    """Describe a promotional trial code so the app can render its offer."""
+    if not is_supabase_mode():
+        raise HTTPException(status_code=404, detail="Billing is only available in hosted mode")
+    promo = describe_promo_trial(promo_code)
+    if not promo:
+        raise HTTPException(status_code=404, detail="Unknown promo code")
+    return promo
 
 
 @app.post("/api/billing/portal")

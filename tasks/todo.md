@@ -510,3 +510,16 @@
 - [x] Update public/MCP setup metadata so agents and users see OAuth-first Claude guidance before token fallback.
 - [x] Document the Anthropic Connector Directory submission path and readiness checklist.
 - [x] Add/update regression tests and run focused verification.
+
+# Stripe API Version Fix + Promo Trial Links (July 2026)
+
+- [x] Fix `apply_subscription_state` to read `current_period_start/end` from subscription items (2025-03-31.basil+ moved them off the Subscription object), keeping the legacy top-level fallback.
+- [x] Fix `_subscription_id_from_object` to resolve invoice subscriptions via `parent.subscription_details` on basil+ payloads.
+- [x] Update `tests/test_billing.py` fixtures to the new API shape (items-level periods, invoice parent) and cover both shapes.
+- [x] Add `PROMO_TRIAL_CODES` config (`code:plan:days` entries) + `get_promo_trial`/`describe_promo_trial` helpers.
+- [x] Extend `POST /api/billing/checkout` with `promoCode`: validated trial checkout (`trial_period_days`, card-optional, cancel-if-no-card), one redemption per account, new-subscriber only.
+- [x] Stamp promo redemption on `checkout.session.completed`; migration 029 adds `promo_trial_code`/`promo_trial_redeemed_at` to `billing_profiles` (both migration dirs).
+- [x] Add public `GET /api/billing/promo/{code}` describing the offer (plan, days, monthly lookup key).
+- [x] Frontend: capture `?promo=` into localStorage pre-auth, `PromoTrialBanner` for signed-in free users, checkout passes promo code, clear on `billing=success`.
+- [x] Env/deploy plumbing: `.env.example`, `.env.production.example`, `workers/api` env passthrough, secrets push script.
+- [x] Update `docs/PAID_PRICING_AND_STRIPE_HANDOFF.md` trial policy note; pytest (383 passed), targeted vitest (42 passed), typecheck, build, ruff all green.

@@ -70,7 +70,8 @@ $optionalStripeValues = @(
     "STRIPE_PRO_ANNUAL_LOOKUP_KEY",
     "STRIPE_SUCCESS_URL",
     "STRIPE_CANCEL_URL",
-    "STRIPE_PORTAL_RETURN_URL"
+    "STRIPE_PORTAL_RETURN_URL",
+    "PROMO_TRIAL_CODES"
 )
 
 foreach ($name in $optionalStripeValues) {

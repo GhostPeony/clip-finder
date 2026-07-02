@@ -13,6 +13,7 @@ import {
   deleteCaptureSource,
   disconnectYoutubeOAuth,
   fetchAppConfig,
+  fetchBillingPromo,
   fetchBillingStatus,
   fetchCaptureSources,
   fetchLibraryArtifact,
@@ -633,6 +634,54 @@ describe('api client', () => {
 
     await expect(createBillingCheckout('memexai_plus_monthly_v1')).rejects.toThrow(
       'No such customer: cus_old_sandbox',
+    );
+  });
+
+  it('sends promo codes to checkout and describes promo offers', async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/billing/checkout') && init?.method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({ url: 'https://checkout.stripe.com/trial' }),
+        };
+      }
+      if (url.endsWith('/api/billing/promo/producthunt')) {
+        return {
+          ok: true,
+          json: async () => ({
+            code: 'producthunt',
+            planKey: 'plus',
+            trialDays: 14,
+            lookupKey: 'memexai_plus_monthly_v1',
+          }),
+        };
+      }
+      if (url.endsWith('/api/billing/promo/notacode')) {
+        return { ok: false, status: 404, json: async () => ({ detail: 'Unknown promo code' }) };
+      }
+      throw new Error(`Unexpected URL ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchBillingPromo('producthunt')).resolves.toMatchObject({
+      code: 'producthunt',
+      planKey: 'plus',
+      trialDays: 14,
+    });
+    await expect(fetchBillingPromo('notacode')).resolves.toBeNull();
+
+    await expect(createBillingCheckout('memexai_plus_monthly_v1', 'producthunt')).resolves.toBe(
+      'https://checkout.stripe.com/trial',
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${API_BASE}/api/billing/checkout`,
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          lookupKey: 'memexai_plus_monthly_v1',
+          promoCode: 'producthunt',
+        }),
+      }),
     );
   });
 

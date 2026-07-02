@@ -656,12 +656,32 @@ export const fetchBillingStatus = async (): Promise<BillingStatus | null> => {
   }
 };
 
-export const createBillingCheckout = async (lookupKey: string): Promise<string> => {
+export interface BillingPromo {
+  code: string;
+  planKey: 'plus' | 'pro';
+  trialDays: number;
+  lookupKey: string;
+}
+
+export const fetchBillingPromo = async (code: string): Promise<BillingPromo | null> => {
+  try {
+    const response = await fetch(`${API_URL}/billing/promo/${encodeURIComponent(code)}`);
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+};
+
+export const createBillingCheckout = async (
+  lookupKey: string,
+  promoCode?: string,
+): Promise<string> => {
   const headers = await getAuthHeaders();
   const response = await fetch(`${API_URL}/billing/checkout`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ lookupKey }),
+    body: JSON.stringify(promoCode ? { lookupKey, promoCode } : { lookupKey }),
   });
   if (!response.ok) {
     throw new Error(await readResponseError(response, 'Could not create Stripe Checkout'));

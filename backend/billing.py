@@ -21,6 +21,7 @@ try:
         get_free_max_import_videos,
         get_free_max_search_results,
         get_free_searches_per_month,
+        get_promo_trial_codes,
         get_stripe_cancel_url,
         get_stripe_portal_return_url,
         get_stripe_price_id_overrides,
@@ -37,6 +38,7 @@ except ImportError:
         get_free_max_import_videos,
         get_free_max_search_results,
         get_free_searches_per_month,
+        get_promo_trial_codes,
         get_stripe_cancel_url,
         get_stripe_portal_return_url,
         get_stripe_price_id_overrides,
@@ -475,25 +477,87 @@ def _ensure_current_stripe_customer(supabase: Any, user_id: str, user: dict) -> 
     return _create_billing_customer(supabase, user_id, user)
 
 
-def create_checkout_session(supabase: Any, user: dict, lookup_key: str) -> dict:
+def get_promo_trial(promo_code: str | None) -> dict | None:
+    if not promo_code:
+        return None
+    return get_promo_trial_codes().get(promo_code.strip().lower())
+
+
+def describe_promo_trial(promo_code: str | None) -> dict | None:
+    """Return the public shape of a promo trial offer, or None if unknown."""
+    promo = get_promo_trial(promo_code)
+    if not promo:
+        return None
+    lookup_keys = get_stripe_price_lookup_keys()
+    return {
+        "code": promo["code"],
+        "planKey": promo["plan_key"],
+        "trialDays": promo["trial_days"],
+        "lookupKey": lookup_keys[f"{promo['plan_key']}_monthly"],
+    }
+
+
+def _ensure_promo_trial_eligible(supabase: Any, user_id: str) -> None:
+    profile = get_or_create_billing_profile(supabase, user_id)
+    if profile.get("promo_trial_redeemed_at"):
+        raise HTTPException(
+            status_code=400,
+            detail="This account has already redeemed a promotional trial.",
+        )
+    if profile.get("stripe_subscription_id"):
+        raise HTTPException(
+            status_code=400,
+            detail="Promotional trials are only available to accounts without a prior subscription.",
+        )
+
+
+def create_checkout_session(
+    supabase: Any,
+    user: dict,
+    lookup_key: str,
+    promo_code: str | None = None,
+) -> dict:
     if lookup_key not in allowed_subscription_lookup_keys():
         raise HTTPException(status_code=400, detail="Unsupported billing plan lookup key")
 
     user_id = user["sub"]
+    promo = None
+    if promo_code:
+        promo = get_promo_trial(promo_code)
+        if not promo:
+            raise HTTPException(status_code=400, detail="Unknown promo code")
+        if plan_key_for_lookup_key(lookup_key) != promo["plan_key"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"This promo code applies to the {promo['plan_key'].title()} plan.",
+            )
+        _ensure_promo_trial_eligible(supabase, user_id)
+
     customer_id = _ensure_current_stripe_customer(supabase, user_id, user)
     stripe_client = _stripe_client()
     price_id = _price_id_for_lookup_key(lookup_key)
-    session = stripe_client.checkout.Session.create(
-        customer=customer_id,
-        mode="subscription",
-        line_items=[{"price": price_id, "quantity": 1}],
-        success_url=_success_url(),
-        cancel_url=get_stripe_cancel_url(),
-        client_reference_id=user_id,
-        metadata={"user_id": user_id, "lookup_key": lookup_key},
-        subscription_data={"metadata": {"user_id": user_id, "lookup_key": lookup_key}},
-        allow_promotion_codes=True,
-    )
+    metadata = {"user_id": user_id, "lookup_key": lookup_key}
+    subscription_data: dict = {"metadata": dict(metadata)}
+    session_params: dict = {
+        "customer": customer_id,
+        "mode": "subscription",
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "success_url": _success_url(),
+        "cancel_url": get_stripe_cancel_url(),
+        "client_reference_id": user_id,
+        "allow_promotion_codes": True,
+    }
+    if promo:
+        metadata["promo_code"] = promo["code"]
+        subscription_data["metadata"]["promo_code"] = promo["code"]
+        subscription_data["trial_period_days"] = promo["trial_days"]
+        # Card-optional trial: if no payment method exists at trial end, Stripe
+        # cancels the subscription instead of invoicing, so nobody is surprise-charged.
+        subscription_data["trial_settings"] = {"end_behavior": {"missing_payment_method": "cancel"}}
+        session_params["payment_method_collection"] = "if_required"
+    session_params["metadata"] = metadata
+    session_params["subscription_data"] = subscription_data
+    session = stripe_client.checkout.Session.create(**session_params)
     return {"url": _get(session, "url"), "id": _stripe_id(session)}
 
 
@@ -533,7 +597,14 @@ def _subscription_id_from_object(obj: Any) -> str | None:
     object_kind = _get(obj, "object")
     if object_kind == "subscription":
         return _stripe_id(obj)
-    return _stripe_id(_get(obj, "subscription"))
+    subscription_id = _stripe_id(_get(obj, "subscription"))
+    if subscription_id:
+        return subscription_id
+    # Stripe API 2025-03-31.basil+ invoices reference their subscription under
+    # parent.subscription_details instead of a top-level subscription field.
+    parent = _get(obj, "parent", {}) or {}
+    details = _get(parent, "subscription_details", {}) or {}
+    return _stripe_id(_get(details, "subscription"))
 
 
 def _mark_event(
@@ -582,13 +653,35 @@ def _insert_event(supabase: Any, event: Any) -> tuple[bool, str]:
     return True, stripe_event_id
 
 
+def _subscription_items(subscription: Any) -> list:
+    items = _get(subscription, "items", {}) or {}
+    return _get(items, "data", []) or []
+
+
 def _subscription_price(subscription: Any) -> tuple[str | None, str | None]:
-    items = _get(subscription, "items", {})
-    item_data = _get(items, "data", []) or []
+    item_data = _subscription_items(subscription)
     if not item_data:
         return None, None
     price = _get(item_data[0], "price", {})
     return _stripe_id(price), _get(price, "lookup_key")
+
+
+def _subscription_period(subscription: Any) -> tuple[str | None, str | None]:
+    """Return the current billing period across Stripe API shape changes.
+
+    API versions before 2025-03-31.basil expose current_period_start/end on the
+    subscription itself; newer versions moved them onto each subscription item.
+    """
+    start = _get(subscription, "current_period_start")
+    end = _get(subscription, "current_period_end")
+    if start is None or end is None:
+        item_data = _subscription_items(subscription)
+        if item_data:
+            if start is None:
+                start = _get(item_data[0], "current_period_start")
+            if end is None:
+                end = _get(item_data[0], "current_period_end")
+    return _iso_from_timestamp(start), _iso_from_timestamp(end)
 
 
 def _metadata_user_id(obj: Any) -> str | None:
@@ -645,6 +738,7 @@ def apply_subscription_state(
 
     price_id, lookup_key = _subscription_price(subscription)
     plan_key = plan_key_for_lookup_key(lookup_key)
+    period_start, period_end = _subscription_period(subscription)
     payload = {
         "stripe_customer_id": _stripe_id(_get(subscription, "customer")),
         "stripe_subscription_id": _stripe_id(subscription),
@@ -652,8 +746,8 @@ def apply_subscription_state(
         "price_lookup_key": lookup_key,
         "plan_key": plan_key,
         "billing_status": status,
-        "current_period_start": _iso_from_timestamp(_get(subscription, "current_period_start")),
-        "current_period_end": _iso_from_timestamp(_get(subscription, "current_period_end")),
+        "current_period_start": period_start,
+        "current_period_end": period_end,
         "cancel_at_period_end": bool(_get(subscription, "cancel_at_period_end", False)),
     }
     if stripe_event_id:
@@ -674,14 +768,15 @@ def _apply_checkout_session_completed(supabase: Any, session: Any, stripe_event_
     if not user_id:
         return
 
-    upsert_billing_profile(
-        supabase,
-        user_id,
-        {
-            "stripe_customer_id": _stripe_id(_get(session, "customer")),
-            "last_stripe_event_id": stripe_event_id,
-        },
-    )
+    profile_payload = {
+        "stripe_customer_id": _stripe_id(_get(session, "customer")),
+        "last_stripe_event_id": stripe_event_id,
+    }
+    promo_code = _get(_get(session, "metadata", {}) or {}, "promo_code")
+    if promo_code:
+        profile_payload["promo_trial_code"] = promo_code
+        profile_payload["promo_trial_redeemed_at"] = datetime.now(timezone.utc).isoformat()
+    upsert_billing_profile(supabase, user_id, profile_payload)
     subscription_id = _stripe_id(_get(session, "subscription"))
     if subscription_id:
         apply_subscription_state(supabase, _retrieve_subscription(subscription_id), stripe_event_id)

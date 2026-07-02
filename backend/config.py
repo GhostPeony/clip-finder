@@ -182,6 +182,32 @@ def get_stripe_price_lookup_keys() -> dict[str, str]:
     }
 
 
+def get_promo_trial_codes() -> dict[str, dict]:
+    """Parse PROMO_TRIAL_CODES entries of the form ``code:plan:days``.
+
+    Example: ``PROMO_TRIAL_CODES=producthunt:plus:14,launchweek:pro:7``.
+    Codes are matched case-insensitively; malformed entries are skipped so a
+    config typo cannot take down checkout.
+    """
+    raw_value = os.getenv("PROMO_TRIAL_CODES", "").strip()
+    codes: dict[str, dict] = {}
+    if not raw_value:
+        return codes
+    for entry in raw_value.split(","):
+        parts = [part.strip() for part in entry.strip().split(":")]
+        if len(parts) != 3:
+            continue
+        code, plan_key, days_raw = parts[0].lower(), parts[1].lower(), parts[2]
+        try:
+            trial_days = int(days_raw)
+        except ValueError:
+            continue
+        if not code or plan_key not in {"plus", "pro"} or trial_days <= 0:
+            continue
+        codes[code] = {"code": code, "plan_key": plan_key, "trial_days": trial_days}
+    return codes
+
+
 def get_stripe_price_id_overrides() -> dict[str, str]:
     return {
         key: value

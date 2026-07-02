@@ -206,9 +206,14 @@ Recommended behavior:
 
 ## Trial And Upgrade Policy
 
-No Stripe trial in v1.
+No self-serve Stripe trial in v1. Free is the trial for organic signups.
 
-Free is the trial. This keeps billing simpler and avoids trial-state edge cases across MCP agents, checkout, portal cancellation, and quota enforcement.
+Amendment (2026-07-01): promotional launch links may grant a Stripe-managed plan trial.
+
+- Signup links carry `?promo=CODE` (e.g. Product Hunt). Codes are configured via `PROMO_TRIAL_CODES=code:plan:days`.
+- Redemption happens through the app's authenticated Checkout endpoint with `subscription_data.trial_period_days`, `payment_method_collection=if_required` (no card), and `trial_settings.end_behavior.missing_payment_method=cancel` (no surprise charges).
+- One redemption per account (`billing_profiles.promo_trial_code/promo_trial_redeemed_at`, migration 029), new subscribers only.
+- Trialing subscriptions receive full paid entitlements because `trialing` is an active billing status; trial expiry arrives through the normal subscription webhooks.
 
 Recommended paid behavior:
 
