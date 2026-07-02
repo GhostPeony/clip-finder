@@ -59,7 +59,7 @@ export function VideoLibraryPanel({
       <section className="card p-4 sm:p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h3 className="font-serif text-2xl font-medium text-ink">Saved videos</h3>
+            <h2 className="font-serif text-2xl font-medium text-ink">Saved videos</h2>
             <p className="mt-1 text-sm leading-6 text-bark">
               Browse your indexed videos without crowding the page as the library grows.
             </p>
@@ -185,7 +185,7 @@ function SelectedVideoPanel({ item }: { item: VideoKnowledge }) {
           </div>
         )}
         <div className="min-w-0">
-          <h3 className="font-serif text-3xl font-medium leading-tight text-ink">{video.title}</h3>
+          <h2 className="font-serif text-3xl font-medium leading-tight text-ink">{video.title}</h2>
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-bark">
             {channelName ? <span>{channelName}</span> : null}
             {indexedDate ? <span>{indexedDate}</span> : null}
@@ -218,7 +218,7 @@ function GuidesPanel({
 }) {
   return (
     <section className="card p-4 sm:p-5">
-      <h3 className="font-serif text-2xl font-medium text-ink">TLDR and source reports</h3>
+      <h2 className="font-serif text-2xl font-medium text-ink">TLDR and source reports</h2>
       <p className="mt-1 text-sm leading-6 text-bark">
         Read the short summary or the full source-backed report Memexai created from this video.
       </p>
@@ -232,9 +232,9 @@ function GuidesPanel({
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                 {artifactKind(guide)}
               </p>
-              <h4 className="mt-1 text-lg font-semibold leading-6 text-ink">
+              <h3 className="mt-1 text-lg font-semibold leading-6 text-ink">
                 {cleanDisplayTitle(guide.label)}
-              </h4>
+              </h3>
               {guide.summary ? (
                 <p className="mt-3 line-clamp-3 text-sm leading-7 text-bark">{guide.summary}</p>
               ) : null}
@@ -263,7 +263,7 @@ function IdeasPanel({ ideas, video }: { ideas: LibraryGraphNode[]; video: Librar
 
   return (
     <section className="card p-4 sm:p-5">
-      <h3 className="font-serif text-2xl font-medium text-ink">Timestamped topics</h3>
+      <h2 className="font-serif text-2xl font-medium text-ink">Timestamped topics</h2>
       <p className="mt-1 text-sm leading-6 text-bark">
         Source-backed topics with a snippet and a direct jump to the supporting moment.
       </p>

@@ -50,9 +50,9 @@ export function TopicCard({
           Open at {formatTimestampLabel(seconds)}
         </a>
       </div>
-      <h4 className="mt-3 text-base font-semibold leading-6 text-ink">
+      <h3 className="mt-3 text-base font-semibold leading-6 text-ink">
         {cleanDisplayTitle(idea.label)}
-      </h4>
+      </h3>
       {showVideoTitle ? (
         <p className="mt-1 line-clamp-2 text-xs font-medium text-muted">From {video.title}</p>
       ) : null}

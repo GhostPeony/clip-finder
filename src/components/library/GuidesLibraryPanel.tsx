@@ -27,7 +27,7 @@ export function GuidesLibraryPanel({
   if (guides.length === 0) {
     return (
       <section className="card p-8 text-center">
-        <h3 className="font-serif text-3xl font-medium text-ink">No reports ready yet</h3>
+        <h2 className="font-serif text-3xl font-medium text-ink">No reports ready yet</h2>
         <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-bark">
           TLDRs and full source reports appear here after standard or deep digestion completes.
         </p>
@@ -37,7 +37,7 @@ export function GuidesLibraryPanel({
 
   return (
     <section className="card p-4 sm:p-5">
-      <h3 className="font-serif text-2xl font-medium text-ink">Reports by video</h3>
+      <h2 className="font-serif text-2xl font-medium text-ink">Reports by video</h2>
       <p className="mt-1 text-sm leading-6 text-bark">
         Each saved video gets one report shelf with its TLDR and source report together.
       </p>
@@ -58,9 +58,9 @@ export function GuidesLibraryPanel({
                 </div>
               )}
               <div className="min-w-0">
-                <h4 className="line-clamp-2 text-lg font-semibold leading-6 text-ink">
+                <h3 className="line-clamp-2 text-lg font-semibold leading-6 text-ink">
                   {section.video.title}
-                </h4>
+                </h3>
                 <p className="mt-1 text-xs text-muted">
                   {section.guides.length} generated artifact
                   {section.guides.length === 1 ? '' : 's'}

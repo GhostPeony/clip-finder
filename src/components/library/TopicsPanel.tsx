@@ -21,9 +21,9 @@ export function TopicsPanel({
   if (ideas.length === 0) {
     return (
       <section className="card p-8 text-center">
-        <h3 className="font-serif text-3xl font-medium text-ink">
+        <h2 className="font-serif text-3xl font-medium text-ink">
           No timestamped topics ready yet
-        </h3>
+        </h2>
         <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-bark">
           Topic cards appear after Memexai extracts source-backed moments from indexed videos.
         </p>
@@ -33,7 +33,7 @@ export function TopicsPanel({
 
   return (
     <section className="card p-4 sm:p-5">
-      <h3 className="font-serif text-2xl font-medium text-ink">Timestamped topics by category</h3>
+      <h2 className="font-serif text-2xl font-medium text-ink">Timestamped topics by category</h2>
       <p className="mt-1 text-sm leading-6 text-bark">
         Deduped source moments grouped by what they are, with the source video on every card.
       </p>
@@ -45,7 +45,7 @@ export function TopicsPanel({
             className="border-t border-ink/10 pt-4 first:border-t-0 first:pt-0"
           >
             <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
-              <h4 className="text-lg font-semibold text-ink">{section.title}</h4>
+              <h3 className="text-lg font-semibold text-ink">{section.title}</h3>
               <p className="text-xs font-medium text-muted">
                 {section.items.length} moment{section.items.length === 1 ? '' : 's'}
               </p>
