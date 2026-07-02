@@ -10,6 +10,7 @@
   --peony-bark: #5a3d35;
   --peony-muted: #7b6374;
   --peony-rose: #ff6f91;
+  --peony-rose-hover: #ff5c83;
   --peony-teal: #22b8a7;
   --peony-mint: #a7f0ba;
   --peony-sun: #ffd95a;
@@ -183,7 +184,7 @@ body {
   }
 
   .btn-primary:hover:not(:disabled) {
-    background: #ff5c83;
+    background: var(--peony-rose-hover);
     box-shadow: 0 10px 24px -10px rgba(184, 53, 88, 0.55);
     transform: translateY(-1px);
   }

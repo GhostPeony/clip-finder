@@ -84,7 +84,7 @@ export const PromoTrialBanner: React.FC = () => {
         </div>
       </div>
       {error ? (
-        <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert">
+        <p className="mt-3 rounded-lg bg-rose/10 px-3 py-2 text-sm text-rose-deep" role="alert">
           {error}
         </p>
       ) : null}

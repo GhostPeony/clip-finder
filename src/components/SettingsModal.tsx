@@ -103,7 +103,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(37,27,46,0.56)] px-4 py-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4 py-4 backdrop-blur-sm"
       onClick={onClose}
       onKeyDown={(e) => {
         if (e.key === 'Escape') onClose();
