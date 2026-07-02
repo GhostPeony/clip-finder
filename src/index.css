@@ -95,6 +95,7 @@ body {
     border: 1px solid rgba(37, 27, 46, 0.16);
     border-radius: 0.75rem;
     color: var(--peony-ink);
+    padding: 0.625rem 0.875rem;
     transition:
       border-color 0.15s ease,
       box-shadow 0.15s ease;
