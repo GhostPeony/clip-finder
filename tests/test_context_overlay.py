@@ -21,6 +21,14 @@ class Query:
         self.supabase.calls.append((self.table_name, "eq", column, value))
         return self
 
+    def lt(self, column, value):
+        self.supabase.calls.append((self.table_name, "lt", column, value))
+        return self
+
+    def gt(self, column, value):
+        self.supabase.calls.append((self.table_name, "gt", column, value))
+        return self
+
     def in_(self, column, values):
         self.supabase.calls.append((self.table_name, "in", column, values))
         return self
@@ -169,6 +177,68 @@ def test_get_video_context_returns_source_context_for_subscribed_user():
     assert result["transcriptLines"][0]["id"] == "line-1"
     assert result["sourceConcepts"][0]["name"] == "RLHF"
     assert ("knowledge_artifacts", "or", "user_id.is.null,user_id.eq.user-1") in supabase.calls
+
+
+def test_get_video_context_pushes_time_window_predicates_into_sql():
+    supabase = Supabase(
+        {
+            "videos": {
+                "id": "video-db",
+                "channel_id": "channel-db",
+                "youtube_video_id": "yt",
+                "title": "A Video",
+                "thumbnail_url": "thumb",
+                "transcript_seconds": 120,
+            },
+            "user_channels": {"user_id": "user-1"},
+            "channels": {"id": "channel-db", "name": "Channel", "youtube_handle": "@channel"},
+            "transcript_lines": [],
+            "chunks": [],
+            "source_concepts": [],
+            "source_edges": [],
+            "knowledge_artifacts": [],
+        }
+    )
+
+    result = context.get_video_context(supabase, "user-1", "yt", start_seconds=140, end_seconds=260)
+
+    assert result["video"]["videoId"] == "yt"
+    assert ("transcript_lines", "lt", "start_seconds", 260) in supabase.calls
+    assert ("transcript_lines", "gt", "end_seconds", 140) in supabase.calls
+    assert ("chunks", "lt", "start_seconds", 260) in supabase.calls
+    assert ("chunks", "gt", "end_seconds", 140) in supabase.calls
+    # Only transcript tables are windowed; concept/artifact reads stay unfiltered.
+    assert not any(
+        call[0] in {"source_concepts", "source_edges", "knowledge_artifacts"}
+        and call[1] in {"lt", "gt"}
+        for call in supabase.calls
+    )
+
+
+def test_get_video_context_without_window_does_not_filter_by_time():
+    supabase = Supabase(
+        {
+            "videos": {
+                "id": "video-db",
+                "channel_id": "channel-db",
+                "youtube_video_id": "yt",
+                "title": "A Video",
+                "thumbnail_url": "thumb",
+                "transcript_seconds": 120,
+            },
+            "user_channels": {"user_id": "user-1"},
+            "channels": {"id": "channel-db", "name": "Channel", "youtube_handle": "@channel"},
+            "transcript_lines": [],
+            "chunks": [],
+            "source_concepts": [],
+            "source_edges": [],
+            "knowledge_artifacts": [],
+        }
+    )
+
+    context.get_video_context(supabase, "user-1", "yt")
+
+    assert not any(call[1] in {"lt", "gt"} for call in supabase.calls if len(call) > 1)
 
 
 def test_get_video_context_returns_source_context_for_explicit_video_grant():

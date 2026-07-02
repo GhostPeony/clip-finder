@@ -15,6 +15,14 @@ from youtube_transcript_api import YouTubeTranscriptApi
 CHUNK_SIZE_SECONDS = 60
 CHUNK_OVERLAP_SECONDS = 12
 CHUNK_MAX_SECONDS = 75
+# Auto-captions often lack punctuation; a speech gap this long doubles as a
+# sentence boundary so long chunks can close at natural pauses.
+SENTENCE_GAP_SECONDS = 2.0
+# Chunks below this word count embed poorly: merge tiny trailing chunks and
+# avoid closing mid-stream below it unless forced by CHUNK_MAX_SECONDS.
+MIN_CHUNK_WORDS = 8
+# Bracketed caption noise like [Music], [Applause], [música].
+CAPTION_NOISE_PATTERN = re.compile(r"\[[^\]]*\]")
 
 
 @dataclass(frozen=True)
@@ -79,18 +87,55 @@ def _is_sentence_boundary(text: str) -> bool:
     return text.rstrip().endswith((".", "!", "?", "…"))
 
 
+def _clean_caption_text(text: str) -> str:
+    """Strip bracketed caption noise like [Music] and collapse whitespace."""
+    cleaned = CAPTION_NOISE_PATTERN.sub(" ", text)
+    return " ".join(cleaned.split())
+
+
 def chunk_transcript_entries(
     transcript: list[dict],
     chunk_seconds: int = CHUNK_SIZE_SECONDS,
     overlap_seconds: int = CHUNK_OVERLAP_SECONDS,
     max_seconds: int = CHUNK_MAX_SECONDS,
+    min_chunk_words: int = MIN_CHUNK_WORDS,
 ) -> list[dict]:
-    """Split timestamped transcript entries into sentence-aware chunks with overlap."""
-    chunks = []
+    """Split timestamped transcript entries into sentence-aware chunks with overlap.
+
+    Bracketed caption noise ([Music], [música]…) is stripped and entries it
+    empties are skipped. A chunk past `chunk_seconds` closes at a sentence
+    boundary or a speech gap of SENTENCE_GAP_SECONDS, but never below
+    `min_chunk_words` unless forced by `max_seconds`. A tiny trailing chunk is
+    merged into the previous chunk when the merge stays within `max_seconds`.
+    """
+    chunks: list[dict] = []
     current_entries: list[dict] = []
+    carried_count = 0
+
+    def close_chunk() -> None:
+        nonlocal current_entries, carried_count
+        chunk_end = _snippet_end(current_entries[-1])
+        chunks.append(
+            {
+                "text": " ".join(item["text"] for item in current_entries),
+                "start_seconds": int(current_entries[0]["start"]),
+                "end_seconds": int(chunk_end),
+            }
+        )
+        overlap_start = chunk_end - overlap_seconds
+        overlap_entries = [item for item in current_entries if _snippet_end(item) > overlap_start]
+        if len(overlap_entries) < len(current_entries):
+            current_entries = overlap_entries
+            carried_count = len(overlap_entries)
+        else:
+            current_entries = []
+            carried_count = 0
+
+    def current_word_count() -> int:
+        return sum(len(item["text"].split()) for item in current_entries)
 
     for entry in transcript:
-        text = entry.get("text", "").strip()
+        text = _clean_caption_text(entry.get("text", "").strip())
         if not text:
             continue
 
@@ -99,35 +144,49 @@ def chunk_transcript_entries(
             "start": float(entry.get("start", 0)),
             "duration": float(entry.get("duration", 0)),
         }
+
+        if current_entries:
+            gap = normalized["start"] - _snippet_end(current_entries[-1])
+            if (
+                _chunk_span(current_entries) >= chunk_seconds
+                and gap >= SENTENCE_GAP_SECONDS
+                and current_word_count() >= min_chunk_words
+            ):
+                close_chunk()
+
         current_entries.append(normalized)
 
         chunk_text = " ".join(item["text"] for item in current_entries)
         duration = _chunk_span(current_entries)
         should_close = duration >= chunk_seconds and (
-            _is_sentence_boundary(chunk_text) or duration >= max_seconds
+            (_is_sentence_boundary(chunk_text) and current_word_count() >= min_chunk_words)
+            or duration >= max_seconds
         )
-        if not should_close:
-            continue
-
-        chunk_end = _snippet_end(current_entries[-1])
-        chunks.append(
-            {
-                "text": chunk_text,
-                "start_seconds": int(current_entries[0]["start"]),
-                "end_seconds": int(chunk_end),
-            }
-        )
-
-        overlap_start = chunk_end - overlap_seconds
-        overlap_entries = [item for item in current_entries if _snippet_end(item) > overlap_start]
-        current_entries = overlap_entries if len(overlap_entries) < len(current_entries) else []
+        if should_close:
+            close_chunk()
 
     if current_entries:
+        fresh_entries = current_entries[carried_count:]
+        if not fresh_entries and chunks:
+            # Everything left over was already emitted via the overlap carry.
+            return chunks
+
+        trailing_text = " ".join(item["text"] for item in current_entries)
+        trailing_end = int(_snippet_end(current_entries[-1]))
+        if chunks and len(trailing_text.split()) < min_chunk_words:
+            previous = chunks[-1]
+            if trailing_end - previous["start_seconds"] <= max_seconds:
+                extra_text = " ".join(item["text"] for item in fresh_entries)
+                if extra_text:
+                    previous["text"] = f"{previous['text']} {extra_text}"
+                previous["end_seconds"] = max(previous["end_seconds"], trailing_end)
+                return chunks
+
         chunks.append(
             {
-                "text": " ".join(item["text"] for item in current_entries),
+                "text": trailing_text,
                 "start_seconds": int(current_entries[0]["start"]),
-                "end_seconds": int(_snippet_end(current_entries[-1])),
+                "end_seconds": trailing_end,
             }
         )
 

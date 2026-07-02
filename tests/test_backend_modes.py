@@ -30,6 +30,27 @@ def test_local_chroma_storage_mode_is_removed(monkeypatch):
         raise AssertionError("SEARCHTUBE_STORAGE=local should be rejected")
 
 
+def test_validate_embedding_dimensions_accepts_schema_default(monkeypatch):
+    monkeypatch.delenv("EMBEDDING_DIMENSIONS", raising=False)
+
+    from backend.config import validate_embedding_dimensions
+
+    assert validate_embedding_dimensions() == 768
+
+
+def test_validate_embedding_dimensions_rejects_schema_mismatch(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "1536")
+
+    from backend.config import validate_embedding_dimensions
+
+    try:
+        validate_embedding_dimensions()
+    except ValueError as exc:
+        assert "VECTOR(768)" in str(exc)
+    else:
+        raise AssertionError("mismatched embedding dimensions should fail fast")
+
+
 def test_config_endpoint_defaults_to_hosted_mode(monkeypatch):
     monkeypatch.delenv("SEARCHTUBE_STORAGE", raising=False)
     monkeypatch.delenv("SEARCHTUBE_AUTH_MODE", raising=False)

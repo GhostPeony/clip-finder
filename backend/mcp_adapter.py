@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import traceback
+import uuid
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -184,6 +186,18 @@ class McpAdapterError(Exception):
         self.message = message
 
 
+def log_mcp_internal_error(context: str, exc: Exception) -> str:
+    """Log an unexpected error server-side and return a short correlation ref.
+
+    Raw exception text can leak infrastructure details (SQL, hosts, keys) to
+    MCP clients, so responses carry only this reference id.
+    """
+    ref = uuid.uuid4().hex[:8]
+    print(f"[ERROR] {context} failed (ref {ref}): {exc}")
+    traceback.print_exc()
+    return ref
+
+
 def parse_error_response() -> dict:
     """Return a JSON-RPC parse error for invalid request bodies."""
     return _error(None, PARSE_ERROR, "Parse error")
@@ -298,7 +312,8 @@ def _handle_message(
     except Exception as exc:
         if is_notification:
             return None
-        return _error(request_id, INTERNAL_ERROR, f"Internal error: {exc}")
+        ref = log_mcp_internal_error(f"mcp.{method}", exc)
+        return _error(request_id, INTERNAL_ERROR, f"Internal error (ref {ref})")
 
     if is_notification:
         return None
@@ -1314,7 +1329,6 @@ def _get_video_context_tool(
 def _get_transcript_window_tool(
     supabase: Any, user_id: str, arguments: dict, tool_context: dict
 ) -> dict:
-    del tool_context
     _ensure_allowed_args(
         arguments,
         {
@@ -1342,6 +1356,12 @@ def _get_transcript_window_tool(
     end_seconds = _bounded_int(raw_end_seconds, minimum=1, maximum=86_400, name="end_seconds")
     if end_seconds <= start_seconds:
         raise McpAdapterError(INVALID_PARAMS, "end_seconds must be greater than start_seconds")
+    enforce_search_quota = tool_context.get("enforce_search_quota")
+    if callable(enforce_search_quota):
+        try:
+            enforce_search_quota()
+        except ValueError as exc:
+            raise McpAdapterError(SERVER_ERROR, str(exc)) from exc
     budget = _budget_args(arguments)
     project_id = _optional_string(arguments, "project_id")
     project_slug = _optional_string(arguments, "project_slug")
@@ -1351,6 +1371,8 @@ def _get_transcript_window_tool(
         video_id,
         project_id=project_id,
         project_slug=project_slug,
+        start_seconds=start_seconds,
+        end_seconds=end_seconds,
     )
     if not context:
         return _tool_response({"found": False, "videoId": video_id})

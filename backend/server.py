@@ -23,10 +23,10 @@ import asyncio
 import hmac
 import threading
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from json import JSONDecodeError
 from typing import AsyncGenerator
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,6 +59,7 @@ try:
         get_public_config,
         get_server_api_key,
         get_workflow_internal_secret,
+        validate_embedding_dimensions,
     )
     from .context import (
         build_context_bundle,
@@ -100,6 +101,7 @@ try:
         TOOLS,
         describe_brain_sync_contract,
         handle_mcp_request,
+        log_mcp_internal_error,
         mcp_payload_requires_supabase,
         parse_error_response,
     )
@@ -107,6 +109,7 @@ try:
         authorization_server_metadata,
         create_authorization_redirect,
         exchange_authorization_code,
+        get_oauth_client,
         parse_oauth_token_body,
         protected_resource_metadata,
         register_oauth_client,
@@ -179,6 +182,7 @@ except ImportError:
         get_public_config,
         get_server_api_key,
         get_workflow_internal_secret,
+        validate_embedding_dimensions,
     )
     from context import (
         build_context_bundle,
@@ -220,6 +224,7 @@ except ImportError:
         TOOLS,
         describe_brain_sync_contract,
         handle_mcp_request,
+        log_mcp_internal_error,
         mcp_payload_requires_supabase,
         parse_error_response,
     )
@@ -227,6 +232,7 @@ except ImportError:
         authorization_server_metadata,
         create_authorization_redirect,
         exchange_authorization_code,
+        get_oauth_client,
         parse_oauth_token_body,
         protected_resource_metadata,
         register_oauth_client,
@@ -444,6 +450,7 @@ async def stream_sync_generator(factory) -> AsyncGenerator[str, None]:
 async def lifespan(app: FastAPI):
     # Startup
     print("[Memexai] Backend Starting...")
+    validate_embedding_dimensions()
     print("   API Docs: http://localhost:8080/docs")
     print("   Health:   http://localhost:8080/")
     yield
@@ -1303,6 +1310,50 @@ def search_for_user(
     return result
 
 
+def search_transcript_text_for_user(
+    query: str,
+    user_id: str,
+    limit: int,
+    category_filters: dict | None = None,
+    project_id: str | None = None,
+    project_slug: str | None = None,
+    youtube_video_id: str | None = None,
+) -> dict:
+    """Run a scoped keyword transcript search and log hosted usage when applicable."""
+    supabase, _api_key, used_own_key = resolve_search_execution(user_id, limit)
+    if project_id or project_slug:
+        result = search_transcript_text(
+            query,
+            user_id,
+            limit,
+            category_filters=category_filters,
+            project_id=project_id,
+            project_slug=project_slug,
+            youtube_video_id=youtube_video_id,
+        )
+    else:
+        result = search_transcript_text(
+            query,
+            user_id,
+            limit,
+            category_filters=category_filters,
+            youtube_video_id=youtube_video_id,
+        )
+
+    try:
+        if supabase is not None:
+            increment_search_usage(supabase, user_id, used_own_key, limit)
+    except Exception as usage_err:
+        print(f"[WARN] Failed to log keyword search usage: {usage_err}")
+
+    return result
+
+
+def enforce_mcp_search_quota(user_id: str) -> None:
+    """Check the hosted search quota without incrementing usage (window reads)."""
+    resolve_search_execution(user_id, 1)
+
+
 LIBRARY_CACHE_CONTROL = "private, max-age=30, stale-while-revalidate=120"
 LIBRARY_ARTIFACT_CACHE_CONTROL = "private, max-age=300, stale-while-revalidate=600"
 
@@ -1820,6 +1871,34 @@ async def validate_repo_context_endpoint(
     return validate_repo_context(request.repo_context)
 
 
+@app.get("/api/mcp/oauth/client-info")
+async def mcp_oauth_client_info_endpoint(client_id: str):
+    """Return minimal registered-client info for the MCP consent screen.
+
+    Unauthenticated by design: client_ids are unguessable random tokens and the
+    response deliberately exposes only the display name and redirect hosts —
+    never logo URIs, metadata, or full redirect URIs.
+    """
+    if not is_supabase_mode():
+        raise HTTPException(status_code=404, detail="MCP OAuth is only available in hosted mode")
+
+    client = get_oauth_client(get_supabase(), client_id)
+    if not client:
+        raise HTTPException(status_code=404, detail="Unknown OAuth client")
+
+    redirect_hosts = sorted(
+        {
+            host
+            for host in (urlparse(str(uri)).hostname for uri in (client.get("redirect_uris") or []))
+            if host
+        }
+    )
+    return {
+        "clientName": client.get("client_name") or "MCP client",
+        "redirectHosts": redirect_hosts,
+    }
+
+
 @app.post("/api/mcp/oauth/approve")
 async def approve_mcp_oauth_endpoint(
     request: McpOAuthApproveRequest,
@@ -2068,6 +2147,9 @@ async def mcp_tokens_endpoint(user: dict = Depends(get_request_user)):
     return {"tokens": list_mcp_tokens(get_supabase(), user["sub"])}
 
 
+DASHBOARD_MCP_TOKEN_TTL_DAYS = 90
+
+
 @app.post("/api/mcp/tokens")
 async def create_mcp_token_endpoint(
     token_request: McpTokenRequest,
@@ -2078,11 +2160,13 @@ async def create_mcp_token_endpoint(
     if not is_supabase_mode():
         raise HTTPException(status_code=404, detail="MCP tokens are only available in hosted mode")
 
+    expires_at = datetime.now(timezone.utc) + timedelta(days=DASHBOARD_MCP_TOKEN_TTL_DAYS)
     result = create_mcp_token(
         get_supabase(),
         user["sub"],
         token_request.name,
         token_request.scopes,
+        expires_at=expires_at.isoformat(),
     )
     return {
         "token": result["token"],
@@ -2155,7 +2239,8 @@ async def mcp_endpoint(
         except HTTPException as exc:
             raise ValueError(str(exc.detail)) from exc
         except Exception as exc:
-            raise ValueError(f"Search failed: {exc}") from exc
+            ref = log_mcp_internal_error("mcp.search_video_moments", exc)
+            raise ValueError(f"Search failed (ref {ref})") from exc
 
     def run_mcp_transcript_text_search(
         query: str,
@@ -2167,7 +2252,7 @@ async def mcp_endpoint(
     ) -> dict:
         try:
             if project_id or project_slug:
-                return search_transcript_text(
+                return search_transcript_text_for_user(
                     query,
                     user["sub"],
                     limit,
@@ -2176,21 +2261,31 @@ async def mcp_endpoint(
                     project_slug=project_slug,
                     youtube_video_id=youtube_video_id,
                 )
-            return search_transcript_text(
+            return search_transcript_text_for_user(
                 query,
                 user["sub"],
                 limit,
                 category_filters=category_filters,
                 youtube_video_id=youtube_video_id,
             )
+        except HTTPException as exc:
+            raise ValueError(str(exc.detail)) from exc
         except Exception as exc:
-            raise ValueError(f"Keyword transcript search failed: {exc}") from exc
+            ref = log_mcp_internal_error("mcp.search_transcript_text", exc)
+            raise ValueError(f"Keyword transcript search failed (ref {ref})") from exc
 
     def embed_mcp_source_query(query: str) -> list[float]:
         try:
             return get_query_embeddings().embed_query(query)
         except Exception as exc:
-            raise ValueError(f"Source knowledge embedding failed: {exc}") from exc
+            ref = log_mcp_internal_error("mcp.embed_source_query", exc)
+            raise ValueError(f"Source knowledge embedding failed (ref {ref})") from exc
+
+    def enforce_mcp_search_quota_for_user() -> None:
+        try:
+            enforce_mcp_search_quota(user["sub"])
+        except HTTPException as exc:
+            raise ValueError(str(exc.detail)) from exc
 
     queued_ingestion_jobs: list[dict] = []
     queued_capture_sync_jobs: list[dict] = []
@@ -2209,6 +2304,7 @@ async def mcp_endpoint(
                 "search_video_moments": run_mcp_search,
                 "search_transcript_text": run_mcp_transcript_text_search,
                 "embed_source_query": embed_mcp_source_query,
+                "enforce_search_quota": enforce_mcp_search_quota_for_user,
                 "queued_ingestion_jobs": queued_ingestion_jobs,
                 "queued_capture_sync_jobs": queued_capture_sync_jobs,
             },
@@ -2415,7 +2511,8 @@ async def search_endpoint(
             raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=401, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        ref = log_mcp_internal_error("api.search", e)
+        raise HTTPException(status_code=500, detail=f"Search failed (ref {ref})")
 
 
 # ---------------------------------------------------------------------------

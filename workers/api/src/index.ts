@@ -2,6 +2,8 @@ import { Container, getContainer } from '@cloudflare/containers';
 
 export interface Env {
   API_CONTAINER: DurableObjectNamespace<MemexaiApiContainer>;
+  /** Set per-deploy by scripts/deploy-api.mjs to rotate the container instance. */
+  API_INSTANCE_ID?: string;
   API_KEY_ENCRYPTION_KEY: string;
   GEMINI_API_KEY: string;
   SEARCHTUBE_STORAGE: string;
@@ -31,7 +33,9 @@ export interface Env {
   WORKFLOW_INTERNAL_SECRET?: string;
 }
 
-const API_INSTANCE_ID = 'production-20260630-mcp-retrieval';
+// Fallback when no API_INSTANCE_ID var is provided; deploys normally pass a
+// fresh git-SHA-derived id via `npm run deploy:api` to rotate the container.
+const DEFAULT_API_INSTANCE_ID = 'production-20260630-mcp-retrieval';
 
 export class MemexaiApiContainer extends Container {
   defaultPort = 8080;
@@ -73,16 +77,17 @@ export class MemexaiApiContainer extends Container {
 export default {
   async fetch(request: Request, runtimeEnv: Env): Promise<Response> {
     const url = new URL(request.url);
+    const apiInstanceId = runtimeEnv.API_INSTANCE_ID?.trim() || DEFAULT_API_INSTANCE_ID;
 
     if (url.pathname === '/_worker/health') {
       return Response.json({
         status: 'ok',
         service: 'memexai-api-worker',
-        containerInstance: API_INSTANCE_ID,
+        containerInstance: apiInstanceId,
       });
     }
 
-    const container = getContainer(runtimeEnv.API_CONTAINER, API_INSTANCE_ID);
+    const container = getContainer(runtimeEnv.API_CONTAINER, apiInstanceId);
     await container.startAndWaitForPorts({
       ports: [8080],
       cancellationOptions: {

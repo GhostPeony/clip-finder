@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LibraryView } from './LibraryView';
 import {
   addProjectVideos,
+  clearSearchHistory,
   createCaptureSource,
   createProject,
   fetchIngestionJobs,
@@ -266,5 +267,54 @@ describe('LibraryView', () => {
     expect(
       screen.queryByRole('button', { name: /Agent harness research/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it('clears search history through an app dialog instead of window.confirm', async () => {
+    vi.mocked(fetchLibrary).mockResolvedValue({
+      channels: [
+        {
+          name: 'Research Channel',
+          videoCount: 1,
+          videos: [
+            {
+              videoId: 'video-1',
+              title: 'Saved video',
+              thumbnailUrl: 'thumb.jpg',
+              clipCount: 4,
+              indexedAt: 1782300000,
+            },
+          ],
+        },
+      ],
+      totalVideos: 1,
+      totalClips: 4,
+    });
+    vi.mocked(fetchIngestionJobs).mockResolvedValue([]);
+    vi.mocked(getSearchHistory)
+      .mockReturnValueOnce([
+        {
+          id: 'history-1',
+          query: 'agent harness reliability',
+          timestamp: Date.now(),
+          clips: [],
+        },
+      ])
+      .mockReturnValue([]);
+    const confirmSpy = vi.spyOn(window, 'confirm');
+
+    render(<LibraryView onIndexMore={() => undefined} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Recent searches/i }));
+    expect(screen.getByText('agent harness reliability')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^clear all$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /clear all search history/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^clear all$/i }));
+
+    await waitFor(() => {
+      expect(clearSearchHistory).toHaveBeenCalledTimes(1);
+    });
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(screen.getByText('No recent searches')).toBeInTheDocument();
   });
 });

@@ -49,6 +49,26 @@ class SequenceSupabase:
         return SequenceRpcQuery(self)
 
 
+class UnmigratedScopedRpcQuery:
+    def __init__(self, supabase, payload):
+        self.supabase = supabase
+        self.payload = payload
+
+    def execute(self):
+        if "match_youtube_video_id" in self.payload:
+            raise RuntimeError(
+                "function search_chunks(vector, uuid, integer, integer, jsonb, uuid, text) "
+                "does not exist"
+            )
+        return Result(self.supabase.rpc_data)
+
+
+class UnmigratedSupabase(Supabase):
+    def rpc(self, name, payload):
+        self.rpc_calls.append((name, payload))
+        return UnmigratedScopedRpcQuery(self, payload)
+
+
 def test_search_pg_passes_normalized_category_filters_to_rpc(monkeypatch):
     supabase = Supabase()
 
@@ -206,11 +226,65 @@ def test_search_pg_can_scope_results_to_known_youtube_video(monkeypatch):
         youtube_video_id="dwarkesh-video",
     )
 
-    assert supabase.rpc_calls[0][1]["match_limit"] == 100
+    assert supabase.rpc_calls[0][1]["match_limit"] == 40
+    assert supabase.rpc_calls[0][1]["match_youtube_video_id"] == "dwarkesh-video"
     assert [clip["videoId"] for clip in result["relevantClips"]] == ["dwarkesh-video"]
     assert result["videoScope"] == {"scope": "video", "youtubeVideoId": "dwarkesh-video"}
     assert result["retrievalPlan"]["videoScoped"] is True
     assert answer_calls == [("computer use", ["dwarkesh-video"], "key")]
+
+
+def test_search_pg_video_scope_falls_back_to_legacy_payload_on_rpc_error(monkeypatch):
+    supabase = UnmigratedSupabase(
+        rpc_data=[
+            {
+                "youtube_video_id": "other-video",
+                "title": "Nearby agent video",
+                "channel_name": "AI Channel",
+                "start_seconds": 120,
+                "end_seconds": 180,
+                "content": "Browser agents and MCP tools.",
+                "thumbnail_url": "thumb",
+                "similarity": 0.91,
+            },
+            {
+                "youtube_video_id": "dwarkesh-video",
+                "title": "What does the next training paradigm look like?",
+                "channel_name": "Dwarkesh Patel",
+                "start_seconds": 196,
+                "end_seconds": 259,
+                "content": "Computer use needs deterministic replayable simulators.",
+                "thumbnail_url": "thumb",
+                "similarity": 0.86,
+            },
+        ]
+    )
+
+    class FakeEmbeddings:
+        def embed_query(self, query):
+            return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr(rag, "get_supabase", lambda: supabase)
+    monkeypatch.setattr(rag, "_get_embeddings", lambda api_key=None: FakeEmbeddings())
+    monkeypatch.setattr(rag, "generate_answer", lambda query, clips, api_key=None: "")
+
+    result = rag.search_pg(
+        "computer use",
+        "user-1",
+        api_key="key",
+        limit=3,
+        youtube_video_id="dwarkesh-video",
+    )
+
+    assert len(supabase.rpc_calls) == 2
+    scoped_payload = supabase.rpc_calls[0][1]
+    legacy_payload = supabase.rpc_calls[1][1]
+    assert scoped_payload["match_youtube_video_id"] == "dwarkesh-video"
+    assert scoped_payload["match_limit"] == 40
+    assert "match_youtube_video_id" not in legacy_payload
+    assert legacy_payload["match_limit"] == 100
+    assert [clip["videoId"] for clip in result["relevantClips"]] == ["dwarkesh-video"]
+    assert result["videoScope"] == {"scope": "video", "youtubeVideoId": "dwarkesh-video"}
 
 
 def test_search_pg_keyword_mode_uses_keyword_path_without_embedding(monkeypatch):
@@ -378,7 +452,8 @@ def test_search_transcript_text_pg_can_scope_results_to_known_youtube_video(monk
         youtube_video_id="dwarkesh-video",
     )
 
-    assert supabase.rpc_calls[0][1]["match_limit"] == 100
+    assert supabase.rpc_calls[0][1]["match_limit"] == 40
+    assert supabase.rpc_calls[0][1]["match_youtube_video_id"] == "dwarkesh-video"
     assert [clip["videoId"] for clip in result["relevantClips"]] == ["dwarkesh-video"]
     assert result["videoScope"] == {"scope": "video", "youtubeVideoId": "dwarkesh-video"}
     assert result["retrievalPlan"]["videoScoped"] is True
@@ -489,6 +564,85 @@ def test_ingestion_job_cost_estimate_migration_adds_jsonb_column():
 
     assert "ALTER TABLE ingestion_jobs" in sql
     assert "ADD COLUMN IF NOT EXISTS cost_estimate JSONB NOT NULL DEFAULT '{}'::jsonb" in sql
+
+
+def test_video_scoped_search_migration_consolidates_access_gates_in_helper():
+    sql = (
+        ROOT / "backend" / "supabase" / "migrations" / "027_video_scoped_index_search.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "CREATE OR REPLACE FUNCTION accessible_video_ids(" in sql
+    assert "REVOKE ALL ON FUNCTION accessible_video_ids(UUID, UUID, JSONB, TEXT)" in sql
+    assert "FROM PUBLIC, anon, authenticated;" in sql
+    assert "SECURITY DEFINER" in sql
+    # The user-grant, project, category, and video-scope gates live in the helper.
+    assert "FROM user_channels uc" in sql
+    assert "FROM user_videos uv" in sql
+    assert "COALESCE(channel_access.has_access, FALSE)" in sql
+    assert "OR video_access.access_source IS NOT NULL" in sql
+    assert "FROM user_project_videos upv" in sql
+    assert "jsonb_each(COALESCE(category_filters" in sql
+    assert "OR v.youtube_video_id = match_youtube_video_id" in sql
+    # Access provenance strings stay byte-identical in each RPC's outer SELECT.
+    for reason in (
+        "Visible through channel access and an explicit video grant.",
+        "Visible through a channel access grant.",
+        "Visible through an explicit saved-video grant.",
+    ):
+        assert sql.count(reason) == 3
+
+
+def test_video_scoped_search_migration_rewrites_search_rpcs():
+    sql = (
+        ROOT / "backend" / "supabase" / "migrations" / "027_video_scoped_index_search.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "DROP FUNCTION IF EXISTS search_chunks(VECTOR(768), UUID, INT, INT, JSONB, UUID);" in sql
+    assert (
+        "DROP FUNCTION IF EXISTS search_chunks(VECTOR(768), UUID, INT, INT, JSONB, UUID, TEXT);"
+        in sql
+    )
+    assert (
+        "DROP FUNCTION IF EXISTS search_chunks_keyword(TEXT, UUID, INT, INT, JSONB, UUID);" in sql
+    )
+    assert (
+        "DROP FUNCTION IF EXISTS search_chunks_keyword(TEXT, UUID, INT, INT, JSONB, UUID, TEXT);"
+        in sql
+    )
+    assert (
+        "DROP FUNCTION IF EXISTS search_chunks_hybrid(VECTOR(768), TEXT, UUID, INT, INT, JSONB, UUID);"
+        in sql
+    )
+    assert (
+        "DROP FUNCTION IF EXISTS search_chunks_hybrid(VECTOR(768), TEXT, UUID, INT, INT, JSONB, UUID, TEXT);"
+        in sql
+    )
+    # Helper param plus the three recreated RPC signatures.
+    assert sql.count("match_youtube_video_id TEXT DEFAULT NULL") == 4
+    # Every RPC filters through the consolidated helper instead of inline gates.
+    assert sql.count("FROM accessible_video_ids(") == 3
+    # RRF fusion constants are pinned.
+    assert "1.0 / (60 + vr.vector_position)" in sql
+    assert "1.0 / (60 + kr.keyword_position)" in sql
+    assert "GREATEST(match_limit * 4, match_limit)" in sql
+    assert "FULL OUTER JOIN keyword_ranked kr ON kr.chunk_id = vr.chunk_id" in sql
+    # Guarded iterative-scan tuning for pgvector >= 0.8.
+    assert "hnsw.iterative_scan" in sql
+    assert "pg_settings" in sql
+
+
+def test_chunk_idempotency_migration_dedupes_then_adds_unique_index():
+    sql = (ROOT / "backend" / "supabase" / "migrations" / "028_chunk_idempotency.sql").read_text(
+        encoding="utf-8"
+    )
+
+    assert "DELETE FROM chunks a" in sql
+    assert "USING chunks b" in sql
+    assert "a.video_id = b.video_id" in sql
+    assert "a.start_seconds = b.start_seconds" in sql
+    assert "a.ctid > b.ctid" in sql
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS chunks_video_start_uidx" in sql
+    assert "ON chunks (video_id, start_seconds);" in sql
 
 
 def test_context_rls_migration_allows_explicit_video_grants():

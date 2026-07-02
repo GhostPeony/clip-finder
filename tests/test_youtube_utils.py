@@ -92,10 +92,10 @@ def test_get_transcript_chunks_adds_overlap_after_closed_chunk(monkeypatch):
         def fetch(self, video_id):
             assert video_id == "video123"
             return [
-                Snippet("first", 0, 20),
-                Snippet("second", 20, 20),
-                Snippet("third.", 40, 20),
-                Snippet("fourth", 60, 10),
+                Snippet("the quick brown fox", 0, 20),
+                Snippet("jumps over the lazy dog", 20, 20),
+                Snippet("and stops right there.", 40, 20),
+                Snippet("a short tail follows here now", 60, 10),
             ]
 
     monkeypatch.setattr("backend.youtube_utils.YouTubeTranscriptApi", FakeTranscriptApi)
@@ -103,8 +103,16 @@ def test_get_transcript_chunks_adds_overlap_after_closed_chunk(monkeypatch):
     chunks = get_transcript_chunks("video123")
 
     assert chunks == [
-        {"text": "first second third.", "start_seconds": 0, "end_seconds": 60},
-        {"text": "third. fourth", "start_seconds": 40, "end_seconds": 70},
+        {
+            "text": "the quick brown fox jumps over the lazy dog and stops right there.",
+            "start_seconds": 0,
+            "end_seconds": 60,
+        },
+        {
+            "text": "and stops right there. a short tail follows here now",
+            "start_seconds": 40,
+            "end_seconds": 70,
+        },
     ]
 
 
@@ -165,8 +173,96 @@ def test_chunk_transcript_entries_caps_long_chunks_without_sentence_boundary():
         "start_seconds": 0,
         "end_seconds": 80,
     }
+    # The tiny trailing chunk is not merged back: the merge would stretch the
+    # previous chunk past CHUNK_MAX_SECONDS.
     assert chunks[1] == {
         "text": "four five",
         "start_seconds": 60,
         "end_seconds": 90,
+    }
+
+
+def test_chunk_transcript_entries_strips_bracketed_caption_noise():
+    chunks = chunk_transcript_entries(
+        [
+            {"text": "[Music]", "start": 0, "duration": 5},
+            {"text": "[Applause] welcome back to the show.", "start": 5, "duration": 5},
+            {"text": "[música]", "start": 10, "duration": 5},
+        ]
+    )
+
+    assert chunks == [
+        {"text": "welcome back to the show.", "start_seconds": 5, "end_seconds": 10},
+    ]
+
+
+def test_chunk_transcript_entries_closes_long_chunk_at_speech_gap():
+    chunks = chunk_transcript_entries(
+        [
+            {
+                "text": "auto captions often have no punctuation at all",
+                "start": 0,
+                "duration": 30,
+            },
+            {
+                "text": "so the boundary check alone never fires",
+                "start": 30,
+                "duration": 30,
+            },
+            {
+                "text": "a new topic starts after the pause",
+                "start": 64,
+                "duration": 10,
+            },
+        ]
+    )
+
+    assert chunks[0] == {
+        "text": (
+            "auto captions often have no punctuation at all so the boundary check alone never fires"
+        ),
+        "start_seconds": 0,
+        "end_seconds": 60,
+    }
+    assert chunks[1] == {
+        "text": "so the boundary check alone never fires a new topic starts after the pause",
+        "start_seconds": 30,
+        "end_seconds": 74,
+    }
+
+
+def test_chunk_transcript_entries_merges_tiny_trailing_chunk():
+    chunks = chunk_transcript_entries(
+        [
+            {"text": "one two three four five six seven eight.", "start": 0, "duration": 60},
+            {"text": "tail words", "start": 60, "duration": 5},
+        ]
+    )
+
+    assert chunks == [
+        {
+            "text": "one two three four five six seven eight. tail words",
+            "start_seconds": 0,
+            "end_seconds": 65,
+        },
+    ]
+
+
+def test_chunk_transcript_entries_holds_short_chunks_past_sentence_boundary():
+    chunks = chunk_transcript_entries(
+        [
+            {"text": "yes.", "start": 0, "duration": 61},
+            {
+                "text": "the answer deserves more context than a single word reply.",
+                "start": 61,
+                "duration": 10,
+            },
+        ]
+    )
+
+    assert len(chunks) == 1
+    assert chunks[0] == {
+        "text": "yes. the answer deserves more context than a single word reply.",
+        "start_seconds": 0,
+        "end_seconds": 71,
     }

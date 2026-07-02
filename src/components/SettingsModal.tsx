@@ -55,14 +55,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [usage, setUsage] = useState<UsageInfo | null>(null);
+  const [usageUnavailable, setUsageUnavailable] = useState(false);
   const [settingsView, setSettingsView] = useState<'settings' | 'plans'>('settings');
+
+  const refreshUsage = async () => {
+    try {
+      const info = await fetchUsage();
+      setUsage(info);
+      setUsageUnavailable(false);
+    } catch {
+      setUsage(null);
+      setUsageUnavailable(true);
+    }
+  };
 
   useEffect(() => {
     if (isOpen) {
       setApiKey('');
       setSaved(false);
       setSettingsView('settings');
-      fetchUsage().then(setUsage);
+      void refreshUsage();
     }
   }, [isOpen]);
 
@@ -73,7 +85,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setSaving(false);
     if (success) {
       setSaved(true);
-      fetchUsage().then(setUsage);
+      void refreshUsage();
       setTimeout(() => onClose(), 1000);
     }
   };
@@ -84,7 +96,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setSaving(false);
     setApiKey('');
     setSaved(true);
-    fetchUsage().then(setUsage);
+    void refreshUsage();
   };
 
   if (!isOpen) return null;
@@ -150,7 +162,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <>
             <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,20rem)]">
               <CaptureSourcesSection onConnectYouTube={onConnectYouTube} />
-              <UsageQuotaCard usage={usage} onUpgrade={() => setSettingsView('plans')} />
+              <UsageQuotaCard
+                usage={usage}
+                unavailable={usageUnavailable}
+                onUpgrade={() => setSettingsView('plans')}
+              />
             </div>
 
             <div className="mt-4 space-y-4">
@@ -442,9 +458,29 @@ function PlanSelectionView({ currentPlan, onBack }: { currentPlan: string; onBac
   );
 }
 
-function UsageQuotaCard({ usage, onUpgrade }: { usage: UsageInfo | null; onUpgrade: () => void }) {
+function UsageQuotaCard({
+  usage,
+  unavailable = false,
+  onUpgrade,
+}: {
+  usage: UsageInfo | null;
+  unavailable?: boolean;
+  onUpgrade: () => void;
+}) {
   const [billingBusy, setBillingBusy] = useState<string | null>(null);
   const [billingError, setBillingError] = useState<string | null>(null);
+
+  if (usage === null && unavailable) {
+    return (
+      <section className="min-w-0 rounded-xl border border-ink/10 bg-surface p-4">
+        <h3 className="font-serif text-2xl font-medium text-ink">Usage</h3>
+        <p className="mt-3 text-sm text-bark">Usage unavailable</p>
+        <p className="mt-1 text-xs leading-5 text-muted">
+          We could not load your usage right now. Close and reopen settings to retry.
+        </p>
+      </section>
+    );
+  }
 
   if (usage === null) {
     return (
@@ -755,8 +791,24 @@ const CaptureSourcesSection: React.FC<{
   };
 
   const refreshYouTubeStatus = async () => {
-    const status = await fetchYoutubeOAuthStatus();
-    setYoutubeStatus(status);
+    try {
+      const status = await fetchYoutubeOAuthStatus();
+      setYoutubeStatus(status);
+    } catch {
+      // Treat an unreachable status endpoint as disconnected instead of
+      // leaving the section stuck on "Checking connection...".
+      setYoutubeStatus({
+        connected: false,
+        needsReconnect: false,
+        youtubeReadonlyGranted: false,
+        hasRefreshToken: false,
+        scopes: [],
+        expiresAt: null,
+        connectedAt: null,
+        updatedAt: null,
+        lastError: null,
+      });
+    }
   };
 
   useEffect(() => {
@@ -1433,12 +1485,20 @@ const AgentAccessSection: React.FC = () => {
                   className="flex flex-col gap-2 rounded-xl bg-cream p-3 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div>
-                    <p className="text-sm font-semibold text-ink">{token.name}</p>
+                    <p className="flex flex-wrap items-center gap-2 text-sm font-semibold text-ink">
+                      {token.name}
+                      {token.oauthClientId ? (
+                        <span className="rounded-full bg-surface px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-bark">
+                          OAuth
+                        </span>
+                      ) : null}
+                    </p>
                     <p className="font-mono text-xs text-muted">
                       {token.tokenPrefix} | {token.scopes.join(', ')}
                     </p>
                     <p className="mt-1 text-xs text-bark">
-                      Last used {formatTokenDate(token.lastUsedAt)}
+                      Last used {formatTokenDate(token.lastUsedAt)} &middot; Expires{' '}
+                      {formatTokenDate(token.expiresAt)}
                     </p>
                   </div>
                   <button

@@ -555,6 +555,8 @@ describe('SettingsModal', () => {
           tokenPrefix: 'emt_claude',
           scopes: ['context:read', 'overlay:write'],
           lastUsedAt: null,
+          expiresAt: '2026-09-20T00:00:00Z',
+          oauthClientId: 'memexai_mcp_client123',
         },
       ])
       .mockResolvedValueOnce([]);
@@ -563,6 +565,9 @@ describe('SettingsModal', () => {
 
     await openAgentConnection();
     expect(await screen.findByText('Claude Desktop')).toBeInTheDocument();
+    expect(screen.getByText(/Last used never/)).toBeInTheDocument();
+    expect(screen.getByText(/Expires Sep \d{1,2}, 2026/)).toBeInTheDocument();
+    expect(screen.getByText('OAuth')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /revoke/i }));
 
     await waitFor(() => {
@@ -571,5 +576,15 @@ describe('SettingsModal', () => {
     await waitFor(() => {
       expect(screen.queryByText('Claude Desktop')).not.toBeInTheDocument();
     });
+  });
+
+  it('degrades gracefully when usage and YouTube status requests fail', async () => {
+    apiMocks.fetchUsage.mockRejectedValue(new Error('Backend Error: Bad Gateway'));
+    apiMocks.fetchYoutubeOAuthStatus.mockRejectedValue(new Error('Backend Error: Bad Gateway'));
+
+    render(<SettingsModal isOpen onClose={() => undefined} allowUserKeys={false} />);
+
+    expect(await screen.findByText('Usage unavailable')).toBeInTheDocument();
+    expect(await screen.findByText('Not connected yet.')).toBeInTheDocument();
   });
 });

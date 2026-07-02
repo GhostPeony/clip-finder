@@ -12,16 +12,16 @@ page.on('console', (m) => m.type() === 'error' && console.log('[console.error]',
 await page.goto(URL, { waitUntil: 'networkidle' });
 
 // 1. Index the video
-await page.getByLabel(/Paste source and optional query/i).fill(VIDEO);
+await page.getByLabel(/Paste YouTube link and optional query/i).fill(VIDEO);
 await page.waitForTimeout(300);
-await page.getByRole('button', { name: 'Add context', exact: true }).last().click();
+await page.getByRole('button', { name: 'Add videos', exact: true }).last().click();
 console.log('indexing started...');
 await page.screenshot({ path: 'screenshots/e2e-1-indexing.png' });
 
-// Wait until the app navigates to library (onIndexComplete) — up to 4 min
+// Wait until the app navigates to library (onIndexComplete) — up to 4 min.
+// Level 1 matters: the dashboard also renders an h2 "Library" panel.
 await page
-  .getByText(/Video context library|library is empty/i)
-  .first()
+  .getByRole('heading', { name: 'Library', exact: true, level: 1 })
   .waitFor({ timeout: 240_000 });
 await page.waitForTimeout(1500);
 await page.screenshot({ path: 'screenshots/e2e-2-library.png', fullPage: true });
@@ -30,8 +30,8 @@ console.log('index complete, library shown');
 // 2. Search the library
 await page.getByRole('button', { name: 'Dashboard', exact: true }).click();
 await page.waitForTimeout(600);
-await page.getByRole('button', { name: 'Search library' }).first().click(); // mode toggle card
-await page.getByLabel('Describe the context').fill(QUERY);
+await page.getByLabel('Switch to search library').click(); // workbench mode toggle
+await page.getByLabel('Search query').fill(QUERY);
 await page.getByRole('button', { name: 'Search library', exact: true }).last().click();
 console.log('search started...');
 

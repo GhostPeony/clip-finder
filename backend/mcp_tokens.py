@@ -18,6 +18,7 @@ ALLOWED_MCP_SCOPES = [
 ]
 TOKEN_PREFIX_CHARS = 10
 TOKEN_SECRET_BYTES = 32
+LAST_USED_TOUCH_SECONDS = 60
 
 
 def create_mcp_token(
@@ -26,6 +27,7 @@ def create_mcp_token(
     name: str = "MCP token",
     scopes: list[str] | None = None,
     expires_at: str | None = None,
+    oauth_client_id: str | None = None,
 ) -> dict:
     """Create an MCP token and return the raw token exactly once."""
     token = _new_token()
@@ -38,6 +40,8 @@ def create_mcp_token(
         "scopes": _clean_scopes(scopes),
         "expires_at": expires_at,
     }
+    if oauth_client_id:
+        payload["oauth_client_id"] = oauth_client_id
     record = _first(supabase.table("mcp_tokens").insert(payload).execute()) or payload
     return {"token": token, "record": sanitize_mcp_token_record(record)}
 
@@ -46,7 +50,9 @@ def list_mcp_tokens(supabase: Any, user_id: str) -> list[dict]:
     """List active MCP token metadata without hashes."""
     records = _rows(
         supabase.table("mcp_tokens")
-        .select("id, name, token_prefix, scopes, last_used_at, expires_at, created_at")
+        .select(
+            "id, name, token_prefix, scopes, oauth_client_id, last_used_at, expires_at, created_at"
+        )
         .eq("user_id", user_id)
         .is_("revoked_at", "null")
         .order("created_at", desc=True)
@@ -78,7 +84,7 @@ def authenticate_mcp_token(supabase: Any, authorization: str | None) -> dict | N
 
     result = (
         supabase.table("mcp_tokens")
-        .select("id, user_id, scopes, expires_at, revoked_at")
+        .select("id, user_id, scopes, expires_at, revoked_at, last_used_at")
         .eq("token_hash", _hash_token(token))
         .maybe_single()
         .execute()
@@ -87,9 +93,11 @@ def authenticate_mcp_token(supabase: Any, authorization: str | None) -> dict | N
     if not record or record.get("revoked_at") or _is_expired(record.get("expires_at")):
         return None
 
-    supabase.table("mcp_tokens").update(
-        {"last_used_at": datetime.now(timezone.utc).isoformat()}
-    ).eq("id", record["id"]).execute()
+    now = datetime.now(timezone.utc)
+    if _should_touch_last_used(record.get("last_used_at"), now):
+        supabase.table("mcp_tokens").update({"last_used_at": now.isoformat()}).eq(
+            "id", record["id"]
+        ).execute()
     return {
         "sub": record["user_id"],
         "auth": "mcp_token",
@@ -105,6 +113,7 @@ def sanitize_mcp_token_record(record: dict) -> dict:
         "name": record.get("name", "MCP token"),
         "tokenPrefix": record.get("token_prefix"),
         "scopes": record.get("scopes") or DEFAULT_MCP_SCOPES,
+        "oauthClientId": record.get("oauth_client_id"),
         "lastUsedAt": record.get("last_used_at"),
         "expiresAt": record.get("expires_at"),
         "createdAt": record.get("created_at"),
@@ -142,6 +151,19 @@ def _clean_scopes(scopes: list[str] | None) -> list[str]:
     requested = scopes or DEFAULT_MCP_SCOPES
     cleaned = [scope for scope in requested if scope in allowed]
     return cleaned or DEFAULT_MCP_SCOPES
+
+
+def _should_touch_last_used(last_used_at: str | None, now: datetime) -> bool:
+    """Debounce last_used_at writes so hot tokens do not update on every call."""
+    if not last_used_at:
+        return True
+    try:
+        parsed = datetime.fromisoformat(last_used_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return (now - parsed).total_seconds() >= LAST_USED_TOUCH_SECONDS
 
 
 def _is_expired(expires_at: str | None) -> bool:

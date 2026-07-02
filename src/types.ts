@@ -335,6 +335,7 @@ export interface McpTokenRecord {
   lastUsedAt?: string | null;
   expiresAt?: string | null;
   createdAt?: string | null;
+  oauthClientId?: string | null;
 }
 
 export interface McpSetupCall {

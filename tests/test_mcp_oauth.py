@@ -38,6 +38,10 @@ class Query:
         self.filters.append((column, value))
         return self
 
+    def is_(self, column, value):
+        self.filters.append((column, None if value == "null" else value))
+        return self
+
     def maybe_single(self):
         return self
 
@@ -61,6 +65,8 @@ class Query:
         for row in rows:
             if all(row.get(column) == value for column, value in self.filters):
                 return row
+        if self.filters:
+            return None
         return rows[0] if rows else None
 
 
@@ -116,14 +122,16 @@ def test_oauth_authorization_code_exchange_issues_mcp_token(monkeypatch):
     )
     verifier = "sample-code-verifier-for-pkce"
     challenge = _pkce_s256(verifier)
-    monkeypatch.setattr(
-        mcp_oauth,
-        "create_mcp_token",
-        lambda supabase, user_id, name, scopes, expires_at: {
+    mint_calls = []
+
+    def fake_create_mcp_token(supabase, user_id, name, scopes, expires_at, oauth_client_id=None):
+        mint_calls.append({"name": name, "oauthClientId": oauth_client_id})
+        return {
             "token": "emt_oauth_sample",
             "record": {"scopes": scopes, "expiresAt": expires_at},
-        },
-    )
+        }
+
+    monkeypatch.setattr(mcp_oauth, "create_mcp_token", fake_create_mcp_token)
 
     redirect_url = mcp_oauth.create_authorization_redirect(
         supabase,
@@ -157,6 +165,158 @@ def test_oauth_authorization_code_exchange_issues_mcp_token(monkeypatch):
     assert token["token_type"] == "Bearer"  # noqa: S105 - OAuth token type, not a secret.
     assert token["scope"] == ("context:read overlay:write ingest:write capture:write project:write")
     assert supabase.tables[mcp_oauth.CODE_TABLE][0]["consumed_at"] is not None
+    assert mint_calls == [{"name": "Claude Code", "oauthClientId": client["client_id"]}]
+
+
+def _register_test_client(supabase):
+    return mcp_oauth.register_oauth_client(
+        supabase,
+        {
+            "client_name": "Claude Code",
+            "redirect_uris": ["http://localhost:31337/oauth/callback"],
+        },
+    )
+
+
+def _issue_authorization_code(supabase, client_id, verifier):
+    redirect_url = mcp_oauth.create_authorization_redirect(
+        supabase,
+        "user-1",
+        {
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": "http://localhost:31337/oauth/callback",
+            "code_challenge": _pkce_s256(verifier),
+            "code_challenge_method": "S256",
+            "scope": "context:read overlay:write",
+        },
+    )
+    return parse_qs(urlparse(redirect_url).query)["code"][0]
+
+
+def test_oauth_authorization_code_cannot_be_exchanged_twice(monkeypatch):
+    supabase = Supabase()
+    client = _register_test_client(supabase)
+    verifier = "sample-code-verifier-for-pkce"
+    mint_calls = []
+
+    def fake_create_mcp_token(supabase, user_id, name, scopes, expires_at, oauth_client_id=None):
+        mint_calls.append((user_id, name, oauth_client_id))
+        return {"token": "emt_oauth_sample", "record": {"scopes": scopes, "expiresAt": expires_at}}
+
+    monkeypatch.setattr(mcp_oauth, "create_mcp_token", fake_create_mcp_token)
+    code = _issue_authorization_code(supabase, client["client_id"], verifier)
+    exchange_payload = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "client_id": client["client_id"],
+        "redirect_uri": "http://localhost:31337/oauth/callback",
+        "code_verifier": verifier,
+    }
+
+    first = mcp_oauth.exchange_authorization_code(supabase, exchange_payload)
+    assert first["access_token"] == "emt_oauth_sample"  # noqa: S105 - synthetic test token.
+
+    try:
+        mcp_oauth.exchange_authorization_code(supabase, exchange_payload)
+    except ValueError as exc:
+        assert "already consumed" in str(exc)
+    else:
+        raise AssertionError("expected the second exchange to fail")
+
+    assert len(mint_calls) == 1
+
+
+def test_oauth_exchange_consumes_code_before_minting(monkeypatch):
+    supabase = Supabase()
+    client = _register_test_client(supabase)
+    verifier = "sample-code-verifier-for-pkce"
+    mint_calls = []
+
+    def fake_create_mcp_token(supabase, user_id, name, scopes, expires_at, oauth_client_id=None):
+        mint_calls.append((user_id, name, oauth_client_id))
+        return {"token": "emt_oauth_sample", "record": {"scopes": scopes, "expiresAt": expires_at}}
+
+    monkeypatch.setattr(mcp_oauth, "create_mcp_token", fake_create_mcp_token)
+    code = _issue_authorization_code(supabase, client["client_id"], verifier)
+
+    try:
+        mcp_oauth.exchange_authorization_code(
+            supabase,
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": client["client_id"],
+                "redirect_uri": "http://localhost:31337/oauth/callback",
+                "code_verifier": "wrong-code-verifier",
+            },
+        )
+    except ValueError as exc:
+        assert "code_verifier" in str(exc)
+    else:
+        raise AssertionError("expected an invalid code_verifier to fail")
+
+    # The failed attempt consumed the code without minting, so a replay with the
+    # correct verifier cannot mint either.
+    assert mint_calls == []
+    assert supabase.tables[mcp_oauth.CODE_TABLE][0]["consumed_at"] is not None
+    try:
+        mcp_oauth.exchange_authorization_code(
+            supabase,
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": client["client_id"],
+                "redirect_uri": "http://localhost:31337/oauth/callback",
+                "code_verifier": verifier,
+            },
+        )
+    except ValueError as exc:
+        assert "already consumed" in str(exc)
+    else:
+        raise AssertionError("expected the replayed exchange to fail")
+
+    assert mint_calls == []
+
+
+def test_authorization_request_with_only_unknown_scopes_raises_invalid_scope():
+    supabase = Supabase()
+    client = _register_test_client(supabase)
+
+    try:
+        mcp_oauth.validate_authorization_request(
+            supabase,
+            {
+                "response_type": "code",
+                "client_id": client["client_id"],
+                "redirect_uri": "http://localhost:31337/oauth/callback",
+                "code_challenge": _pkce_s256("sample-code-verifier-for-pkce"),
+                "code_challenge_method": "S256",
+                "scope": "admin superuser",
+            },
+        )
+    except ValueError as exc:
+        assert "invalid_scope" in str(exc)
+    else:
+        raise AssertionError("expected unknown-only scopes to be rejected")
+
+
+def test_authorization_request_without_scope_falls_back_to_defaults():
+    supabase = Supabase()
+    client = _register_test_client(supabase)
+
+    request = mcp_oauth.validate_authorization_request(
+        supabase,
+        {
+            "response_type": "code",
+            "client_id": client["client_id"],
+            "redirect_uri": "http://localhost:31337/oauth/callback",
+            "code_challenge": _pkce_s256("sample-code-verifier-for-pkce"),
+            "code_challenge_method": "S256",
+        },
+    )
+
+    assert request["scope"] == mcp_oauth.DEFAULT_MCP_SCOPES
 
 
 def test_oauth_metadata_and_mcp_challenge_routes(monkeypatch):
@@ -177,6 +337,64 @@ def test_oauth_metadata_and_mcp_challenge_routes(monkeypatch):
     assert response.status_code == 401
     assert "WWW-Authenticate" in response.headers
     assert "oauth-protected-resource/mcp" in response.headers["WWW-Authenticate"]
+
+
+def test_mcp_oauth_client_info_endpoint_returns_only_safe_fields(monkeypatch):
+    from backend import server
+
+    supabase = Supabase()
+    registered = mcp_oauth.register_oauth_client(
+        supabase,
+        {
+            "client_name": "Claude Code",
+            "redirect_uris": [
+                "https://claude.ai/api/mcp/auth_callback",
+                "http://localhost:31337/oauth/callback",
+            ],
+            "logo_uri": "https://claude.ai/logo.png",
+        },
+    )
+    monkeypatch.setattr(server, "is_supabase_mode", lambda: True)
+    monkeypatch.setattr(server, "get_supabase", lambda: supabase)
+
+    response = TestClient(server.app).get(
+        "/api/mcp/oauth/client-info",
+        params={"client_id": registered["client_id"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "clientName": "Claude Code",
+        "redirectHosts": ["claude.ai", "localhost"],
+    }
+
+
+def test_mcp_oauth_client_info_endpoint_returns_404_for_unknown_client(monkeypatch):
+    from backend import server
+
+    monkeypatch.setattr(server, "is_supabase_mode", lambda: True)
+    monkeypatch.setattr(server, "get_supabase", lambda: Supabase())
+
+    response = TestClient(server.app).get(
+        "/api/mcp/oauth/client-info",
+        params={"client_id": "memexai_mcp_unknown"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Unknown OAuth client"
+
+
+def test_mcp_oauth_client_info_endpoint_requires_hosted_mode(monkeypatch):
+    from backend import server
+
+    monkeypatch.setattr(server, "is_supabase_mode", lambda: False)
+
+    response = TestClient(server.app).get(
+        "/api/mcp/oauth/client-info",
+        params={"client_id": "memexai_mcp_anything"},
+    )
+
+    assert response.status_code == 404
 
 
 def _pkce_s256(verifier: str) -> str:

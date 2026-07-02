@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backend.clip_selection import select_clips
 from scripts.legacy_chroma_supabase_import import DEFAULT_CHROMA_DB, load_legacy_chunks
 from scripts.run_sierra_sample_eval import build_sample_tables, load_fixture as load_sierra_fixture
 
@@ -108,6 +109,34 @@ def rank_docs(query: str, docs: list[RetrievalDoc], limit: int) -> list[dict]:
     return scored[:limit]
 
 
+def apply_clip_selection_to_docs(ranked_docs: list[dict], limit: int) -> list[dict]:
+    """Run ranked docs through the shared clip selection used by hosted search.
+
+    Docs are mapped into select_clips() candidates (lexical score standing in
+    for similarity, missing timestamps treated as 0s) and back, so the eval
+    gates exercise the same soft intro filter, near-duplicate suppression, and
+    per-video cap that production search applies.
+    """
+    by_key: dict[str, dict] = {}
+    candidates = []
+    for index, row in enumerate(ranked_docs):
+        key = f"cand_{index}"
+        by_key[key] = row
+        start = row.get("startSeconds")
+        end = row.get("endSeconds")
+        candidates.append(
+            {
+                "candidateKey": key,
+                "videoId": row["videoId"],
+                "startSeconds": int(start) if start is not None else 0,
+                "endSeconds": int(end) if end is not None else 0,
+                "similarity": row["score"],
+            }
+        )
+    selected = select_clips(candidates, limit)
+    return [by_key[clip["candidateKey"]] for clip in selected]
+
+
 def collapse_video_rankings(ranked_docs: list[dict]) -> list[dict]:
     by_video: dict[str, dict] = {}
     for row in ranked_docs:
@@ -188,7 +217,11 @@ def load_sierra_docs() -> list[RetrievalDoc]:
 
 
 def evaluate_fixture(
-    fixture: dict, *, legacy_db_path: Path = DEFAULT_CHROMA_DB, limit: int = 10
+    fixture: dict,
+    *,
+    legacy_db_path: Path = DEFAULT_CHROMA_DB,
+    limit: int = 10,
+    apply_clip_selection: bool = False,
 ) -> dict:
     docs_by_corpus = {
         "legacy_chroma": load_legacy_docs(legacy_db_path),
@@ -204,6 +237,8 @@ def evaluate_fixture(
     for item in fixture["queries"]:
         docs = docs_by_corpus[item["corpus"]]
         ranked_docs = rank_docs(item["query"], docs, limit)
+        if apply_clip_selection:
+            ranked_docs = apply_clip_selection_to_docs(ranked_docs, limit)
         ranked_videos = collapse_video_rankings(ranked_docs)
         ranked_video_ids = [row["videoId"] for row in ranked_videos]
         expected_video_ids = item["expectedVideoIds"]
@@ -236,6 +271,7 @@ def evaluate_fixture(
     return {
         "fixture": fixture["name"],
         "queryCount": query_count,
+        "clipSelectionApplied": apply_clip_selection,
         "metrics": {
             "recallAt5": round(recall_hits / query_count, 3) if query_count else 0,
             "mrr": round(mrr_total / query_count, 3) if query_count else 0,
@@ -254,10 +290,16 @@ def main() -> int:
     parser.add_argument("--legacy-db", default=str(DEFAULT_CHROMA_DB))
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--min-recall-at-5", type=float, default=0.8)
+    parser.add_argument("--apply-clip-selection", action="store_true")
     args = parser.parse_args()
 
     fixture = json.loads(Path(args.fixture).read_text(encoding="utf-8"))
-    report = evaluate_fixture(fixture, legacy_db_path=Path(args.legacy_db), limit=args.limit)
+    report = evaluate_fixture(
+        fixture,
+        legacy_db_path=Path(args.legacy_db),
+        limit=args.limit,
+        apply_clip_selection=args.apply_clip_selection,
+    )
     print(json.dumps(report, indent=2))
     return 0 if report["metrics"]["recallAt5"] >= args.min_recall_at_5 else 1
 

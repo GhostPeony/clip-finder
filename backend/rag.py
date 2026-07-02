@@ -21,22 +21,21 @@ try:
     from .answers import generate_answer
     from .category_taxonomy import normalize_category_filters
     from .clip_selection import select_clips
-    from .config import get_embedding_dimensions, get_embedding_model
     from .db import get_supabase
+    from .gemini_clients import RETRIEVAL_QUERY_TASK, get_embeddings_client
     from .projects import resolve_project_scope
 except ImportError:
     from answers import generate_answer
     from category_taxonomy import normalize_category_filters
     from clip_selection import select_clips
-    from config import get_embedding_dimensions, get_embedding_model
     from db import get_supabase
+    from gemini_clients import RETRIEVAL_QUERY_TASK, get_embeddings_client
     from projects import resolve_project_scope
 
 # Load environment variables
 env_path = os.path.join(os.path.dirname(__file__), "..", ".env.local")
 load_dotenv(env_path)
 
-EMBEDDING_MODEL = get_embedding_model()
 RETRIEVAL_MODES = {"hybrid", "semantic", "keyword"}
 KEYWORD_FALLBACK_STOPWORDS = {
     "about",
@@ -56,29 +55,13 @@ KEYWORD_FALLBACK_STOPWORDS = {
     "with",
 }
 
-# Cache for embedding instances keyed by api_key prefix
-_embeddings_cache: dict[str, GoogleGenerativeAIEmbeddings] = {}
-
 
 def _get_embeddings(api_key: Optional[str] = None) -> GoogleGenerativeAIEmbeddings:
-    """Get cached embedding instance configured for retrieval queries."""
-    key_to_use = api_key or os.getenv("GEMINI_API_KEY")
-    if not key_to_use or key_to_use == "PLACEHOLDER_API_KEY":
-        raise ValueError(
-            "No API key provided. Set GEMINI_API_KEY in .env.local or provide via header."
-        )
+    """Get cached embedding instance configured for retrieval queries.
 
-    if key_to_use in _embeddings_cache:
-        return _embeddings_cache[key_to_use]
-
-    instance = GoogleGenerativeAIEmbeddings(
-        model=EMBEDDING_MODEL,
-        google_api_key=key_to_use,
-        task_type="RETRIEVAL_QUERY",
-        output_dimensionality=get_embedding_dimensions(),
-    )
-    _embeddings_cache[key_to_use] = instance
-    return instance
+    Interactive query embedding fails fast on purpose — no retry wrapper here.
+    """
+    return get_embeddings_client(api_key, RETRIEVAL_QUERY_TASK)
 
 
 def _match_snippet(content: str, max_length: int = 240) -> str:
@@ -222,14 +205,16 @@ def search_pg(
     if normalized_mode == "hybrid":
         rpc_payload["search_query"] = query
 
-    result = supabase.rpc(
-        rpc_name,
-        rpc_payload,
-    ).execute()
-
-    rows = result.data or []
     if scoped_youtube_video_id:
+        rpc_payload["match_youtube_video_id"] = scoped_youtube_video_id
+        rows = _execute_scoped_search_rpc(supabase, rpc_name, rpc_payload, limit)
         rows = _filter_rows_by_youtube_video_id(rows, scoped_youtube_video_id)
+    else:
+        result = supabase.rpc(
+            rpc_name,
+            rpc_payload,
+        ).execute()
+        rows = result.data or []
     print(f"[SEARCH_PG] RPC returned {len(rows)} rows")
 
     # 3. Map to VideoClip dicts, then apply shared selection + cited answer.
@@ -254,7 +239,11 @@ def search_pg(
         for row in rows
     ]
 
-    clips = select_clips(candidates, limit)
+    clips = select_clips(
+        candidates,
+        limit,
+        per_video_cap=0 if scoped_youtube_video_id else None,
+    )
     answer = generate_answer(query, clips, api_key)
 
     print(f"[SEARCH_PG] Returning {len(clips)} clips (answer: {len(answer)} chars)")
@@ -370,7 +359,11 @@ def search_transcript_text_pg(
         for row in rows
     ]
 
-    clips = select_clips(candidates, limit)
+    clips = select_clips(
+        candidates,
+        limit,
+        per_video_cap=0 if scoped_youtube_video_id else None,
+    )
     return {
         "answer": "",
         "relevantClips": clips,
@@ -414,11 +407,39 @@ def _search_keyword_rpc(
     }
     if project_id:
         payload["match_project_id"] = project_id
-    result = supabase.rpc("search_chunks_keyword", payload).execute()
-    rows = result.data or []
     if youtube_video_id:
+        payload["match_youtube_video_id"] = youtube_video_id
+        rows = _execute_scoped_search_rpc(supabase, "search_chunks_keyword", payload, limit)
         rows = _filter_rows_by_youtube_video_id(rows, youtube_video_id)
-    return rows
+        return rows
+    result = supabase.rpc("search_chunks_keyword", payload).execute()
+    return result.data or []
+
+
+def _execute_scoped_search_rpc(
+    supabase: Any,
+    rpc_name: str,
+    payload: dict,
+    limit: int,
+) -> list[dict]:
+    """Run a video-scoped search RPC, retrying once with the legacy payload.
+
+    Databases that have not applied migration 027 reject the
+    match_youtube_video_id parameter; the retry confines that breakage to the
+    previous behavior (wide match_limit plus Python-side filtering).
+    """
+    try:
+        result = supabase.rpc(rpc_name, payload).execute()
+        return result.data or []
+    except Exception as exc:  # noqa: BLE001 - unmigrated DBs lack the scoped signature.
+        print(f"[SEARCH_PG] Scoped {rpc_name} RPC failed; retrying with legacy payload: {exc}")
+
+    legacy_payload = {
+        key: value for key, value in payload.items() if key != "match_youtube_video_id"
+    }
+    legacy_payload["match_limit"] = _legacy_scoped_match_limit(limit)
+    result = supabase.rpc(rpc_name, legacy_payload).execute()
+    return result.data or []
 
 
 def _clean_video_scope(youtube_video_id: str | None) -> str | None:
@@ -430,8 +451,12 @@ def _clean_video_scope(youtube_video_id: str | None) -> str | None:
 
 def _match_limit_for_scope(limit: int, youtube_video_id: str | None = None) -> int:
     if youtube_video_id:
-        return max(limit * 20, 100)
+        return max(limit * 8, 40)
     return limit * 4
+
+
+def _legacy_scoped_match_limit(limit: int) -> int:
+    return max(limit * 20, 100)
 
 
 def _filter_rows_by_youtube_video_id(rows: list[dict], youtube_video_id: str) -> list[dict]:

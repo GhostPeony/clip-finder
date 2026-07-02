@@ -21,9 +21,16 @@ import {
   UsageInfo,
 } from '../services/api';
 import { YOUTUBE_CONNECTION_SAVED_EVENT } from '../contexts/AuthContext';
+import { isActiveJob, isClearableJob, jobOutcomeText, jobStatusChipClass } from '../lib/jobs';
+import { formatRelativeTime } from '../lib/time';
+import { usePolling } from '../lib/usePolling';
 import { BrandLoader } from './BrandLoader';
 import { CaptureSourceDisconnectModal } from './CaptureSourceDisconnectModal';
 import { CaptureSyncConfirmModal } from './CaptureSyncConfirmModal';
+import { ConfirmDialog } from './ui/ConfirmDialog';
+import { Notice, NoticeState } from './ui/Notice';
+import { Panel } from './ui/Panel';
+import { PanelError } from './ui/PanelError';
 import { UnifiedSearchView } from './UnifiedSearchView';
 
 interface ProductDashboardProps {
@@ -36,14 +43,23 @@ interface ProductDashboardProps {
   onIndexComplete: () => void;
 }
 
+interface DashboardSectionFailures {
+  library: boolean;
+  usage: boolean;
+  jobs: boolean;
+  captureSources: boolean;
+  projects: boolean;
+  youtubeStatus: boolean;
+}
+
 interface DashboardBundle {
   library: LibraryData;
-  libraryLoadFailed: boolean;
   usage: UsageInfo | null;
   jobs: IngestionJob[];
   captureSources: CaptureSource[];
   projects: UserProject[];
-  youtubeStatus: YoutubeOAuthStatus;
+  youtubeStatus: YoutubeOAuthStatus | null;
+  failures: DashboardSectionFailures;
 }
 
 interface PendingCaptureSync {
@@ -51,30 +67,50 @@ interface PendingCaptureSync {
   pendingCount: number;
 }
 
+const EMPTY_LIBRARY: LibraryData = { channels: [], totalVideos: 0, totalClips: 0 };
+
+const NO_SECTION_FAILURES: DashboardSectionFailures = {
+  library: false,
+  usage: false,
+  jobs: false,
+  captureSources: false,
+  projects: false,
+  youtubeStatus: false,
+};
+
+async function settle<T>(promise: Promise<T>, fallback: T): Promise<{ value: T; failed: boolean }> {
+  try {
+    return { value: await promise, failed: false };
+  } catch {
+    return { value: fallback, failed: true };
+  }
+}
+
 const loadDashboardBundle = async (): Promise<DashboardBundle> => {
-  const [libraryResult, usage, jobs, captureSources, projects, youtubeStatus] = await Promise.all([
-    fetchLibrary().then(
-      (library) => ({ library, failed: false }),
-      () => ({
-        library: { channels: [], totalVideos: 0, totalClips: 0 },
-        failed: true,
-      }),
-    ),
-    fetchUsage(),
-    fetchIngestionJobs(),
-    fetchCaptureSources(),
-    fetchProjects(),
-    fetchYoutubeOAuthStatus(),
+  const [library, usage, jobs, captureSources, projects, youtubeStatus] = await Promise.all([
+    settle<LibraryData>(fetchLibrary(), EMPTY_LIBRARY),
+    settle<UsageInfo | null>(fetchUsage(), null),
+    settle<IngestionJob[]>(fetchIngestionJobs(), []),
+    settle<CaptureSource[]>(fetchCaptureSources(), []),
+    settle<UserProject[]>(fetchProjects(), []),
+    settle<YoutubeOAuthStatus | null>(fetchYoutubeOAuthStatus(), null),
   ]);
 
   return {
-    library: libraryResult.library,
-    libraryLoadFailed: libraryResult.failed,
-    usage,
-    jobs,
-    captureSources,
-    projects,
-    youtubeStatus,
+    library: library.value,
+    usage: usage.value,
+    jobs: jobs.value,
+    captureSources: captureSources.value,
+    projects: projects.value,
+    youtubeStatus: youtubeStatus.value,
+    failures: {
+      library: library.failed,
+      usage: usage.failed,
+      jobs: jobs.failed,
+      captureSources: captureSources.failed,
+      projects: projects.failed,
+      youtubeStatus: youtubeStatus.failed,
+    },
   };
 };
 
@@ -100,29 +136,41 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
     null,
   );
   const [disconnectingSourceId, setDisconnectingSourceId] = useState<string | null>(null);
-  const [captureNotice, setCaptureNotice] = useState('');
-  const [projectNotice, setProjectNotice] = useState('');
+  const [captureNotice, setCaptureNotice] = useState<NoticeState | null>(null);
+  const [projectNotice, setProjectNotice] = useState<NoticeState | null>(null);
   const [projectName, setProjectName] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
-  const [importNotice, setImportNotice] = useState('');
+  const [importNotice, setImportNotice] = useState<NoticeState | null>(null);
   const [clearingImports, setClearingImports] = useState(false);
-  const [libraryLoadFailed, setLibraryLoadFailed] = useState(false);
+  const [clearImportsDialogOpen, setClearImportsDialogOpen] = useState(false);
+  const [failures, setFailures] = useState<DashboardSectionFailures>(NO_SECTION_FAILURES);
   const [dashboardLoading, setDashboardLoading] = useState(true);
 
   const applyDashboardBundle = useCallback((bundle: DashboardBundle) => {
     setLibrary(bundle.library);
-    setLibraryLoadFailed(bundle.libraryLoadFailed);
     setUsage(bundle.usage);
     setJobs(bundle.jobs.slice(0, 6));
     setCaptureSources(bundle.captureSources);
     setProjects(bundle.projects);
     setYoutubeStatus(bundle.youtubeStatus);
+    setFailures(bundle.failures);
   }, []);
 
   const refreshDashboardData = useCallback(async () => {
     const bundle = await loadDashboardBundle();
     applyDashboardBundle(bundle);
   }, [applyDashboardBundle]);
+
+  // Cheap 15s refresh: only the sections that change while you watch (jobs + usage).
+  const refreshJobsAndUsage = useCallback(async () => {
+    const [usage, jobs] = await Promise.all([
+      settle<UsageInfo | null>(fetchUsage(), null),
+      settle<IngestionJob[]>(fetchIngestionJobs(), []),
+    ]);
+    setUsage(usage.value);
+    setJobs(jobs.value.slice(0, 6));
+    setFailures((current) => ({ ...current, usage: usage.failed, jobs: jobs.failed }));
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -135,7 +183,6 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
     };
 
     load();
-    const interval = window.setInterval(load, 15000);
     const onYoutubeConnected = () => {
       void load();
     };
@@ -143,22 +190,16 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
 
     return () => {
       active = false;
-      window.clearInterval(interval);
       window.removeEventListener(YOUTUBE_CONNECTION_SAVED_EVENT, onYoutubeConnected);
     };
   }, [applyDashboardBundle]);
 
-  const activeJobs = useMemo(
-    () => jobs.filter((job) => job.status === 'queued' || job.status === 'running'),
-    [jobs],
-  );
+  usePolling(refreshJobsAndUsage, 15000, { onVisibilityRefresh: refreshDashboardData });
+
+  const activeJobs = useMemo(() => jobs.filter(isActiveJob), [jobs]);
 
   const failedJobs = useMemo(() => jobs.filter((job) => job.status === 'failed'), [jobs]);
-  const clearableJobs = useMemo(
-    () =>
-      jobs.filter((job) => ['completed', 'failed', 'partial', 'cancelled'].includes(job.status)),
-    [jobs],
-  );
+  const clearableJobs = useMemo(() => jobs.filter(isClearableJob), [jobs]);
 
   const youtubeConnected = youtubeStatus?.connected || false;
 
@@ -175,17 +216,23 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
 
   const handleSyncSource = async (source: CaptureSource) => {
     setSyncingSourceId(source.id);
-    setCaptureNotice('');
+    setCaptureNotice(null);
     try {
       const preview = await syncCaptureSource(source.id, 0);
       if (!preview) {
-        setCaptureNotice('Sync did not start. Check the capture source and try again.');
+        setCaptureNotice({
+          message: 'Sync did not start. Check the capture source and try again.',
+          tone: 'error',
+        });
         return;
       }
 
       const pendingCount = preview.queueCandidateCount ?? preview.newItemCount;
       if (pendingCount <= 0) {
-        setCaptureNotice('Sync is up to date. No new videos are waiting to import.');
+        setCaptureNotice({
+          message: 'Sync is up to date. No new videos are waiting to import.',
+          tone: 'success',
+        });
         await refreshDashboardData();
         return;
       }
@@ -202,23 +249,27 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
     const { source, pendingCount } = pendingCaptureSync;
     setConfirmingCaptureSync(true);
     setSyncingSourceId(source.id);
-    setCaptureNotice('');
+    setCaptureNotice(null);
     try {
       const result = await syncCaptureSource(source.id, pendingCount);
       if (!result) {
-        setCaptureNotice(
-          'Sync failed before all imports could be queued. Check Imports for any queued job and retry.',
-        );
+        setCaptureNotice({
+          message:
+            'Sync failed before all imports could be queued. Check Imports for any queued job and retry.',
+          tone: 'error',
+        });
         return;
       }
 
       const queuedCount = result.queuedJobCount;
       const remainingCount = result.remainingQueueCount ?? Math.max(0, pendingCount - queuedCount);
-      setCaptureNotice(
-        remainingCount > 0
-          ? `Queued ${queuedCount} of ${pendingCount} video${pendingCount === 1 ? '' : 's'}. ${remainingCount} still waiting to queue.`
-          : `Queued ${queuedCount} video${queuedCount === 1 ? '' : 's'}. Watch Imports for progress.`,
-      );
+      setCaptureNotice({
+        message:
+          remainingCount > 0
+            ? `Queued ${queuedCount} of ${pendingCount} video${pendingCount === 1 ? '' : 's'}. ${remainingCount} still waiting to queue.`
+            : `Queued ${queuedCount} video${queuedCount === 1 ? '' : 's'}. Watch Imports for progress.`,
+        tone: 'success',
+      });
       setPendingCaptureSync(null);
       await refreshDashboardData();
     } finally {
@@ -230,9 +281,10 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
   const handleCancelCaptureSync = async () => {
     if (pendingCaptureSync) {
       const pendingCount = pendingCaptureSync.pendingCount;
-      setCaptureNotice(
-        `Sync found ${pendingCount} video${pendingCount === 1 ? '' : 's'}. No imports queued.`,
-      );
+      setCaptureNotice({
+        message: `Sync found ${pendingCount} video${pendingCount === 1 ? '' : 's'}. No imports queued.`,
+        tone: 'info',
+      });
     }
     setPendingCaptureSync(null);
     await refreshDashboardData();
@@ -242,32 +294,38 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
     if (!pendingDisconnectSource) return;
     const source = pendingDisconnectSource;
     setDisconnectingSourceId(source.id);
-    setCaptureNotice('');
+    setCaptureNotice(null);
     const deleted = await deleteCaptureSource(source.id);
     setDisconnectingSourceId(null);
     if (!deleted) {
-      setCaptureNotice('Could not disconnect that playlist. Refresh and try again.');
+      setCaptureNotice({
+        message: 'Could not disconnect that playlist. Refresh and try again.',
+        tone: 'error',
+      });
       return;
     }
     setPendingDisconnectSource(null);
-    setCaptureNotice('Playlist disconnected. Saved videos remain in your library.');
+    setCaptureNotice({
+      message: 'Playlist disconnected. Saved videos remain in your library.',
+      tone: 'success',
+    });
     await refreshDashboardData();
   };
 
   const handleClearImportHistory = async () => {
     if (clearableJobs.length === 0) return;
-    if (!confirm('Clear completed and failed import history? Active imports will stay visible.')) {
-      return;
-    }
-
+    setClearImportsDialogOpen(false);
     setClearingImports(true);
-    setImportNotice('');
+    setImportNotice(null);
     const deletedCount = await clearIngestionJobHistory();
     await refreshDashboardData();
     setImportNotice(
       deletedCount > 0
-        ? `Cleared ${deletedCount} import${deletedCount === 1 ? '' : 's'}.`
-        : 'No settled imports were cleared.',
+        ? {
+            message: `Cleared ${deletedCount} import${deletedCount === 1 ? '' : 's'}.`,
+            tone: 'success',
+          }
+        : { message: 'No settled imports were cleared.', tone: 'info' },
     );
     setClearingImports(false);
   };
@@ -277,15 +335,18 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
     const trimmedName = projectName.trim();
     if (!trimmedName) return;
     setCreatingProject(true);
-    setProjectNotice('');
+    setProjectNotice(null);
     try {
       const project = await createProject(trimmedName);
       if (!project) {
-        setProjectNotice('Project could not be created.');
+        setProjectNotice({ message: 'Project could not be created.', tone: 'error' });
         return;
       }
       setProjectName('');
-      setProjectNotice('Project created. Open Library to assign videos or link a playlist.');
+      setProjectNotice({
+        message: 'Project created. Open Library to assign videos or link a playlist.',
+        tone: 'success',
+      });
       await refreshDashboardData();
     } finally {
       setCreatingProject(false);
@@ -304,7 +365,7 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
         </div>
 
         <aside className="grid min-w-0 gap-5 xl:h-full xl:grid-rows-2">
-          <DashboardPanel
+          <Panel
             title="Usage"
             className="h-full"
             description={
@@ -322,6 +383,11 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
           >
             {dashboardLoading && !usage ? (
               <BrandLoader compact label="Checking usage" />
+            ) : failures.usage ? (
+              <PanelError
+                label="Usage could not load."
+                onRetry={() => void refreshDashboardData()}
+              />
             ) : (
               <div className="space-y-2.5">
                 <UsageBar
@@ -350,15 +416,15 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
                 />
               </div>
             )}
-          </DashboardPanel>
+          </Panel>
 
-          <DashboardPanel
+          <Panel
             title="Library"
             className="h-full"
             description={
               dashboardLoading && !library
                 ? 'Loading saved videos'
-                : libraryLoadFailed
+                : failures.library
                   ? 'Library unavailable'
                   : library && library.totalVideos > 0
                     ? `${library.totalVideos} saved video${library.totalVideos === 1 ? '' : 's'}`
@@ -372,10 +438,11 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
           >
             {dashboardLoading && !library ? (
               <BrandLoader compact label="Loading saved videos" />
-            ) : libraryLoadFailed ? (
-              <p className="text-sm leading-6 text-bark">
-                Open Library to retry loading your videos.
-              </p>
+            ) : failures.library ? (
+              <PanelError
+                label="Your saved videos could not load."
+                onRetry={() => void refreshDashboardData()}
+              />
             ) : library && library.channels.length > 0 ? (
               <div className="space-y-2">
                 {library.channels.slice(0, 3).map((channel) => (
@@ -389,20 +456,22 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
                 Add a video, playlist, or channel to start your saved-video library.
               </p>
             )}
-          </DashboardPanel>
+          </Panel>
         </aside>
       </section>
 
       <section className="grid min-w-0 gap-5 xl:grid-cols-3">
-        <DashboardPanel
+        <Panel
           title="Projects"
           className="h-full"
           description={
             dashboardLoading
               ? 'Checking scopes'
-              : projects.length > 0
-                ? `${projects.length} project${projects.length === 1 ? '' : 's'}`
-                : 'No projects yet'
+              : failures.projects
+                ? 'Projects unavailable'
+                : projects.length > 0
+                  ? `${projects.length} project${projects.length === 1 ? '' : 's'}`
+                  : 'No projects yet'
           }
           action={
             <button onClick={onOpenProjects} className="link-quiet text-sm">
@@ -412,6 +481,11 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
         >
           {dashboardLoading ? (
             <BrandLoader compact label="Loading projects" />
+          ) : failures.projects ? (
+            <PanelError
+              label="Your projects could not load."
+              onRetry={() => void refreshDashboardData()}
+            />
           ) : (
             <div className="space-y-3">
               {projects.length > 0 ? (
@@ -452,23 +526,27 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
                 </button>
               </form>
               {projectNotice ? (
-                <p className="rounded-lg bg-mint/40 px-3 py-2 text-xs font-medium text-leaf-deep">
-                  {projectNotice}
-                </p>
+                <Notice tone={projectNotice.tone}>{projectNotice.message}</Notice>
               ) : null}
             </div>
           )}
-        </DashboardPanel>
+        </Panel>
 
-        <DashboardPanel
+        <Panel
           title="Imports"
           className="h-full"
-          description={dashboardLoading ? 'Checking recent imports' : recentStatus}
+          description={
+            dashboardLoading
+              ? 'Checking recent imports'
+              : failures.jobs
+                ? 'Imports unavailable'
+                : recentStatus
+          }
           action={
             <div className="flex items-center gap-3">
               {clearableJobs.length > 0 ? (
                 <button
-                  onClick={() => void handleClearImportHistory()}
+                  onClick={() => setClearImportsDialogOpen(true)}
                   disabled={clearingImports}
                   className="link-quiet text-sm disabled:opacity-50"
                 >
@@ -483,6 +561,11 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
         >
           {dashboardLoading ? (
             <BrandLoader compact label="Loading recent imports" />
+          ) : failures.jobs ? (
+            <PanelError
+              label="Recent imports could not load."
+              onRetry={() => void refreshDashboardData()}
+            />
           ) : jobs.length === 0 ? (
             <p className="text-sm leading-6 text-bark">
               URL imports and playlist syncs will appear here.
@@ -494,22 +577,24 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
               ))}
             </div>
           )}
-          {importNotice && (
-            <p className="mt-3 rounded-lg bg-mint/40 px-3 py-2 text-xs font-medium text-leaf-deep">
-              {importNotice}
-            </p>
-          )}
-        </DashboardPanel>
+          {importNotice ? (
+            <Notice tone={importNotice.tone} className="mt-3">
+              {importNotice.message}
+            </Notice>
+          ) : null}
+        </Panel>
 
-        <DashboardPanel
+        <Panel
           title="YouTube capture"
           className="h-full"
           description={
             dashboardLoading && !youtubeStatus
               ? 'Checking playlist connection'
-              : youtubeConnected
-                ? 'Playlist sync is ready'
-                : 'Connect a save playlist'
+              : failures.youtubeStatus
+                ? 'Connection status unavailable'
+                : youtubeConnected
+                  ? 'Playlist sync is ready'
+                  : 'Connect a save playlist'
           }
           action={
             onConnectYouTube ? (
@@ -521,6 +606,11 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
         >
           {dashboardLoading && !youtubeStatus ? (
             <BrandLoader compact label="Checking YouTube capture" />
+          ) : failures.captureSources ? (
+            <PanelError
+              label="Capture sources could not load."
+              onRetry={() => void refreshDashboardData()}
+            />
           ) : (
             <CaptureSourceList
               sources={captureSources}
@@ -530,12 +620,12 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
               onOpenSettings={onOpenSettings}
             />
           )}
-          {captureNotice && (
-            <p className="mt-3 rounded-lg bg-mint/40 px-3 py-2 text-xs font-medium text-leaf-deep">
-              {captureNotice}
-            </p>
-          )}
-        </DashboardPanel>
+          {captureNotice ? (
+            <Notice tone={captureNotice.tone} className="mt-3">
+              {captureNotice.message}
+            </Notice>
+          ) : null}
+        </Panel>
       </section>
       {pendingCaptureSync ? (
         <CaptureSyncConfirmModal
@@ -552,6 +642,18 @@ export const ProductDashboard: React.FC<ProductDashboardProps> = ({
           isSubmitting={disconnectingSourceId === pendingDisconnectSource.id}
           onCancel={() => setPendingDisconnectSource(null)}
           onConfirm={() => void handleConfirmDisconnectSource()}
+        />
+      ) : null}
+      {clearImportsDialogOpen ? (
+        <ConfirmDialog
+          eyebrow="Imports"
+          title="Clear import history?"
+          body="Completed and failed imports will be removed from this list. Active imports stay visible."
+          confirmLabel="Clear history"
+          isSubmitting={clearingImports}
+          submittingLabel="Clearing..."
+          onCancel={() => setClearImportsDialogOpen(false)}
+          onConfirm={() => void handleClearImportHistory()}
         />
       ) : null}
     </div>
@@ -633,44 +735,17 @@ function JobRow({ job }: { job: IngestionJob }) {
     <div className="min-w-0 overflow-hidden rounded-xl bg-cream p-3">
       <div className="min-w-0">
         <div className="mb-1.5 flex items-center gap-2">
-          <span className={statusClass[job.status]}>{job.status}</span>
+          <span className={jobStatusChipClass[job.status]}>{job.status}</span>
           <span className="text-xs font-medium uppercase tracking-wide text-muted">
             {job.source_type}
           </span>
         </div>
         <p className="truncate text-sm font-semibold text-ink">{job.source_url}</p>
         <p className="mt-1 truncate text-xs text-muted">
-          {job.last_message || getOutcomeText(job)}
+          {job.last_message || jobOutcomeText(job)}
         </p>
       </div>
     </div>
-  );
-}
-
-function DashboardPanel({
-  title,
-  description,
-  action,
-  className = '',
-  children,
-}: {
-  title: string;
-  description?: string;
-  action?: React.ReactNode;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className={`card min-w-0 overflow-hidden p-4 ${className}`}>
-      <div className="mb-3 flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="font-serif text-xl font-medium text-ink">{title}</h2>
-          {description && <p className="mt-1 text-xs font-medium text-muted">{description}</p>}
-        </div>
-        {action ? <div className="shrink-0">{action}</div> : null}
-      </div>
-      {children}
-    </section>
   );
 }
 
@@ -685,61 +760,35 @@ function UsageBar({
   limit: number | null;
   displayValue?: string;
 }) {
-  const percent = limit && limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 12;
+  const hasLimit = typeof limit === 'number' && limit > 0;
+  const percent = hasLimit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
 
   return (
     <div>
-      <div className="mb-2 flex min-w-0 items-center justify-between gap-3 text-xs font-medium text-muted">
+      <div
+        className={`flex min-w-0 items-center justify-between gap-3 text-xs font-medium text-muted ${
+          hasLimit ? 'mb-2' : ''
+        }`}
+      >
         <span className="min-w-0 truncate">{label}</span>
         <span className="shrink-0">
-          {displayValue || (limit ? `${used}/${limit}` : `${used}/unlimited`)}
+          {displayValue || (hasLimit ? `${used}/${limit}` : `${used}/unlimited`)}
         </span>
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-petal">
-        <div className="h-full rounded-full bg-teal" style={{ width: `${percent}%` }} />
-      </div>
+      {hasLimit ? (
+        <div
+          role="progressbar"
+          aria-label={label}
+          aria-valuemin={0}
+          aria-valuemax={limit}
+          aria-valuenow={Math.min(used, limit)}
+          className="h-2 overflow-hidden rounded-full bg-petal"
+        >
+          <div className="h-full rounded-full bg-teal" style={{ width: `${percent}%` }} />
+        </div>
+      ) : null}
     </div>
   );
-}
-
-const statusClass: Record<IngestionJob['status'], string> = {
-  queued: 'chip chip-violet',
-  running: 'chip chip-teal',
-  completed: 'chip chip-leaf',
-  partial: 'chip chip-sun',
-  failed: 'chip',
-  cancelled: 'chip chip-violet',
-};
-
-const getOutcomeText = (job: IngestionJob) => {
-  if (job.status === 'partial') {
-    return `Partial import: ${job.indexed_video_count} indexed, ${job.skipped_video_count} skipped, ${job.failed_video_count} failed`;
-  }
-  if (job.status === 'failed') {
-    return job.error || job.last_message || 'Import failed';
-  }
-  if (job.status === 'completed') {
-    return `${job.indexed_video_count} video${job.indexed_video_count === 1 ? '' : 's'} indexed`;
-  }
-  if (job.status === 'running') {
-    return job.last_message || 'Import running';
-  }
-  return job.last_message || 'Waiting to start';
-};
-
-function formatRelativeTime(value: string): string {
-  const timestamp = new Date(value).getTime();
-  if (Number.isNaN(timestamp)) return value;
-  const diff = Date.now() - timestamp;
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days < 7) return `${days}d ago`;
-  return new Date(timestamp).toLocaleDateString();
 }
 
 function secondsToHours(seconds: number): number {

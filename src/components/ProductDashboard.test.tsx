@@ -1,15 +1,17 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { fireEvent } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProductDashboard } from './ProductDashboard';
 import {
+  clearIngestionJobHistory,
   createProject,
   deleteCaptureSource,
   fetchCaptureSources,
+  fetchIngestionJobs,
   fetchProjects,
   syncCaptureSource,
 } from '../services/api';
-import { CaptureSource } from '../types';
+import { CaptureSource, IngestionJob } from '../types';
 
 vi.mock('./UnifiedSearchView', () => ({
   UnifiedSearchView: () => <div data-testid="workbench" />,
@@ -78,9 +80,40 @@ const dashboardProps = {
   onIndexComplete: () => undefined,
 };
 
+const completedJob: IngestionJob = {
+  id: 'job-1',
+  user_id: 'user-1',
+  source_url: 'https://www.youtube.com/watch?v=abc123',
+  source_type: 'video',
+  status: 'completed',
+  requested_video_count: 1,
+  indexed_video_count: 1,
+  skipped_video_count: 0,
+  failed_video_count: 0,
+  created_at: '2026-06-24T06:30:55Z',
+};
+
+const setDocumentVisibility = (state: DocumentVisibilityState) => {
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    get: () => state,
+  });
+};
+
+const flushAsync = async () => {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+};
+
 describe('ProductDashboard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete (document as { visibilityState?: DocumentVisibilityState }).visibilityState;
   });
 
   it('renders the free-tier usage labels', async () => {
@@ -92,6 +125,42 @@ describe('ProductDashboard', () => {
 
     expect(screen.getByText('Videos indexed/accessed')).toBeInTheDocument();
     expect(screen.getByText('Transcript hours')).toBeInTheDocument();
+  });
+
+  it('exposes limited usage meters as progressbars with values', async () => {
+    render(<ProductDashboard {...dashboardProps} />);
+
+    const searchBar = await screen.findByRole('progressbar', { name: 'Searches this month' });
+    expect(searchBar).toHaveAttribute('aria-valuenow', '4');
+    expect(searchBar).toHaveAttribute('aria-valuemax', '100');
+    expect(screen.getAllByRole('progressbar')).toHaveLength(3);
+  });
+
+  it('omits progressbars and fake fills for unlimited plans', async () => {
+    apiMocks.fetchUsage.mockResolvedValue({
+      plan: 'pro',
+      searchesUsedToday: 4,
+      searchesUsedThisMonth: 4,
+      searchLimit: null,
+      searchPeriod: 'month',
+      indexesUsedThisMonth: 2,
+      indexLimit: null,
+      indexedVideosUsed: 2,
+      indexedVideoLimit: null,
+      indexedSecondsUsed: 7200,
+      indexedSecondsLimit: null,
+      maxImportVideos: 10,
+      maxSearchResults: 5,
+      hasOwnKey: false,
+      apiKeyMode: 'hybrid',
+      hasServerKey: true,
+      allowUserKeys: true,
+    });
+
+    render(<ProductDashboard {...dashboardProps} />);
+
+    expect(await screen.findByText('4/unlimited')).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
   });
 
   it('confirms playlist sync with an in-app modal before queueing all videos', async () => {
@@ -228,5 +297,95 @@ describe('ProductDashboard', () => {
     });
     expect(confirmSpy).not.toHaveBeenCalled();
     expect(await screen.findByText(/Playlist disconnected/i)).toBeInTheDocument();
+  });
+
+  it('clears import history through an app dialog instead of window.confirm', async () => {
+    vi.mocked(fetchIngestionJobs).mockResolvedValue([completedJob]);
+    vi.mocked(clearIngestionJobHistory).mockResolvedValue(1);
+    const confirmSpy = vi.spyOn(window, 'confirm');
+
+    render(<ProductDashboard {...dashboardProps} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^clear$/i }));
+    expect(
+      await screen.findByRole('dialog', { name: /clear import history/i }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^clear history$/i }));
+
+    await waitFor(() => {
+      expect(clearIngestionJobHistory).toHaveBeenCalledTimes(1);
+    });
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Cleared 1 import\./i)).toBeInTheDocument();
+  });
+
+  it('refetches only jobs and usage on the 15s polling interval', async () => {
+    vi.useFakeTimers();
+    setDocumentVisibility('visible');
+
+    render(<ProductDashboard {...dashboardProps} />);
+    await flushAsync();
+
+    expect(apiMocks.fetchLibrary).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchIngestionJobs).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchUsage).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
+
+    expect(apiMocks.fetchIngestionJobs).toHaveBeenCalledTimes(2);
+    expect(apiMocks.fetchUsage).toHaveBeenCalledTimes(2);
+    expect(apiMocks.fetchLibrary).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchProjects).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchCaptureSources).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchYoutubeOAuthStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('pauses polling while the tab is hidden and refreshes everything on return', async () => {
+    vi.useFakeTimers();
+    setDocumentVisibility('hidden');
+
+    render(<ProductDashboard {...dashboardProps} />);
+    await flushAsync();
+    expect(apiMocks.fetchIngestionJobs).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45000);
+    });
+    expect(apiMocks.fetchIngestionJobs).toHaveBeenCalledTimes(1);
+    expect(apiMocks.fetchUsage).toHaveBeenCalledTimes(1);
+
+    setDocumentVisibility('visible');
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(apiMocks.fetchLibrary).toHaveBeenCalledTimes(2);
+    expect(apiMocks.fetchIngestionJobs).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows a per-panel retry state when a dashboard fetch fails', async () => {
+    vi.mocked(fetchProjects)
+      .mockRejectedValueOnce(new Error('Backend Error: Internal Server Error'))
+      .mockResolvedValue([
+        {
+          id: 'project-1',
+          name: 'Agent harness research',
+          slug: 'agent-harness-research',
+          videoCount: 3,
+        },
+      ]);
+
+    render(<ProductDashboard {...dashboardProps} />);
+
+    expect(await screen.findByText('Your projects could not load.')).toBeInTheDocument();
+    expect(screen.getByText('Projects unavailable')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^retry$/i }));
+
+    expect(await screen.findByText('1 project')).toBeInTheDocument();
+    expect(screen.queryByText('Your projects could not load.')).not.toBeInTheDocument();
   });
 });

@@ -975,6 +975,23 @@ describe('api client', () => {
     );
   });
 
+  it('surfaces backend failures from the dashboard fetchers instead of swallowing them', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        statusText: 'Internal Server Error',
+        json: async () => ({}),
+      })),
+    );
+
+    await expect(fetchProjects()).rejects.toThrow('Backend Error: Internal Server Error');
+    await expect(fetchUsage()).rejects.toThrow('Backend Error: Internal Server Error');
+    await expect(fetchIngestionJobs()).rejects.toThrow('Backend Error: Internal Server Error');
+    await expect(fetchCaptureSources()).rejects.toThrow('Backend Error: Internal Server Error');
+    await expect(fetchYoutubeOAuthStatus()).rejects.toThrow('Backend Error: Internal Server Error');
+  });
+
   it('sends the Supabase bearer token to authenticated backend endpoints', async () => {
     vi.spyOn(supabase.auth, 'getSession').mockResolvedValue({
       data: {

@@ -224,16 +224,19 @@ const latestVideos = [
 
 describe('LibraryKnowledgeGraph', () => {
   beforeEach(() => {
+    // jsdom does not implement scrollIntoView.
+    Element.prototype.scrollIntoView = vi.fn();
     vi.mocked(getCachedLibraryGraph).mockResolvedValue(null);
     vi.mocked(fetchLibraryArtifact).mockResolvedValue(
       graphPayload.graph.nodes.find((node) => node.id === 'artifact:1') || null,
     );
     vi.mocked(fetchLibraryGraph).mockResolvedValue(graphPayload);
     vi.mocked(searchVideoClips).mockResolvedValue({
-      answer: 'Harness loops help teams evaluate whether agent systems complete work reliably.',
+      answer:
+        'Harness loops help teams evaluate whether agent systems complete work reliably. [[clip_0]]',
       relevantClips: [
         {
-          id: 'clip-1',
+          id: 'clip_0',
           videoId: 'yt-harness',
           title: 'Harness loop',
           channelName: 'Research Channel',
@@ -304,6 +307,58 @@ describe('LibraryKnowledgeGraph', () => {
     expect(saveSearchToHistory).toHaveBeenCalled();
   });
 
+  it('locks scroll and manages focus while a report modal is open', async () => {
+    render(
+      <LibraryKnowledgeGraph
+        activeView="videos"
+        latestVideos={latestVideos}
+        onIndexMore={() => undefined}
+      />,
+    );
+
+    await screen.findAllByText('Search saved videos');
+    fireEvent.click(screen.getByRole('button', { name: 'Read report' }));
+
+    const closeButton = screen.getByRole('button', { name: 'Close report' });
+    expect(document.activeElement).toBe(closeButton);
+    expect(document.body.style.overflow).toBe('hidden');
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    expect(document.body.style.overflow).toBe('');
+  });
+
+  it('renders a cited answer for library search and scrolls to the matching result card', async () => {
+    render(
+      <LibraryKnowledgeGraph
+        activeView="videos"
+        latestVideos={latestVideos}
+        onIndexMore={() => undefined}
+      />,
+    );
+
+    await screen.findAllByText('Search saved videos');
+    fireEvent.change(screen.getByLabelText('Search saved videos'), {
+      target: { value: 'harness loop' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    expect(await screen.findByText('Answer')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Harness loops help teams evaluate whether agent systems/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/\[\[clip_0\]\]/)).not.toBeInTheDocument();
+
+    const resultCard = document.getElementById('library-clip-clip_0');
+    expect(resultCard).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /0:30/ }));
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+    expect(resultCard?.className).toContain('ring-2');
+  });
+
   it('keeps smart library search within the free result cap', async () => {
     render(
       <LibraryKnowledgeGraph
@@ -362,6 +417,52 @@ describe('LibraryKnowledgeGraph', () => {
     expect((await screen.findAllByText('Search saved videos')).length).toBeGreaterThan(0);
     expect(screen.getByText('0 reports · 0 timestamped topics')).toBeInTheDocument();
     expect(screen.queryByText('No saved videos ready')).not.toBeInTheDocument();
+  });
+
+  it('shows a catching-up state with retry when videos exist but the graph is empty', async () => {
+    const emptyGraph: LibrarySourceGraphData = {
+      ...graphPayload,
+      videos: [],
+      graph: { nodes: [], edges: [], selectedNodeId: null },
+      reviewFlags: [],
+      edgeCaseHandling: [],
+    };
+    vi.mocked(fetchLibraryGraph).mockResolvedValue(emptyGraph);
+
+    render(
+      <LibraryKnowledgeGraph
+        activeView="videos"
+        latestVideos={[]}
+        totalVideoCount={3}
+        onIndexMore={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText('Your library is catching up')).toBeInTheDocument();
+    expect(screen.getByText(/3 saved videos are indexed and searchable/)).toBeInTheDocument();
+    expect(screen.queryByText('No saved videos ready')).not.toBeInTheDocument();
+
+    const callsBeforeRetry = vi.mocked(fetchLibraryGraph).mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: /^retry$/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(fetchLibraryGraph).mock.calls.length).toBe(callsBeforeRetry + 1);
+    });
+  });
+
+  it('notes the report/topic coverage cap when the library exceeds the graph limit', async () => {
+    render(
+      <LibraryKnowledgeGraph
+        activeView="videos"
+        latestVideos={latestVideos}
+        totalVideoCount={120}
+        onIndexMore={() => undefined}
+      />,
+    );
+
+    expect(
+      await screen.findByText(/Reports and topics cover your 50 most recent videos/),
+    ).toBeInTheDocument();
   });
 
   it('renders topic cards with timestamp snippets', async () => {

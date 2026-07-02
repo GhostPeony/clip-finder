@@ -723,10 +723,21 @@ def test_mcp_get_video_context_enforces_structured_content_budget(monkeypatch):
 
 
 def test_mcp_get_transcript_window_returns_bounded_timestamp_slice(monkeypatch):
-    from backend import mcp_adapter
+    from backend import mcp_adapter, server
 
-    def fake_video_context(supabase, user_id, video_id, project_id=None, project_slug=None):
+    window_calls = []
+
+    def fake_video_context(
+        supabase,
+        user_id,
+        video_id,
+        project_id=None,
+        project_slug=None,
+        start_seconds=None,
+        end_seconds=None,
+    ):
         del supabase, user_id, project_id, project_slug
+        window_calls.append((start_seconds, end_seconds))
         return {
             "video": {"videoId": video_id, "title": "Dwarkesh clip"},
             "projectScope": {"scope": "project", "projectId": "project-1"},
@@ -759,6 +770,7 @@ def test_mcp_get_transcript_window_returns_bounded_timestamp_slice(monkeypatch):
 
     supabase = Supabase()
     monkeypatch.setattr(mcp_adapter, "get_video_context", fake_video_context)
+    monkeypatch.setattr(server, "resolve_search_execution", lambda *args: (None, None, False))
     client = _client(monkeypatch, supabase)
 
     response = client.post(
@@ -786,6 +798,8 @@ def test_mcp_get_transcript_window_returns_bounded_timestamp_slice(monkeypatch):
     assert [line["id"] for line in structured["transcriptLines"]] == ["line-2", "line-3"]
     assert [chunk["id"] for chunk in structured["transcriptChunks"]] == ["chunk-1"]
     assert structured["next_mcp_call"]["name"] == "search_video_moments"
+    # The window is pushed down to the context query for SQL-side filtering.
+    assert window_calls == [(140, 260)]
 
 
 def test_mcp_resources_read_returns_context_categories(monkeypatch):
@@ -3051,6 +3065,7 @@ def test_mcp_search_transcript_text_uses_keyword_runner_without_embedding_spend(
         }
 
     monkeypatch.setattr(server, "search_transcript_text", fake_search_transcript_text)
+    monkeypatch.setattr(server, "resolve_search_execution", lambda *args: (None, None, False))
     client = _client(monkeypatch, Supabase())
 
     response = client.post(
@@ -3180,3 +3195,235 @@ def test_mcp_invalid_json_returns_parse_error(monkeypatch):
     assert response.status_code == 200
     error = response.json()["error"]
     assert error["code"] == -32700
+
+
+def test_mcp_internal_errors_return_reference_instead_of_exception_text(monkeypatch):
+    import re
+
+    from backend import mcp_adapter
+
+    def exploding_categories(supabase, user_id, limit):
+        raise RuntimeError("postgrest exploded at db-internal.supabase.co:5432")
+
+    supabase = Supabase()
+    monkeypatch.setattr(mcp_adapter, "list_context_categories", exploding_categories)
+    client = _client(monkeypatch, supabase)
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 300,
+            "method": "resources/read",
+            "params": {"uri": "context://categories"},
+        },
+    )
+
+    assert response.status_code == 200
+    error = response.json()["error"]
+    assert error["code"] == -32603
+    assert re.fullmatch(r"Internal error \(ref [0-9a-f]{8}\)", error["message"])
+    assert "db-internal" not in error["message"]
+    assert "postgrest" not in error["message"]
+
+
+def test_mcp_search_video_moments_sanitizes_unexpected_search_errors(monkeypatch):
+    import re
+
+    from backend import server
+
+    def exploding_search(*args, **kwargs):
+        raise RuntimeError("connection refused by db-internal.supabase.co:5432")
+
+    monkeypatch.setattr(server, "search_for_user", exploding_search)
+    client = _client(monkeypatch, Supabase())
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 301,
+            "method": "tools/call",
+            "params": {
+                "name": "search_video_moments",
+                "arguments": {"query": "reward models"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    error = response.json()["error"]
+    assert error["code"] == -32000
+    assert re.fullmatch(r"Search failed \(ref [0-9a-f]{8}\)", error["message"])
+    assert "db-internal" not in error["message"]
+
+
+def test_mcp_search_video_moments_passes_quota_message_through(monkeypatch):
+    from fastapi import HTTPException
+
+    from backend import server
+
+    def quota_limited_search(*args, **kwargs):
+        raise HTTPException(
+            status_code=429,
+            detail="Free monthly search limit reached. Upgrade to unlock more hosted searches.",
+        )
+
+    monkeypatch.setattr(server, "search_for_user", quota_limited_search)
+    client = _client(monkeypatch, Supabase())
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 302,
+            "method": "tools/call",
+            "params": {
+                "name": "search_video_moments",
+                "arguments": {"query": "reward models"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    error = response.json()["error"]
+    assert error["code"] == -32000
+    assert "Free monthly search limit reached" in error["message"]
+    assert "ref " not in error["message"]
+
+
+def test_mcp_search_transcript_text_passes_quota_message_through(monkeypatch):
+    from fastapi import HTTPException
+
+    from backend import server
+
+    def quota_limited_resolve(user_id, limit, x_api_key=None):
+        raise HTTPException(
+            status_code=429,
+            detail="Free monthly search limit reached. Upgrade to unlock more hosted searches.",
+        )
+
+    monkeypatch.setattr(server, "resolve_search_execution", quota_limited_resolve)
+    monkeypatch.setattr(
+        server,
+        "search_transcript_text",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("search ran over quota")),
+    )
+    client = _client(monkeypatch, Supabase())
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 303,
+            "method": "tools/call",
+            "params": {
+                "name": "search_transcript_text",
+                "arguments": {"query": "open source robotics"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    error = response.json()["error"]
+    assert error["code"] == -32000
+    assert "Free monthly search limit reached" in error["message"]
+
+
+def test_mcp_search_transcript_text_increments_hosted_usage(monkeypatch):
+    from backend import server
+
+    usage_calls = []
+    fake_db = object()
+    monkeypatch.setattr(
+        server,
+        "resolve_search_execution",
+        lambda user_id, limit, x_api_key=None: (fake_db, None, False),
+    )
+    monkeypatch.setattr(
+        server,
+        "increment_search_usage",
+        lambda supabase, user_id, used_own_key, limit: usage_calls.append(
+            (supabase, user_id, used_own_key, limit)
+        ),
+    )
+    monkeypatch.setattr(
+        server,
+        "search_transcript_text",
+        lambda *args, **kwargs: {"retrievalMode": "keyword", "relevantClips": []},
+    )
+    client = _client(monkeypatch, Supabase())
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 304,
+            "method": "tools/call",
+            "params": {
+                "name": "search_transcript_text",
+                "arguments": {"query": "open source robotics", "limit": 5},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert "result" in response.json()
+    assert usage_calls == [(fake_db, "local", False, 5)]
+
+
+def test_mcp_get_transcript_window_passes_quota_message_through(monkeypatch):
+    from fastapi import HTTPException
+
+    from backend import mcp_adapter, server
+
+    def quota_limited_resolve(user_id, limit, x_api_key=None):
+        raise HTTPException(
+            status_code=429,
+            detail="Free monthly search limit reached. Upgrade to unlock more hosted searches.",
+        )
+
+    monkeypatch.setattr(server, "resolve_search_execution", quota_limited_resolve)
+    monkeypatch.setattr(
+        mcp_adapter,
+        "get_video_context",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("window read ran over quota")),
+    )
+    client = _client(monkeypatch, Supabase())
+
+    response = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 305,
+            "method": "tools/call",
+            "params": {
+                "name": "get_transcript_window",
+                "arguments": {
+                    "youtube_video_id": "20p5-kQXF_Q",
+                    "start_seconds": 140,
+                    "end_seconds": 260,
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    error = response.json()["error"]
+    assert error["code"] == -32000
+    assert "Free monthly search limit reached" in error["message"]
+
+
+def test_mcp_get_transcript_window_skips_quota_gate_when_not_configured(monkeypatch):
+    from backend import mcp_adapter
+
+    monkeypatch.setattr(mcp_adapter, "get_video_context", lambda *args, **kwargs: None)
+
+    payload = mcp_adapter._get_transcript_window_tool(
+        "supabase-ignored",
+        "user-1",
+        {"youtube_video_id": "yt-x", "start_seconds": 0, "end_seconds": 60},
+        {},
+    )
+
+    assert payload["structuredContent"]["found"] is False

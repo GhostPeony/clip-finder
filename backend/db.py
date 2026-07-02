@@ -143,7 +143,7 @@ def _get_user_from_jwt_secret(token: str) -> dict:
             token, SUPABASE_JWT_SECRET, algorithms=["HS256"], audience="authenticated"
         )
     except JWTError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}") from e
+        raise HTTPException(status_code=401, detail="Invalid token") from e
 
 
 async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:

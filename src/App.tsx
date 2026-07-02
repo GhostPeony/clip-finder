@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { SearchState, VideoClip, AppMode } from './types';
 import { fetchAppConfig } from './services/api';
-import { groupClipsByVideo } from './lib/clips';
-import { AnswerSection } from './components/AnswerSection';
-import { VideoPlayer } from './components/VideoPlayer';
 import { LibraryView } from './components/LibraryView';
 import { IngestionJobsView } from './components/IngestionJobsView';
 import { SettingsModal } from './components/SettingsModal';
@@ -13,19 +10,14 @@ import { Toast, useToast } from './components/Toast';
 import { LandingPage } from './components/LandingPage';
 import { ProductDashboard } from './components/ProductDashboard';
 import { McpAuthorizePage } from './components/McpAuthorizePage';
+import { AboutPage } from './components/AboutPage';
+import { ContactPage } from './components/ContactPage';
+import { SearchResultsView } from './components/SearchResultsView';
 import { BrandLogo } from './components/BrandLogo';
 import { SocialLinks } from './components/SocialLinks';
 import { useAuth } from './contexts/AuthContext';
 import { isSupabaseAuth, StorageMode } from './config';
-import {
-  CONTACT_EMAIL,
-  GHOST_PEONY_FOOTER_LINE,
-  GHOST_PEONY_GITHUB_URL,
-  GHOST_PEONY_NAME,
-  GHOST_PEONY_URL,
-  PRODUCT_DOMAIN,
-  PRODUCT_NAME,
-} from './brand';
+import { GHOST_PEONY_FOOTER_LINE, GHOST_PEONY_URL, PRODUCT_NAME } from './brand';
 
 const App: React.FC = () => {
   const { user, loading: authLoading, signOut, connectYouTube } = useAuth();
@@ -355,338 +347,22 @@ const App: React.FC = () => {
             <IngestionJobsView />
           </div>
         ) : mode === 'about' ? (
-          <div className="py-8 max-w-2xl mx-auto">
-            <button
-              onClick={() => setMode('unified')}
-              className="link-quiet mb-6 flex items-center gap-1 text-sm"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M15 19l-7-7 7-7"
-                />
-              </svg>
-              Back
-            </button>
-            <div className="card p-8">
-              <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <h1 className="font-serif text-4xl font-medium text-ink">About {PRODUCT_NAME}</h1>
-                <SocialLinks compact />
-              </div>
-              <div className="space-y-4 text-sm leading-7 text-bark">
-                <p>
-                  {PRODUCT_NAME} turns saved YouTube videos into a searchable library with
-                  timestamped clips, transcripts, and notes.
-                </p>
-                <p>
-                  Built for people who learn from video and want useful moments to be easy to find
-                  again: researchers, builders, writers, creators, students, and teams.
-                </p>
-                <h2 className="pt-4 font-serif text-2xl font-medium text-ink">
-                  Why {PRODUCT_NAME}?
-                </h2>
-                <ul className="list-disc list-inside space-y-2">
-                  <li>
-                    <strong>Semantic search</strong> - Find by meaning, not just keywords
-                  </li>
-                  <li>
-                    <strong>Timestamped clips</strong> - Open the exact moment behind an answer
-                  </li>
-                  <li>
-                    <strong>Capture from YouTube</strong> - Save videos to linked playlists and move
-                    them into your library
-                  </li>
-                  <li>
-                    <strong>Full channel support</strong> - Index entire channels, playlists, or
-                    individual videos
-                  </li>
-                </ul>
-                <h2 className="pt-4 font-serif text-2xl font-medium text-ink">How it works</h2>
-                <ol className="list-decimal list-inside space-y-2">
-                  <li>Paste any YouTube URL (video, playlist, or channel)</li>
-                  <li>Memexai indexes the available captions and timestamps</li>
-                  <li>Your searches return relevant clips from your saved sources</li>
-                  <li>You can open, copy, or revisit the exact YouTube moment</li>
-                </ol>
-              </div>
-            </div>
-          </div>
+          <AboutPage onBack={() => setMode('unified')} />
         ) : mode === 'contact' ? (
-          <div className="py-8 max-w-2xl mx-auto">
-            <button
-              onClick={() => setMode('unified')}
-              className="link-quiet mb-6 flex items-center gap-1 text-sm"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M15 19l-7-7 7-7"
-                />
-              </svg>
-              Back
-            </button>
-            <div className="card p-8">
-              <h1 className="mb-4 font-serif text-4xl font-medium text-ink">Contact</h1>
-              <div className="space-y-4 text-sm leading-7 text-bark">
-                <p>Have questions, feedback, or found a bug? We'd love to hear from you.</p>
-                <div className="space-y-3 rounded-xl bg-cream p-5">
-                  <a
-                    href={`mailto:${CONTACT_EMAIL}`}
-                    className="block font-semibold text-violet-deep underline decoration-2 underline-offset-4"
-                  >
-                    {CONTACT_EMAIL}
-                  </a>
-                  <a
-                    href={GHOST_PEONY_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block font-semibold text-violet-deep underline decoration-2 underline-offset-4"
-                  >
-                    ghostpeony.com
-                  </a>
-                  <a
-                    href={GHOST_PEONY_GITHUB_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block font-semibold text-violet-deep underline decoration-2 underline-offset-4"
-                  >
-                    github.com/GhostPeony
-                  </a>
-                  <SocialLinks className="pt-2" />
-                </div>
-                <p className="pt-2">
-                  {PRODUCT_NAME} is a {GHOST_PEONY_NAME} product for turning YouTube videos into a
-                  searchable saved-video library. The production home is {PRODUCT_DOMAIN}.
-                </p>
-              </div>
-            </div>
-          </div>
+          <ContactPage onBack={() => setMode('unified')} />
         ) : (
-          /* Search Results View */
-          <div>
-            {/* Back to search button */}
-            <div className="mb-6">
-              <button
-                onClick={() => {
-                  setSearchState({ status: 'idle', query: '', answer: '', relevantClips: [] });
-                  setActiveClip(null);
-                  setMode('unified');
-                }}
-                className="link-quiet flex items-center gap-1 text-sm"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M15 19l-7-7 7-7"
-                  />
-                </svg>
-                New Search
-              </button>
-            </div>
-
-            {/* Zero-results state */}
-            {searchState.status === 'complete' && searchState.relevantClips.length === 0 && (
-              <div className="card mx-auto max-w-xl p-8 text-center">
-                <h2 className="font-serif text-3xl font-medium text-ink">No moments found</h2>
-                <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-bark">
-                  Nothing in your library matched that description. Try different wording, or index
-                  more videos to widen the search.
-                </p>
-                <button onClick={() => setMode('unified')} className="btn btn-primary mt-6">
-                  Try another search
-                </button>
-              </div>
-            )}
-
-            {/* Results Area - YouTube-style layout */}
-            {searchState.status !== 'idle' &&
-              !searchState.error &&
-              searchState.relevantClips.length > 0 && (
-                <div className="flex flex-col-reverse gap-6 md:flex-row">
-                  {/* Sources grouped by video: sidebar on desktop, strip below player on mobile */}
-                  <div className="w-full flex-shrink-0 md:w-56">
-                    <div className="md:sticky md:top-20">
-                      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
-                        Clips
-                      </h3>
-                      <div className="flex gap-3 overflow-x-auto pb-2 md:block md:space-y-3 md:overflow-visible md:pb-0">
-                        {groupClipsByVideo(searchState.relevantClips).map((group) => (
-                          <div
-                            key={group.videoId}
-                            className="card w-56 flex-shrink-0 overflow-hidden p-2 md:w-auto"
-                          >
-                            <button
-                              onClick={() => handleCitationClick(group.clips[0])}
-                              className="block w-full text-left"
-                            >
-                              {group.thumbnailUrl && (
-                                <img
-                                  src={group.thumbnailUrl}
-                                  className="h-auto w-full rounded-lg"
-                                  alt=""
-                                />
-                              )}
-                              <p className="mt-2 line-clamp-2 text-xs font-semibold text-ink">
-                                {group.title}
-                              </p>
-                            </button>
-                            <div className="mt-1.5 flex flex-wrap gap-1.5">
-                              {group.clips.map((clip) => (
-                                <button
-                                  key={clip.id}
-                                  onClick={() => handleCitationClick(clip)}
-                                  className={`rounded-full px-2 py-0.5 font-mono text-xs font-medium transition-colors ${
-                                    activeClip?.id === clip.id
-                                      ? 'bg-rose-deep text-cream'
-                                      : 'bg-petal/60 text-rose-deep hover:bg-petal'
-                                  }`}
-                                >
-                                  {formatTime(clip.startSeconds)}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Main Content: Answer + Video + Transcript */}
-                  <div className="flex-1 max-w-4xl">
-                    {/* Cited answer */}
-                    {searchState.answer && (
-                      <div className="mb-5">
-                        <AnswerSection
-                          answer={searchState.answer}
-                          clips={searchState.relevantClips}
-                          onCitationClick={handleCitationClick}
-                        />
-                      </div>
-                    )}
-                    {/* Video Player */}
-                    <div>
-                      {activeClip ? (
-                        <div className="card overflow-hidden">
-                          <VideoPlayer
-                            key={activeClip.id}
-                            videoId={activeClip.videoId}
-                            startSeconds={activeClip.startSeconds}
-                            autoplay={true}
-                          />
-                          <div className="p-5">
-                            <h3 className="font-serif text-2xl font-medium text-ink">
-                              {activeClip.title}
-                            </h3>
-                            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-                              <span className="text-sm text-bark">{activeClip.channelName}</span>
-                              <span className="text-muted">-</span>
-                              <span className="font-mono text-sm font-medium text-rose-deep">
-                                {formatTime(activeClip.startSeconds)}
-                              </span>
-                              <span className="text-muted">-</span>
-                              <a
-                                href={`https://youtube.com/watch?v=${activeClip.videoId}&t=${activeClip.startSeconds}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-sm font-medium text-muted hover:text-violet-deep"
-                              >
-                                Watch on YouTube
-                              </a>
-                              <span className="text-muted">-</span>
-                              <button
-                                onClick={() => copyClipLink(activeClip)}
-                                className="flex items-center gap-1 text-sm font-medium text-muted hover:text-rose-deep"
-                                title="Copy shareable link"
-                              >
-                                <svg
-                                  className="w-4 h-4"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"
-                                  />
-                                </svg>
-                                Copy Link
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="card flex aspect-video items-center justify-center text-bark">
-                          <div className="text-center">
-                            <svg
-                              className="mx-auto mb-2 h-12 w-12 text-muted"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={1.5}
-                                d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
-                              />
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={1.5}
-                                d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                              />
-                            </svg>
-                            <p className="text-sm">Select a source to play</p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Transcript below video */}
-                    {activeClip && (
-                      <div className="card mt-5 p-6">
-                        <div className="flex items-center gap-2 mb-3">
-                          <svg
-                            className="h-5 w-5 text-violet-deep"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                            />
-                          </svg>
-                          <h2 className="font-serif text-2xl font-medium text-ink">Transcript</h2>
-                          <span className="font-mono text-xs font-medium text-muted">
-                            {formatTime(activeClip.startSeconds)} -{' '}
-                            {formatTime(activeClip.endSeconds)}
-                          </span>
-                        </div>
-                        <p className="whitespace-pre-wrap text-sm leading-7 text-bark">
-                          {activeClip.content}
-                        </p>
-                        {activeClip.relevanceReason && (
-                          <p className="mt-3 border-l-4 border-rose pl-3 text-xs font-medium text-muted">
-                            {activeClip.relevanceReason}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-          </div>
+          <SearchResultsView
+            searchState={searchState}
+            activeClip={activeClip}
+            onCitationClick={handleCitationClick}
+            onCopyClipLink={(clip) => void copyClipLink(clip)}
+            onNewSearch={() => {
+              setSearchState({ status: 'idle', query: '', answer: '', relevantClips: [] });
+              setActiveClip(null);
+              setMode('unified');
+            }}
+            onTryAnotherSearch={() => setMode('unified')}
+          />
         )}
       </main>
 
@@ -723,12 +399,6 @@ const App: React.FC = () => {
       <Toast message={toast.message} isVisible={toast.isVisible} onClose={hideToast} />
     </div>
   );
-};
-
-const formatTime = (seconds: number): string => {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${s.toString().padStart(2, '0')}`;
 };
 
 export default App;

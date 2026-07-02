@@ -1,5 +1,37 @@
 # Production Hosted Setup
 
+# Hardening And Polish Pass (July 2026)
+
+- [x] Backfill migration 025 into `backend/supabase/migrations` and add a migration-dir parity test.
+- [x] Move video-scoped search filtering into SQL (`match_youtube_video_id` on search RPCs) with a graceful legacy fallback, and consolidate the five copy-pasted access gates into `accessible_video_ids` (migration 027).
+- [x] Rewrite `search_chunks_hybrid`/`search_chunks_keyword` to use HNSW/GIN index paths with late `ts_headline` (migration 027).
+- [x] Add chunk idempotency: dedupe + unique index on `chunks(video_id, start_seconds)` (migration 028) and upsert-based chunk writes with insert fallback.
+- [x] Add partial-ingest repair on the already-indexed path (chunk count 0 → re-embed without charging usage).
+- [x] Add shared Gemini embedding factory + bounded retry/backoff (`backend/gemini_clients.py`) wired into ingest and knowledge extraction.
+- [x] Add similarity floor (default off) + soft per-video clip cap to `select_clips`, validated against the retrieval eval gates.
+- [x] Merge the duplicated channel/playlist ingest loops with per-video channel-name resolution.
+- [x] Add caption hygiene: bracketed-noise stripping, speech-gap chunk boundaries, minimum chunk words.
+- [x] Validate `EMBEDDING_DIMENSIONS` against the VECTOR(768) schema at startup.
+- [x] Sanitize MCP/HTTP error messages with correlation refs; keep intentional validation/quota messages.
+- [x] Make OAuth code consumption atomic (consume-first conditional update).
+- [x] Link OAuth-minted MCP tokens to their registered client (migration 030) and name them after the client.
+- [x] Default new dashboard MCP tokens to 90-day expiry and show expiry in Settings.
+- [x] Return `invalid_scope` instead of silently falling back to default scopes.
+- [ ] Show the registered client name on the MCP consent screen and default optional write scopes to unchecked.
+- [x] Gate MCP keyword search and transcript windows on the search quota; push window predicates into the DB query.
+- [x] Debounce MCP token `last_used_at` writes to once per minute.
+- [x] Extract shared `src/lib/jobs.ts` + `src/lib/time.ts` and kill the triplicated status/format helpers.
+- [x] Add `Panel`/`SelectableTile`/`Notice`/`ConfirmDialog`/`PanelError` primitives and normalize panel scale/padding drift.
+- [x] Make dashboard fetch failures render honest per-panel error states with retry instead of empty-account copy.
+- [x] Gate dashboard/jobs polling on tab visibility and active jobs; poll only jobs+usage on the dashboard interval.
+- [x] Replace remaining native `confirm()` dialogs with app-rendered confirmation modals.
+- [x] Reuse the cited-answer experience (citation chips) in library search results.
+- [x] Reconcile the library empty state with total video count and disclose the 50-video graph cap.
+- [x] Fix UsageBar progressbar semantics, GuideModal focus management, and the unlabeled video-assignment select.
+- [ ] Split `LibraryKnowledgeGraph.tsx`, `LibraryView.tsx`, and `App.tsx` along existing seams (pure moves).
+- [ ] Derive the Cloudflare container instance id from the git SHA at deploy time (`scripts/deploy-api.mjs`).
+- [ ] Refresh CLAUDE.md: Supabase-only storage, corrected dev-run env, deploy notes, new frontend conventions.
+
 # MCP Known-Video Retrieval Hardening
 
 - [x] Add known-video filters to MCP transcript/moment search so "this video" questions do not drift across a project.

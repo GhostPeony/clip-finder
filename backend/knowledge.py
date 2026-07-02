@@ -12,17 +12,27 @@ from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmb
 try:
     from .brain_sync import queue_brain_sync_event
     from .category_taxonomy import CATEGORY_FACETS
-    from .config import get_embedding_dimensions, get_embedding_model, get_llm_model
+    from .config import get_llm_model
     from .digest_depth import (
         DEFAULT_DIGEST_DEPTH,
         get_digest_depth_profile,
         normalize_digest_depth,
     )
+    from .gemini_clients import (
+        RETRIEVAL_DOCUMENT_TASK,
+        call_with_gemini_retry,
+        get_embeddings_client,
+    )
 except ImportError:
     from brain_sync import queue_brain_sync_event
     from category_taxonomy import CATEGORY_FACETS
-    from config import get_embedding_dimensions, get_embedding_model, get_llm_model
+    from config import get_llm_model
     from digest_depth import DEFAULT_DIGEST_DEPTH, get_digest_depth_profile, normalize_digest_depth
+    from gemini_clients import (
+        RETRIEVAL_DOCUMENT_TASK,
+        call_with_gemini_retry,
+        get_embeddings_client,
+    )
 
 MAX_TRANSCRIPT_CHARS = 18_000
 MAX_CONCEPTS = 14
@@ -393,7 +403,11 @@ def embed_source_knowledge_index_rows(
         row["embedding"] = None
     try:
         embeddings = _get_source_index_embeddings(api_key)
-        vectors = embeddings.embed_documents([_source_index_embedding_text(row) for row in rows])
+        texts = [_source_index_embedding_text(row) for row in rows]
+        vectors = call_with_gemini_retry(
+            lambda: embeddings.embed_documents(texts),
+            description="source knowledge index embedding",
+        )
     except Exception as exc:  # noqa: BLE001 - keyword search must still work.
         print(f"[KNOWLEDGE_INDEX] Embedding source knowledge failed; keyword rows kept: {exc}")
         for row in rows:
@@ -410,26 +424,8 @@ def embed_source_knowledge_index_rows(
     return rows
 
 
-_source_index_embeddings_cache: dict[str, GoogleGenerativeAIEmbeddings] = {}
-
-
 def _get_source_index_embeddings(api_key: str | None = None) -> GoogleGenerativeAIEmbeddings:
-    key_to_use = api_key or os.getenv("GEMINI_API_KEY")
-    if not key_to_use or key_to_use == "PLACEHOLDER_API_KEY":
-        raise ValueError(
-            "No API key provided. Set GEMINI_API_KEY in .env.local or provide via header."
-        )
-    if key_to_use in _source_index_embeddings_cache:
-        return _source_index_embeddings_cache[key_to_use]
-
-    instance = GoogleGenerativeAIEmbeddings(
-        model=get_embedding_model(),
-        google_api_key=key_to_use,
-        task_type="RETRIEVAL_DOCUMENT",
-        output_dimensionality=get_embedding_dimensions(),
-    )
-    _source_index_embeddings_cache[key_to_use] = instance
-    return instance
+    return get_embeddings_client(api_key, RETRIEVAL_DOCUMENT_TASK)
 
 
 def _source_index_row(
@@ -619,7 +615,11 @@ def extract_source_knowledge(
 
     try:
         prompt = _build_extraction_prompt(title, channel_name, chunks, normalized_digest_depth)
-        response = _get_llm(api_key, int(profile["max_output_tokens"])).invoke(prompt)
+        llm = _get_llm(api_key, int(profile["max_output_tokens"]))
+        response = call_with_gemini_retry(
+            lambda: llm.invoke(prompt),
+            description=f"source knowledge extraction for {youtube_video_id}",
+        )
         raw_text = _content_to_text(response.content)
         payload = _parse_json_object(raw_text)
     except Exception as exc:  # noqa: BLE001 - knowledge extraction must not break ingestion.

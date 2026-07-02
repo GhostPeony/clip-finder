@@ -93,6 +93,23 @@ def get_embedding_dimensions() -> int:
     return dimensions
 
 
+def validate_embedding_dimensions() -> int:
+    """Fail fast when EMBEDDING_DIMENSIONS diverges from the database schema.
+
+    The Supabase schema hard-codes VECTOR(768) columns for chunk and
+    source-knowledge embeddings. Called from server startup rather than
+    get_embedding_dimensions() because that helper has import-time callers.
+    """
+    dimensions = get_embedding_dimensions()
+    if dimensions != DEFAULT_EMBEDDING_DIMENSIONS:
+        raise ValueError(
+            f"EMBEDDING_DIMENSIONS={dimensions} does not match the Supabase schema's "
+            f"VECTOR({DEFAULT_EMBEDDING_DIMENSIONS}) embedding columns. Migrate the "
+            "schema before changing embedding dimensions."
+        )
+    return dimensions
+
+
 def get_llm_model() -> str:
     return os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL).strip()
 

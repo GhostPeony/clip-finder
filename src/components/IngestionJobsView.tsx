@@ -1,93 +1,57 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { IngestionJob } from '../types';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { clearIngestionJobHistory, fetchIngestionJobs } from '../services/api';
+import { isActiveJob, isClearableJob, jobOutcomeText, jobStatusChipClass } from '../lib/jobs';
+import { formatDateTimeLabel } from '../lib/time';
+import { usePolling } from '../lib/usePolling';
+import { IngestionJob } from '../types';
 import { BrandLoader } from './BrandLoader';
-
-const statusClass: Record<IngestionJob['status'], string> = {
-  queued: 'chip chip-violet',
-  running: 'chip chip-teal',
-  completed: 'chip chip-leaf',
-  partial: 'chip chip-sun',
-  failed: 'chip',
-  cancelled: 'chip chip-violet',
-};
-
-const formatDate = (value?: string) => {
-  if (!value) return '';
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(value));
-};
-
-const getOutcomeText = (job: IngestionJob) => {
-  if (job.status === 'partial') {
-    return `Partial import: ${job.indexed_video_count} indexed, ${job.skipped_video_count} skipped, ${job.failed_video_count} failed`;
-  }
-  if (job.status === 'failed') {
-    return job.error || job.last_message || 'Import failed';
-  }
-  if (job.status === 'completed') {
-    return `${job.indexed_video_count} video${job.indexed_video_count === 1 ? '' : 's'} indexed`;
-  }
-  if (job.status === 'running') {
-    return job.last_message || 'Import running';
-  }
-  return job.last_message || 'Waiting to start';
-};
+import { ConfirmDialog } from './ui/ConfirmDialog';
+import { Notice, NoticeState } from './ui/Notice';
 
 export const IngestionJobsView: React.FC = () => {
   const [jobs, setJobs] = useState<IngestionJob[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [clearing, setClearing] = useState(false);
-  const [notice, setNotice] = useState('');
+  const [clearDialogOpen, setClearDialogOpen] = useState(false);
+  const [notice, setNotice] = useState<NoticeState | null>(null);
 
-  const clearableJobs = useMemo(
-    () =>
-      jobs.filter((job) => ['completed', 'failed', 'partial', 'cancelled'].includes(job.status)),
-    [jobs],
-  );
+  const clearableJobs = useMemo(() => jobs.filter(isClearableJob), [jobs]);
+  const hasActiveJobs = useMemo(() => jobs.some(isActiveJob), [jobs]);
 
-  const loadJobs = async () => {
-    const nextJobs = await fetchIngestionJobs();
-    setJobs(nextJobs);
-    setLoading(false);
-  };
+  const loadJobs = useCallback(async () => {
+    try {
+      const nextJobs = await fetchIngestionJobs();
+      setJobs(nextJobs);
+      setLoadFailed(false);
+    } catch {
+      setLoadFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let active = true;
+    void loadJobs();
+  }, [loadJobs]);
 
-    const loadActiveJobs = async () => {
-      const nextJobs = await fetchIngestionJobs();
-      if (!active) return;
-      setJobs(nextJobs);
-      setLoading(false);
-    };
-
-    loadActiveJobs();
-    const interval = window.setInterval(loadActiveJobs, 10000);
-    return () => {
-      active = false;
-      window.clearInterval(interval);
-    };
-  }, []);
+  // Refresh only while imports are actually running and the tab is visible.
+  usePolling(loadJobs, 10000, { enabled: hasActiveJobs });
 
   const handleClearHistory = async () => {
     if (clearableJobs.length === 0) return;
-    if (!confirm('Clear completed and failed import history? Active imports will stay visible.')) {
-      return;
-    }
-
+    setClearDialogOpen(false);
     setClearing(true);
-    setNotice('');
+    setNotice(null);
     const deletedCount = await clearIngestionJobHistory();
     await loadJobs();
     setNotice(
       deletedCount > 0
-        ? `Cleared ${deletedCount} import${deletedCount === 1 ? '' : 's'}.`
-        : 'No settled imports were cleared.',
+        ? {
+            message: `Cleared ${deletedCount} import${deletedCount === 1 ? '' : 's'}.`,
+            tone: 'success',
+          }
+        : { message: 'No settled imports were cleared.', tone: 'info' },
     );
     setClearing(false);
   };
@@ -103,7 +67,7 @@ export const IngestionJobsView: React.FC = () => {
           {clearableJobs.length > 0 ? (
             <button
               type="button"
-              onClick={() => void handleClearHistory()}
+              onClick={() => setClearDialogOpen(true)}
               disabled={clearing}
               className="btn btn-secondary self-start sm:self-auto disabled:opacity-50"
             >
@@ -112,9 +76,9 @@ export const IngestionJobsView: React.FC = () => {
           ) : null}
         </div>
         {notice ? (
-          <p className="mt-4 rounded-lg bg-mint/40 px-3 py-2 text-xs font-medium text-leaf-deep">
-            {notice}
-          </p>
+          <Notice tone={notice.tone} className="mt-4">
+            {notice.message}
+          </Notice>
         ) : null}
       </div>
 
@@ -124,6 +88,16 @@ export const IngestionJobsView: React.FC = () => {
             label="Loading recent imports"
             detail="Checking playlist syncs and video indexing runs."
           />
+        ) : loadFailed ? (
+          <div className="p-8 text-center">
+            <h2 className="font-serif text-2xl font-medium text-ink">Imports could not load</h2>
+            <p className="mt-2 text-sm text-bark">
+              Your imports may still be running; retry in a moment.
+            </p>
+            <button type="button" onClick={() => void loadJobs()} className="btn btn-primary mt-5">
+              Retry
+            </button>
+          </div>
         ) : jobs.length === 0 ? (
           <div className="p-8 text-center">
             <h2 className="font-serif text-2xl font-medium text-ink">No indexing jobs yet</h2>
@@ -138,11 +112,13 @@ export const IngestionJobsView: React.FC = () => {
                 <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <div className="mb-1.5 flex min-w-0 flex-wrap items-center gap-2">
-                      <span className={statusClass[job.status]}>{job.status}</span>
+                      <span className={jobStatusChipClass[job.status]}>{job.status}</span>
                       <span className="text-xs font-medium uppercase tracking-wide text-muted">
                         {job.source_type}
                       </span>
-                      <span className="text-xs text-muted">{formatDate(job.created_at)}</span>
+                      <span className="text-xs text-muted">
+                        {formatDateTimeLabel(job.created_at)}
+                      </span>
                     </div>
                     <p className="truncate text-sm font-semibold text-ink">{job.source_url}</p>
                     <p
@@ -154,7 +130,7 @@ export const IngestionJobsView: React.FC = () => {
                             : 'text-muted'
                       }`}
                     >
-                      {getOutcomeText(job)}
+                      {jobOutcomeText(job)}
                     </p>
                     {job.last_message && (
                       <p className="mt-1 truncate text-xs text-muted">{job.last_message}</p>
@@ -192,6 +168,18 @@ export const IngestionJobsView: React.FC = () => {
           </div>
         )}
       </div>
+      {clearDialogOpen ? (
+        <ConfirmDialog
+          eyebrow="Imports"
+          title="Clear import history?"
+          body="Completed and failed imports will be removed from this list. Active imports stay visible."
+          confirmLabel="Clear history"
+          isSubmitting={clearing}
+          submittingLabel="Clearing..."
+          onCancel={() => setClearDialogOpen(false)}
+          onConfirm={() => void handleClearHistory()}
+        />
+      ) : null}
     </div>
   );
 };

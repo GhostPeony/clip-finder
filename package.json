@@ -28,7 +28,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "deploy:api": "wrangler deploy --config wrangler.api.toml --containers-rollout=immediate",
+    "deploy:api": "node scripts/deploy-api.mjs",
     "deploy:pages": "node scripts/deploy-pages.mjs",
     "preview": "vite preview",
     "screenshots": "node scripts/screenshots.mjs",

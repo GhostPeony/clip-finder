@@ -29,3 +29,20 @@ def test_video_retrieval_eval_passes_offline_baseline():
     result_by_id = {result["id"]: result for result in report["results"]}
     assert "b0iJZS9HgJA" in result_by_id["legacy_china_open_source_ai"]["topVideoIds"]
     assert "uCKhOmth2ms" in result_by_id["sierra_latency_cost_tradeoffs"]["topVideoIds"]
+
+
+def test_video_retrieval_eval_passes_gates_with_clip_selection_applied():
+    # Hard gate for the select_clips similarity floor + soft per-video cap:
+    # running retrieval through the shared clip selection must not regress
+    # the same recall/MRR/top-video thresholds as the raw ranking.
+    fixture = json.loads(Path(DEFAULT_FIXTURE).read_text(encoding="utf-8"))
+
+    report = evaluate_fixture(fixture, apply_clip_selection=True)
+
+    assert report["clipSelectionApplied"] is True
+    assert report["metrics"]["recallAt5"] >= 0.8
+    assert report["metrics"]["mrr"] >= 0.75
+    assert report["metrics"]["wrongTopVideoRate"] <= 0.25
+    result_by_id = {result["id"]: result for result in report["results"]}
+    assert "b0iJZS9HgJA" in result_by_id["legacy_china_open_source_ai"]["topVideoIds"]
+    assert "uCKhOmth2ms" in result_by_id["sierra_latency_cost_tradeoffs"]["topVideoIds"]

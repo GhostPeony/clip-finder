@@ -142,18 +142,30 @@ def exchange_authorization_code(supabase: Any, payload: dict) -> dict:
     redirect_uri = _required(payload, "redirect_uri")
     code_verifier = _required(payload, "code_verifier")
 
-    result = (
+    now = datetime.now(timezone.utc)
+    code_hash = _hash_value(code)
+    # Consume the code atomically before minting: the conditional update claims
+    # an unconsumed row exactly once, so concurrent exchanges cannot double-mint.
+    consumed = (
         supabase.table(CODE_TABLE)
-        .select("*")
-        .eq("code_hash", _hash_value(code))
-        .maybe_single()
+        .update({"consumed_at": now.isoformat()})
+        .eq("code_hash", code_hash)
+        .is_("consumed_at", "null")
         .execute()
     )
-    record = _first(result)
+    record = _first(consumed)
     if not record:
+        existing = _first(
+            supabase.table(CODE_TABLE)
+            .select("consumed_at")
+            .eq("code_hash", code_hash)
+            .maybe_single()
+            .execute()
+        )
+        if existing:
+            raise ValueError("Authorization code already consumed")
         raise ValueError("Invalid authorization code")
-    if record.get("consumed_at"):
-        raise ValueError("Authorization code already consumed")
+
     if _is_expired(record.get("expires_at")):
         raise ValueError("Authorization code expired")
     if record.get("client_id") != client_id:
@@ -165,18 +177,16 @@ def exchange_authorization_code(supabase: Any, payload: dict) -> dict:
     if expected_challenge != record.get("code_challenge"):
         raise ValueError("Invalid code_verifier")
 
-    now = datetime.now(timezone.utc)
+    client = get_oauth_client(supabase, client_id) or {}
     expires_at = now + timedelta(seconds=ACCESS_TOKEN_TTL_SECONDS)
     token = create_mcp_token(
         supabase,
         record["user_id"],
-        name="OAuth MCP client",
+        name=client.get("client_name") or "OAuth MCP client",
         scopes=record.get("scopes") or DEFAULT_MCP_SCOPES,
         expires_at=expires_at.isoformat(),
+        oauth_client_id=client_id,
     )
-    supabase.table(CODE_TABLE).update({"consumed_at": now.isoformat()}).eq(
-        "code_hash", record["code_hash"]
-    ).execute()
     supabase.table(CLIENT_TABLE).update({"last_used_at": now.isoformat()}).eq(
         "client_id", client_id
     ).execute()
@@ -240,10 +250,17 @@ def _clean_scopes(value: Any) -> list[str]:
     elif isinstance(value, list):
         requested = [str(scope) for scope in value]
     else:
-        requested = DEFAULT_MCP_SCOPES
+        requested = []
+    if not requested:
+        return list(DEFAULT_MCP_SCOPES)
     allowed = set(ALLOWED_MCP_SCOPES)
     cleaned = [scope for scope in requested if scope in allowed]
-    return cleaned or DEFAULT_MCP_SCOPES
+    if not cleaned:
+        raise ValueError(
+            "invalid_scope: none of the requested scopes are supported "
+            f"(supported: {' '.join(ALLOWED_MCP_SCOPES)})"
+        )
+    return cleaned
 
 
 def _required(params: dict, name: str) -> str:

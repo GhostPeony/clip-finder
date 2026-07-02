@@ -283,8 +283,15 @@ def get_video_context(
     youtube_video_id: str,
     project_id: str | None = None,
     project_slug: str | None = None,
+    start_seconds: int | None = None,
+    end_seconds: int | None = None,
 ) -> dict | None:
-    """Return source-derived context for a video if it belongs to the user's library."""
+    """Return source-derived context for a video if it belongs to the user's library.
+
+    When both start_seconds and end_seconds are provided, transcript lines and
+    chunks are filtered to the overlapping time window in SQL so bounded window
+    reads do not pull whole transcripts.
+    """
     project_scope = _resolve_optional_project_scope(supabase, user_id, project_id, project_slug)
     video = _select_video_for_user(supabase, user_id, youtube_video_id)
     if not video:
@@ -292,21 +299,29 @@ def get_video_context(
     if project_scope and video.get("id") not in set(project_scope.get("videoIds") or []):
         return None
 
+    apply_window = start_seconds is not None and end_seconds is not None
     video_id = video["id"]
-    transcript_lines = _rows(
+    transcript_lines_query = (
         supabase.table("transcript_lines")
         .select("id, content, start_seconds, end_seconds, source, language, metadata")
         .eq("video_id", video_id)
-        .order("start_seconds", desc=False)
-        .execute()
     )
-    transcript_chunks = _rows(
+    transcript_chunks_query = (
         supabase.table("chunks")
         .select("id, content, start_seconds, end_seconds")
         .eq("video_id", video_id)
-        .order("start_seconds", desc=False)
-        .execute()
     )
+    if apply_window:
+        # Overlap predicate mirroring mcp_adapter._items_overlapping_window:
+        # item.start < window.end AND item.end > window.start.
+        transcript_lines_query = transcript_lines_query.lt("start_seconds", end_seconds).gt(
+            "end_seconds", start_seconds
+        )
+        transcript_chunks_query = transcript_chunks_query.lt("start_seconds", end_seconds).gt(
+            "end_seconds", start_seconds
+        )
+    transcript_lines = _rows(transcript_lines_query.order("start_seconds", desc=False).execute())
+    transcript_chunks = _rows(transcript_chunks_query.order("start_seconds", desc=False).execute())
     concepts = _rows(
         supabase.table("source_concepts")
         .select("id, concept_type, name, summary, source_refs, metadata")

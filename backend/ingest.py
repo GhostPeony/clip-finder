@@ -22,8 +22,6 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 try:
     from .billing import resolve_user_entitlements
     from .config import (
-        get_embedding_dimensions,
-        get_embedding_model,
         get_free_indexed_transcript_seconds_total,
         get_free_indexed_videos_total,
         get_free_max_import_videos,
@@ -37,6 +35,11 @@ try:
         get_user_profile as get_db_user_profile,
     )
     from .digest_depth import DEFAULT_DIGEST_DEPTH, normalize_digest_depth
+    from .gemini_clients import (
+        RETRIEVAL_DOCUMENT_TASK,
+        call_with_gemini_retry,
+        get_embeddings_client,
+    )
     from .jobs import format_ingestion_error
     from .knowledge import (
         refresh_existing_video_source_knowledge,
@@ -54,8 +57,6 @@ try:
 except ImportError:
     from billing import resolve_user_entitlements
     from config import (
-        get_embedding_dimensions,
-        get_embedding_model,
         get_free_indexed_transcript_seconds_total,
         get_free_indexed_videos_total,
         get_free_max_import_videos,
@@ -69,6 +70,11 @@ except ImportError:
         get_user_profile as get_db_user_profile,
     )
     from digest_depth import DEFAULT_DIGEST_DEPTH, normalize_digest_depth
+    from gemini_clients import (
+        RETRIEVAL_DOCUMENT_TASK,
+        call_with_gemini_retry,
+        get_embeddings_client,
+    )
     from jobs import format_ingestion_error
     from knowledge import (
         refresh_existing_video_source_knowledge,
@@ -87,11 +93,6 @@ except ImportError:
 # Load environment variables
 env_path = os.path.join(os.path.dirname(__file__), "..", ".env.local")
 load_dotenv(env_path)
-
-EMBEDDING_MODEL = get_embedding_model()
-
-# Cache for embedding instances keyed by api_key
-_embeddings_cache: dict[str, GoogleGenerativeAIEmbeddings] = {}
 
 USER_VIDEO_ACCESS_SOURCES = frozenset(
     {"ingest", "channel", "playlist", "capture_sync", "shared_existing", "agent"}
@@ -176,23 +177,7 @@ def _index_quota_message(profile: dict, video_count: int, transcript_seconds: in
 
 def get_embeddings(api_key: Optional[str] = None) -> GoogleGenerativeAIEmbeddings:
     """Get cached embedding instance for the given API key."""
-    key_to_use = api_key or os.getenv("GEMINI_API_KEY")
-    if not key_to_use or key_to_use == "PLACEHOLDER_API_KEY":
-        raise ValueError(
-            "No API key provided. Set GEMINI_API_KEY in .env.local or provide via header."
-        )
-
-    if key_to_use in _embeddings_cache:
-        return _embeddings_cache[key_to_use]
-
-    instance = GoogleGenerativeAIEmbeddings(
-        model=EMBEDDING_MODEL,
-        google_api_key=key_to_use,
-        task_type="RETRIEVAL_DOCUMENT",
-        output_dimensionality=get_embedding_dimensions(),
-    )
-    _embeddings_cache[key_to_use] = instance
-    return instance
+    return get_embeddings_client(api_key, RETRIEVAL_DOCUMENT_TASK)
 
 
 def _extract_handle_from_url(channel_url: str) -> str:
@@ -446,6 +431,145 @@ def grant_user_video_access(
     return None
 
 
+def _upsert_chunk_rows(supabase, chunk_rows: list[dict], batch_size: int = 50) -> None:
+    """Write chunk rows idempotently, falling back to insert on unmigrated DBs.
+
+    Databases without migration 028's unique index reject the ON CONFLICT
+    clause with SQLSTATE 42P10; those batches fall back to plain inserts
+    (today's behavior).
+    """
+    for index in range(0, len(chunk_rows), batch_size):
+        batch = chunk_rows[index : index + batch_size]
+        try:
+            supabase.table("chunks").upsert(
+                batch,
+                on_conflict="video_id,start_seconds",
+            ).execute()
+        except Exception as exc:  # noqa: BLE001 - only the missing-index error falls back.
+            message = str(exc)
+            if "42P10" not in message and "no unique or exclusion constraint" not in message:
+                raise
+            print(
+                "[INGEST] chunks upsert unavailable (missing unique index); falling back to insert"
+            )
+            supabase.table("chunks").insert(batch).execute()
+
+
+def _embed_chunk_texts(
+    embeddings: GoogleGenerativeAIEmbeddings,
+    title: str,
+    chunks: list[dict],
+    video_id: str,
+) -> list[list[float]]:
+    """Embed transcript chunks with retry/backoff on transient Gemini errors."""
+    texts = [f"{title}\n\n{chunk['text']}" for chunk in chunks]
+    return call_with_gemini_retry(
+        lambda: embeddings.embed_documents(texts),
+        description=f"chunk embedding for {video_id}",
+    )
+
+
+def _build_chunk_rows(
+    db_video_id: str,
+    chunks: list[dict],
+    vectors: list[list[float]],
+) -> list[dict]:
+    return [
+        {
+            "video_id": db_video_id,
+            "content": chunk["text"],
+            "start_seconds": chunk["start_seconds"],
+            "end_seconds": chunk["end_seconds"],
+            "embedding": vector,
+        }
+        for chunk, vector in zip(chunks, vectors)
+    ]
+
+
+def _stored_chunk_count(supabase, video_db_id: str) -> int | None:
+    """Return a video's stored chunk count, or None when it cannot be determined."""
+    try:
+        result = supabase.rpc(
+            "count_chunks_for_videos",
+            {"video_ids": [str(video_db_id)]},
+        ).execute()
+        rows = _result_rows(result)
+        if rows or isinstance(_result_data(result), list):
+            for row in rows:
+                if str(row.get("video_id") or "") == str(video_db_id):
+                    try:
+                        return int(row.get("chunk_count", row.get("count", 0)) or 0)
+                    except (TypeError, ValueError):
+                        return 0
+            return 0
+    except Exception as exc:  # noqa: BLE001 - deployments may not have the bulk helper yet.
+        print(f"[INGEST] count_chunks_for_videos RPC unavailable, falling back to count: {exc}")
+
+    try:
+        count_result = (
+            supabase.table("chunks")
+            .select("id", count="exact")
+            .eq("video_id", video_db_id)
+            .execute()
+        )
+        if isinstance(getattr(count_result, "count", None), int):
+            return count_result.count
+        rows = getattr(count_result, "data", None)
+        if isinstance(rows, list):
+            return len(rows)
+    except Exception as exc:  # noqa: BLE001 - never guess a repair when counting fails.
+        print(f"[INGEST] Could not count chunks for video {video_db_id}: {exc}")
+    return None
+
+
+def repair_missing_video_chunks_if_needed(
+    supabase,
+    video: dict,
+    api_key: Optional[str] = None,
+) -> str | None:
+    """Restore transcript embeddings for an already-indexed video with zero chunks.
+
+    Detection is deliberately count == 0 only (the catastrophic partial-ingest
+    case); partially written batches self-heal through the chunk upsert on a
+    future re-index. Usage is never incremented — the user was already charged
+    for this video. Returns a user-visible message when a repair ran.
+    """
+    try:
+        video_db_id = video.get("id")
+        youtube_video_id = str(video.get("youtube_video_id") or video.get("videoId") or "")
+        if not video_db_id or not youtube_video_id:
+            return None
+        if _stored_chunk_count(supabase, video_db_id) != 0:
+            return None
+
+        print(f"[INGEST] Detected missing chunks for indexed video {youtube_video_id}; repairing")
+        transcript_result = fetch_transcript_chunks(youtube_video_id)
+        chunks = transcript_result.chunks
+        if not chunks:
+            reason = transcript_result.skip_reason or "transcript_fetch_error"
+            print(
+                f"[INGEST] Could not repair {youtube_video_id}: "
+                f"{describe_transcript_skip(reason, youtube_video_id)}"
+            )
+            return None
+
+        title = str(video.get("title") or youtube_video_id)
+        embeddings = get_embeddings(api_key)
+        vectors = _embed_chunk_texts(embeddings, title, chunks, youtube_video_id)
+        chunk_rows = _build_chunk_rows(video_db_id, chunks, vectors)
+        _upsert_chunk_rows(supabase, chunk_rows)
+
+        transcript_seconds = transcript_seconds_from_chunks(chunks)
+        supabase.table("videos").update({"transcript_seconds": transcript_seconds}).eq(
+            "id", video_db_id
+        ).execute()
+        video["transcript_seconds"] = transcript_seconds
+        return f"Repaired missing transcript embeddings ({len(chunk_rows)} clips restored)."
+    except Exception as exc:  # noqa: BLE001 - repair should not block library access.
+        print(f"[INGEST] Failed to repair missing chunks for {video.get('id')}: {exc}")
+    return None
+
+
 def index_video_to_pg(
     supabase,
     video_id: str,
@@ -465,9 +589,8 @@ def index_video_to_pg(
     """
     embeddings = get_embeddings(api_key)
 
-    # Generate embeddings for all chunks in one batch call
-    texts = [f"{title}\n\n{chunk['text']}" for chunk in chunks]
-    vectors = embeddings.embed_documents(texts)
+    # Generate embeddings for all chunks in one batch call (with retry/backoff)
+    vectors = _embed_chunk_texts(embeddings, title, chunks, video_id)
 
     # Create video row
     video_result = (
@@ -491,24 +614,9 @@ def index_video_to_pg(
         raise RuntimeError("Could not store video metadata")
     db_video_id = video_row["id"]
 
-    # Build chunk rows
-    chunk_rows = []
-    for chunk, vector in zip(chunks, vectors):
-        chunk_rows.append(
-            {
-                "video_id": db_video_id,
-                "content": chunk["text"],
-                "start_seconds": chunk["start_seconds"],
-                "end_seconds": chunk["end_seconds"],
-                "embedding": vector,
-            }
-        )
-
-    # Insert chunks in batches to stay within payload limits
-    BATCH_SIZE = 50
-    for i in range(0, len(chunk_rows), BATCH_SIZE):
-        batch = chunk_rows[i : i + BATCH_SIZE]
-        supabase.table("chunks").insert(batch).execute()
+    # Build chunk rows and write them idempotently in batches
+    chunk_rows = _build_chunk_rows(db_video_id, chunks, vectors)
+    _upsert_chunk_rows(supabase, chunk_rows)
 
     try:
         store_video_knowledge(
@@ -572,6 +680,13 @@ def ingest_single_video_pg(
         if quota_message:
             yield quota_message
             return
+        repair_message = repair_missing_video_chunks_if_needed(
+            supabase,
+            existing_video,
+            api_key,
+        )
+        if repair_message:
+            yield repair_message
         refresh_message = refresh_existing_video_source_context_if_needed(
             supabase,
             existing_video,
@@ -657,6 +772,139 @@ def ingest_single_video_pg(
     yield "Complete!"
 
 
+def _plan_import_batch(profile: dict, new_videos: list[dict]) -> tuple[list[dict], str | None]:
+    """Slice a bulk import to the plan's video slots and per-import cap.
+
+    Returns (videos_to_process, message). An empty video list means the import
+    is blocked and the message is the quota explanation; a non-empty list with
+    a message means the batch was truncated.
+    """
+    entitlements = profile.get("_entitlements") or {}
+    video_limit = int(entitlements.get("indexedVideosTotal") or get_free_indexed_videos_total())
+    video_slots = max(0, video_limit - profile.get("free_indexed_videos_total", 0))
+    max_import_videos = int(entitlements.get("maxImportVideos") or get_free_max_import_videos())
+    allowed_count = min(len(new_videos), video_slots, max_import_videos)
+
+    if allowed_count <= 0:
+        return [], _index_quota_message(profile, 1, 0)
+
+    if allowed_count < len(new_videos):
+        truncation_message = (
+            f"{str(entitlements.get('planKey') or 'free').title()} imports process the first "
+            f"{allowed_count} eligible videos (limit: {max_import_videos} per import, "
+            f"{video_limit} total)."
+        )
+        return new_videos[:allowed_count], truncation_message
+
+    return new_videos, None
+
+
+def _ingest_video_batch_pg(
+    supabase,
+    new_videos: list[dict],
+    user_id: str,
+    fallback_channel_name: str,
+    channel_id: str,
+    access_source: str,
+    api_key: Optional[str] = None,
+    used_own_key: bool = False,
+    digest_depth: str = DEFAULT_DIGEST_DEPTH,
+) -> Generator[str, None, None]:
+    """Index a batch of channel/playlist videos, yielding progress messages.
+
+    Message strings are load-bearing: hosted job classification keys off the
+    "  Skipped: ..." and "  Error indexing: ..." prefixes.
+    """
+    indexed_count = 0
+    skipped_count = 0
+
+    for i, video in enumerate(new_videos, 1):
+        vid = video.get("videoId")
+        title = extract_video_title(video)
+        channel_name = extract_channel_name(video)
+        if channel_name == "Unknown Channel":
+            channel_name = fallback_channel_name
+
+        yield f"[{i}/{len(new_videos)}] Processing: {title[:50]}..."
+
+        profile = get_user_profile(supabase, user_id)
+        if not check_index_quota(profile, 1, 0):
+            yield _index_quota_message(profile, 1, 0)
+            break
+
+        existing_video = get_indexed_video_pg(supabase, vid)
+        if existing_video:
+            quota_message = grant_user_video_access(
+                supabase,
+                user_id,
+                existing_video,
+                used_own_key,
+                access_source=access_source,
+                source_url=f"https://www.youtube.com/watch?v={vid}",
+            )
+            if quota_message:
+                yield quota_message
+                break
+            repair_message = repair_missing_video_chunks_if_needed(
+                supabase,
+                existing_video,
+                api_key,
+            )
+            refresh_message = refresh_existing_video_source_context_if_needed(
+                supabase,
+                existing_video,
+                api_key,
+                digest_depth,
+                user_id,
+            )
+            indexed_count += 1
+            if repair_message:
+                yield f"  {repair_message}"
+            if refresh_message:
+                yield f"  {refresh_message}"
+            yield "  Reused existing indexed video (no embedding compute)"
+            continue
+
+        transcript_result = fetch_transcript_chunks(vid)
+        chunks = transcript_result.chunks
+
+        if not chunks:
+            reason = transcript_result.skip_reason or "transcript_fetch_error"
+            yield f"  Skipped: {reason} | {describe_transcript_skip(reason, vid)}"
+            skipped_count += 1
+            continue
+
+        transcript_seconds = transcript_seconds_from_chunks(chunks)
+        profile = get_user_profile(supabase, user_id)
+        if not check_index_quota(profile, 1, transcript_seconds):
+            yield _index_quota_message(profile, 1, transcript_seconds)
+            break
+
+        try:
+            count = index_video_to_pg(
+                supabase,
+                vid,
+                title,
+                channel_name,
+                channel_id,
+                chunks,
+                transcript_seconds,
+                api_key,
+                digest_depth,
+                published_for_user_id=user_id,
+            )
+            increment_index_usage(supabase, user_id, 1, used_own_key, transcript_seconds)
+            indexed_count += 1
+            yield f"  Indexed {count} clips"
+        except Exception as e:
+            yield f"  Error indexing: {format_ingestion_error(e)}"
+            skipped_count += 1
+
+        time.sleep(0.5)
+
+    yield f"Complete! Indexed {indexed_count} videos ({skipped_count} skipped)"
+
+
 def ingest_channel_pg(
     channel_url: str,
     user_id: str,
@@ -725,104 +973,26 @@ def ingest_channel_pg(
         return
 
     profile = get_user_profile(supabase, user_id)
-    entitlements = profile.get("_entitlements") or {}
-    video_limit = int(entitlements.get("indexedVideosTotal") or get_free_indexed_videos_total())
-    video_slots = max(0, video_limit - profile.get("free_indexed_videos_total", 0))
-    max_import_videos = int(entitlements.get("maxImportVideos") or get_free_max_import_videos())
-    allowed_count = min(len(new_videos), video_slots, max_import_videos)
-
-    if allowed_count <= 0:
-        yield _index_quota_message(profile, 1, 0)
+    new_videos, batch_message = _plan_import_batch(profile, new_videos)
+    if not new_videos:
+        yield batch_message
         return
-
-    if allowed_count < len(new_videos):
-        yield (
-            f"{str(entitlements.get('planKey') or 'free').title()} imports process the first "
-            f"{allowed_count} eligible videos (limit: {max_import_videos} per import, "
-            f"{video_limit} total)."
-        )
-        new_videos = new_videos[:allowed_count]
+    if batch_message:
+        yield batch_message
 
     yield f"{len(new_videos)} new videos to index"
 
-    indexed_count = 0
-    skipped_count = 0
-
-    for i, video in enumerate(new_videos, 1):
-        vid = video.get("videoId")
-        title = extract_video_title(video)
-
-        yield f"[{i}/{len(new_videos)}] Processing: {title[:50]}..."
-
-        profile = get_user_profile(supabase, user_id)
-        if not check_index_quota(profile, 1, 0):
-            yield _index_quota_message(profile, 1, 0)
-            break
-
-        existing_video = get_indexed_video_pg(supabase, vid)
-        if existing_video:
-            quota_message = grant_user_video_access(
-                supabase,
-                user_id,
-                existing_video,
-                used_own_key,
-                access_source="channel",
-                source_url=f"https://www.youtube.com/watch?v={vid}",
-            )
-            if quota_message:
-                yield quota_message
-                break
-            refresh_message = refresh_existing_video_source_context_if_needed(
-                supabase,
-                existing_video,
-                api_key,
-                digest_depth,
-                user_id,
-            )
-            indexed_count += 1
-            if refresh_message:
-                yield f"  {refresh_message}"
-            yield "  Reused existing indexed video (no embedding compute)"
-            continue
-
-        transcript_result = fetch_transcript_chunks(vid)
-        chunks = transcript_result.chunks
-
-        if not chunks:
-            reason = transcript_result.skip_reason or "transcript_fetch_error"
-            yield f"  Skipped: {reason} | {describe_transcript_skip(reason, vid)}"
-            skipped_count += 1
-            continue
-
-        transcript_seconds = transcript_seconds_from_chunks(chunks)
-        profile = get_user_profile(supabase, user_id)
-        if not check_index_quota(profile, 1, transcript_seconds):
-            yield _index_quota_message(profile, 1, transcript_seconds)
-            break
-
-        try:
-            count = index_video_to_pg(
-                supabase,
-                vid,
-                title,
-                channel_name,
-                channel_id,
-                chunks,
-                transcript_seconds,
-                api_key,
-                digest_depth,
-                published_for_user_id=user_id,
-            )
-            increment_index_usage(supabase, user_id, 1, used_own_key, transcript_seconds)
-            indexed_count += 1
-            yield f"  Indexed {count} clips"
-        except Exception as e:
-            yield f"  Error indexing: {format_ingestion_error(e)}"
-            skipped_count += 1
-
-        time.sleep(0.5)
-
-    yield f"Complete! Indexed {indexed_count} videos ({skipped_count} skipped)"
+    yield from _ingest_video_batch_pg(
+        supabase,
+        new_videos,
+        user_id,
+        channel_name,
+        channel_id,
+        "channel",
+        api_key,
+        used_own_key,
+        digest_depth,
+    )
 
 
 def ingest_playlist_pg(
@@ -887,105 +1057,26 @@ def ingest_playlist_pg(
         return
 
     profile = get_user_profile(supabase, user_id)
-    entitlements = profile.get("_entitlements") or {}
-    video_limit = int(entitlements.get("indexedVideosTotal") or get_free_indexed_videos_total())
-    video_slots = max(0, video_limit - profile.get("free_indexed_videos_total", 0))
-    max_import_videos = int(entitlements.get("maxImportVideos") or get_free_max_import_videos())
-    allowed_count = min(len(new_videos), video_slots, max_import_videos)
-
-    if allowed_count <= 0:
-        yield _index_quota_message(profile, 1, 0)
+    new_videos, batch_message = _plan_import_batch(profile, new_videos)
+    if not new_videos:
+        yield batch_message
         return
-
-    if allowed_count < len(new_videos):
-        yield (
-            f"{str(entitlements.get('planKey') or 'free').title()} imports process the first "
-            f"{allowed_count} eligible videos (limit: {max_import_videos} per import, "
-            f"{video_limit} total)."
-        )
-        new_videos = new_videos[:allowed_count]
+    if batch_message:
+        yield batch_message
 
     yield f"{len(new_videos)} new videos to index"
 
-    indexed_count = 0
-    skipped_count = 0
-
-    for i, video in enumerate(new_videos, 1):
-        vid = video.get("videoId")
-        title = extract_video_title(video)
-        channel_name = extract_channel_name(video)
-
-        yield f"[{i}/{len(new_videos)}] Processing: {title[:50]}..."
-
-        profile = get_user_profile(supabase, user_id)
-        if not check_index_quota(profile, 1, 0):
-            yield _index_quota_message(profile, 1, 0)
-            break
-
-        existing_video = get_indexed_video_pg(supabase, vid)
-        if existing_video:
-            quota_message = grant_user_video_access(
-                supabase,
-                user_id,
-                existing_video,
-                used_own_key,
-                access_source="playlist",
-                source_url=f"https://www.youtube.com/watch?v={vid}",
-            )
-            if quota_message:
-                yield quota_message
-                break
-            refresh_message = refresh_existing_video_source_context_if_needed(
-                supabase,
-                existing_video,
-                api_key,
-                digest_depth,
-                user_id,
-            )
-            indexed_count += 1
-            if refresh_message:
-                yield f"  {refresh_message}"
-            yield "  Reused existing indexed video (no embedding compute)"
-            continue
-
-        transcript_result = fetch_transcript_chunks(vid)
-        chunks = transcript_result.chunks
-
-        if not chunks:
-            reason = transcript_result.skip_reason or "transcript_fetch_error"
-            yield f"  Skipped: {reason} | {describe_transcript_skip(reason, vid)}"
-            skipped_count += 1
-            continue
-
-        transcript_seconds = transcript_seconds_from_chunks(chunks)
-        profile = get_user_profile(supabase, user_id)
-        if not check_index_quota(profile, 1, transcript_seconds):
-            yield _index_quota_message(profile, 1, transcript_seconds)
-            break
-
-        try:
-            count = index_video_to_pg(
-                supabase,
-                vid,
-                title,
-                channel_name,
-                channel_id,
-                chunks,
-                transcript_seconds,
-                api_key,
-                digest_depth,
-                published_for_user_id=user_id,
-            )
-            increment_index_usage(supabase, user_id, 1, used_own_key, transcript_seconds)
-            indexed_count += 1
-            yield f"  Indexed {count} clips"
-        except Exception as e:
-            yield f"  Error indexing: {format_ingestion_error(e)}"
-            skipped_count += 1
-
-        time.sleep(0.5)
-
-    yield f"Complete! Indexed {indexed_count} videos ({skipped_count} skipped)"
+    yield from _ingest_video_batch_pg(
+        supabase,
+        new_videos,
+        user_id,
+        primary_channel_name,
+        channel_id,
+        "playlist",
+        api_key,
+        used_own_key,
+        digest_depth,
+    )
 
 
 def ingest_url_pg(

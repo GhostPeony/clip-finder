@@ -21,6 +21,13 @@ class Query:
         self.supabase.inserts.append((self.table_name, payload))
         return self
 
+    def upsert(self, payload, on_conflict=None):
+        self.action = "upsert"
+        if self.supabase.upsert_error is not None:
+            raise self.supabase.upsert_error
+        self.supabase.upserts.append((self.table_name, payload, on_conflict))
+        return self
+
     def update(self, payload):
         self.action = "update"
         self.supabase.updates.append((self.table_name, payload))
@@ -72,17 +79,35 @@ class Query:
         return Result([])
 
 
+class RpcQuery:
+    def __init__(self, supabase, name):
+        self.supabase = supabase
+        self.name = name
+
+    def execute(self):
+        if self.name in self.supabase.rpc_results:
+            return Result(self.supabase.rpc_results[self.name])
+        raise RuntimeError(f"rpc {self.name} unavailable")
+
+
 class Supabase:
     def __init__(self):
         self.inserts = []
+        self.upserts = []
         self.updates = []
         self.deletes = []
         self.calls = []
         self.select_results = {}
+        self.rpc_results = {}
+        self.upsert_error = None
 
     def table(self, table_name):
         self.calls.append(("table", table_name))
         return Query(table_name, self)
+
+    def rpc(self, name, payload):
+        self.calls.append(("rpc", name, payload))
+        return RpcQuery(self, name)
 
 
 def test_extract_source_knowledge_normalizes_llm_json(monkeypatch):
@@ -892,14 +917,134 @@ def test_index_video_to_pg_invokes_failure_safe_knowledge_storage(monkeypatch):
         "key",
     )
 
-    inserts = {table: payload for table, payload in supabase.inserts}
+    upserts = {table: (payload, on_conflict) for table, payload, on_conflict in supabase.upserts}
     assert count == 1
-    assert inserts["chunks"][0]["content"] == "transcript"
+    chunk_payload, chunk_conflict = upserts["chunks"]
+    assert chunk_payload[0]["content"] == "transcript"
+    assert chunk_conflict == "video_id,start_seconds"
     assert calls[0][1:6] == ("video-db-id", "yt123", "Title", "Channel", chunks)
     assert len(supabase.updates) == 1
     assert supabase.updates[0][0] == "channels"
     assert supabase.updates[0][1]["total_videos"] == 3
     assert "indexed_at" in supabase.updates[0][1]
+
+
+def test_upsert_chunk_rows_falls_back_to_insert_on_missing_unique_index():
+    supabase = Supabase()
+    supabase.upsert_error = RuntimeError(
+        "42P10: there is no unique or exclusion constraint matching the ON CONFLICT specification"
+    )
+    rows = [
+        {
+            "video_id": "video-db-id",
+            "content": "text",
+            "start_seconds": 0,
+            "end_seconds": 60,
+            "embedding": [0.1],
+        }
+    ]
+
+    ingest._upsert_chunk_rows(supabase, rows)
+
+    inserts = {table: payload for table, payload in supabase.inserts}
+    assert supabase.upserts == []
+    assert inserts["chunks"] == rows
+
+
+def test_upsert_chunk_rows_reraises_unexpected_errors():
+    supabase = Supabase()
+    supabase.upsert_error = RuntimeError("permission denied for table chunks")
+    rows = [
+        {
+            "video_id": "video-db-id",
+            "content": "text",
+            "start_seconds": 0,
+            "end_seconds": 60,
+            "embedding": [0.1],
+        }
+    ]
+
+    try:
+        ingest._upsert_chunk_rows(supabase, rows)
+    except RuntimeError as exc:
+        assert "permission denied" in str(exc)
+    else:
+        raise AssertionError("unexpected upsert errors should not fall back to insert")
+
+    assert not supabase.inserts
+
+
+def test_repair_missing_video_chunks_reembeds_when_no_chunks_stored(monkeypatch):
+    supabase = Supabase()
+    supabase.rpc_results["count_chunks_for_videos"] = [
+        {"video_id": "video-db-id", "chunk_count": 0}
+    ]
+
+    class FakeEmbeddings:
+        def embed_documents(self, texts):
+            return [[0.1, 0.2] for _text in texts]
+
+    monkeypatch.setattr(ingest, "get_embeddings", lambda api_key=None: FakeEmbeddings())
+    monkeypatch.setattr(
+        ingest,
+        "fetch_transcript_chunks",
+        lambda video_id: SimpleNamespace(
+            chunks=[{"text": "restored transcript", "start_seconds": 0, "end_seconds": 90}],
+            skip_reason=None,
+        ),
+    )
+    monkeypatch.setattr(
+        ingest,
+        "increment_index_usage",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("repair must never re-charge usage")
+        ),
+    )
+
+    video = {
+        "id": "video-db-id",
+        "youtube_video_id": "yt123",
+        "title": "Title",
+        "transcript_seconds": 0,
+    }
+    message = ingest.repair_missing_video_chunks_if_needed(supabase, video, "key")
+
+    assert message == "Repaired missing transcript embeddings (1 clips restored)."
+    table, payload, on_conflict = supabase.upserts[0]
+    assert table == "chunks"
+    assert on_conflict == "video_id,start_seconds"
+    assert payload[0]["content"] == "restored transcript"
+    assert supabase.updates == [("videos", {"transcript_seconds": 90})]
+    assert video["transcript_seconds"] == 90
+
+
+def test_repair_missing_video_chunks_skips_when_chunks_exist(monkeypatch):
+    supabase = Supabase()
+    supabase.rpc_results["count_chunks_for_videos"] = [
+        {"video_id": "video-db-id", "chunk_count": 12}
+    ]
+    monkeypatch.setattr(
+        ingest,
+        "fetch_transcript_chunks",
+        lambda video_id: (_ for _ in ()).throw(
+            AssertionError("healthy videos should not be re-fetched")
+        ),
+    )
+    monkeypatch.setattr(
+        ingest,
+        "get_embeddings",
+        lambda api_key=None: (_ for _ in ()).throw(
+            AssertionError("healthy videos should not be re-embedded")
+        ),
+    )
+
+    message = ingest.repair_missing_video_chunks_if_needed(
+        supabase,
+        {"id": "video-db-id", "youtube_video_id": "yt123"},
+    )
+
+    assert message is None
+    assert supabase.upserts == []
 
 
 def test_grant_user_video_access_links_existing_video_without_embedding(monkeypatch):

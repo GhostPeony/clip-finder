@@ -141,6 +141,36 @@ def test_create_mcp_token_allows_project_and_capture_scopes(monkeypatch):
     ]
 
 
+def test_create_mcp_token_links_oauth_client_when_provided(monkeypatch):
+    supabase = Supabase()
+    sample_bearer = "_".join([mcp_tokens.MCP_AUTH_PREFIX, "display", "secret"])
+    monkeypatch.setattr(mcp_tokens, "_new_token", lambda: sample_bearer)
+
+    result = mcp_tokens.create_mcp_token(
+        supabase,
+        "user-1",
+        "Claude Code",
+        ["context:read"],
+        oauth_client_id="memexai_mcp_client-1",
+    )
+
+    inserted = supabase.inserts[0][1]
+    assert inserted["oauth_client_id"] == "memexai_mcp_client-1"
+    assert result["record"]["oauthClientId"] == "memexai_mcp_client-1"
+
+
+def test_create_mcp_token_omits_oauth_client_column_for_dashboard_tokens(monkeypatch):
+    supabase = Supabase()
+    sample_bearer = "_".join([mcp_tokens.MCP_AUTH_PREFIX, "display", "secret"])
+    monkeypatch.setattr(mcp_tokens, "_new_token", lambda: sample_bearer)
+
+    result = mcp_tokens.create_mcp_token(supabase, "user-1", "Dashboard token", ["context:read"])
+
+    inserted = supabase.inserts[0][1]
+    assert "oauth_client_id" not in inserted
+    assert result["record"]["oauthClientId"] is None
+
+
 def test_authenticate_mcp_token_updates_last_used_for_valid_token():
     sample_bearer = "_".join([mcp_tokens.MCP_AUTH_PREFIX, "display", "secret"])
     supabase = Supabase(
@@ -164,6 +194,47 @@ def test_authenticate_mcp_token_updates_last_used_for_valid_token():
         "token_hash",
         mcp_tokens._hash_token(sample_bearer),
     ) in supabase.calls
+    assert supabase.updates[0][0] == "mcp_tokens"
+    assert "last_used_at" in supabase.updates[0][1]
+
+
+def test_authenticate_mcp_token_debounces_recent_last_used_writes():
+    from datetime import datetime, timezone
+
+    sample_bearer = "_".join([mcp_tokens.MCP_AUTH_PREFIX, "display", "secret"])
+    supabase = Supabase(
+        select_response={
+            "id": "token-1",
+            "user_id": "user-1",
+            "scopes": ["context:read"],
+            "expires_at": None,
+            "revoked_at": None,
+            "last_used_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+    user = mcp_tokens.authenticate_mcp_token(supabase, f"Bearer {sample_bearer}")
+
+    assert user["sub"] == "user-1"
+    assert supabase.updates == []
+
+
+def test_authenticate_mcp_token_touches_stale_last_used():
+    sample_bearer = "_".join([mcp_tokens.MCP_AUTH_PREFIX, "display", "secret"])
+    supabase = Supabase(
+        select_response={
+            "id": "token-1",
+            "user_id": "user-1",
+            "scopes": ["context:read"],
+            "expires_at": None,
+            "revoked_at": None,
+            "last_used_at": "2026-06-22T00:00:00Z",
+        }
+    )
+
+    user = mcp_tokens.authenticate_mcp_token(supabase, f"Bearer {sample_bearer}")
+
+    assert user["sub"] == "user-1"
     assert supabase.updates[0][0] == "mcp_tokens"
     assert "last_used_at" in supabase.updates[0][1]
 
@@ -317,6 +388,8 @@ def test_mcp_endpoint_schedules_capture_sync_jobs(monkeypatch):
 
 
 def test_create_mcp_token_endpoint_returns_raw_token_once(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
     from backend import server
 
     sample_bearer = "_".join([mcp_tokens.MCP_AUTH_PREFIX, "display", "secret"])
@@ -324,19 +397,22 @@ def test_create_mcp_token_endpoint_returns_raw_token_once(monkeypatch):
     app.dependency_overrides[server.get_request_user] = lambda: {"sub": "user-1"}
     monkeypatch.setattr(server, "is_supabase_mode", lambda: True)
     monkeypatch.setattr(server, "get_supabase", lambda: object())
-    monkeypatch.setattr(
-        server,
-        "create_mcp_token",
-        lambda supabase, user_id, name, scopes: {
+    create_calls = []
+
+    def fake_create_mcp_token(supabase, user_id, name, scopes, expires_at=None):
+        create_calls.append({"expiresAt": expires_at})
+        return {
             "token": sample_bearer,
             "record": {
                 "id": "token-1",
                 "name": name,
                 "tokenPrefix": "emt_display",
                 "scopes": scopes,
+                "expiresAt": expires_at,
             },
-        },
-    )
+        }
+
+    monkeypatch.setattr(server, "create_mcp_token", fake_create_mcp_token)
 
     try:
         response = TestClient(app).post(
@@ -350,6 +426,12 @@ def test_create_mcp_token_endpoint_returns_raw_token_once(monkeypatch):
     body = response.json()
     assert body["token"] == sample_bearer
     assert body["tokenRecord"]["name"] == "My MCP agent"
+
+    # Dashboard tokens now expire by default instead of living forever.
+    assert len(create_calls) == 1
+    expires_at = datetime.fromisoformat(create_calls[0]["expiresAt"])
+    ttl = expires_at - datetime.now(timezone.utc)
+    assert timedelta(days=89) < ttl <= timedelta(days=90)
     assert body["setup"]["mcpEndpoint"] == "http://testserver/mcp"
     assert body["setup"]["manifestUrl"] == "http://testserver/mcp.json"
     assert body["setup"]["accessModel"]["searchScope"] == "current_user_grants"

@@ -1,5 +1,10 @@
-import React, { useMemo, useState } from 'react';
-import { approveMcpOAuthAuthorization, ApproveMcpOAuthRequest } from '../services/api';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  approveMcpOAuthAuthorization,
+  ApproveMcpOAuthRequest,
+  fetchMcpOAuthClientInfo,
+  McpOAuthClientInfo,
+} from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { PRODUCT_NAME } from '../brand';
 
@@ -28,18 +33,34 @@ export const McpAuthorizePage: React.FC = () => {
   const [error, setError] = useState('');
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const request = useMemo(() => buildApproveRequest(params), [params]);
-  const clientLabel = params.get('client_id') || 'your agent';
+  const [clientInfo, setClientInfo] = useState<McpOAuthClientInfo | null>(null);
+  const clientLabel = clientInfo?.clientName?.trim() || 'Your agent';
+  const redirectHost = useMemo(() => parseRedirectHost(params.get('redirect_uri')), [params]);
   const requestedScopes = useMemo(() => parseScopeText(request?.scope), [request?.scope]);
-  const [optionalScopes, setOptionalScopes] = useState<string[]>(() =>
-    OPTIONAL_MCP_SCOPES.filter((item) => requestedScopes.includes(item.scope)).map(
-      (item) => item.scope,
-    ),
-  );
+  // Optional write scopes always start unchecked -- even when the agent requested
+  // them -- so granting write access is an explicit user action.
+  const [optionalScopes, setOptionalScopes] = useState<string[]>([]);
   const approvedScopes = useMemo(
-    () => mergeScopes([...requestedScopes, ...optionalScopes]),
+    () =>
+      mergeScopes([
+        ...requestedScopes.filter((scope) => BASE_MCP_SCOPES.includes(scope)),
+        ...optionalScopes,
+      ]),
     [requestedScopes, optionalScopes],
   );
   const scopeText = approvedScopes.join(' ');
+
+  useEffect(() => {
+    const clientId = params.get('client_id');
+    if (!clientId) return;
+    let cancelled = false;
+    fetchMcpOAuthClientInfo(clientId).then((info) => {
+      if (!cancelled && info) setClientInfo(info);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [params]);
 
   const handleSignIn = async () => {
     setError('');
@@ -89,6 +110,12 @@ export const McpAuthorizePage: React.FC = () => {
             {clientLabel} wants to use {PRODUCT_NAME} over MCP. Approving gives it scoped access to
             your saved video context and personal overlay tools.
           </p>
+          {redirectHost ? (
+            <p className="mt-2 text-xs leading-5 text-muted">
+              After approval you will be sent back to{' '}
+              <span className="font-mono">{redirectHost}</span>.
+            </p>
+          ) : null}
 
           <div className="mt-5 rounded-xl bg-cream p-4">
             <h2 className="text-sm font-semibold text-ink">Requested access</h2>
@@ -104,6 +131,7 @@ export const McpAuthorizePage: React.FC = () => {
             <div className="mt-3 space-y-2">
               {OPTIONAL_MCP_SCOPES.map((item) => {
                 const checked = optionalScopes.includes(item.scope);
+                const requested = requestedScopes.includes(item.scope);
                 return (
                   <label
                     key={item.scope}
@@ -122,7 +150,14 @@ export const McpAuthorizePage: React.FC = () => {
                       className="mt-1 h-4 w-4 accent-violet-deep"
                     />
                     <span>
-                      <span className="block text-sm font-semibold text-ink">{item.title}</span>
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-ink">{item.title}</span>
+                        {requested ? (
+                          <span className="rounded-full bg-cream px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-bark">
+                            Requested by agent
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="block text-xs leading-5 text-bark">{item.description}</span>
                     </span>
                   </label>
@@ -187,6 +222,15 @@ function buildApproveRequest(params: URLSearchParams): ApproveMcpOAuthRequest | 
     state: params.get('state'),
     resource: params.get('resource'),
   };
+}
+
+function parseRedirectHost(redirectUri: string | null): string | null {
+  if (!redirectUri) return null;
+  try {
+    return new URL(redirectUri).host || null;
+  } catch {
+    return null;
+  }
 }
 
 function parseScopeText(value?: string | null): string[] {

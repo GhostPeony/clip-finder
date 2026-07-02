@@ -230,16 +230,13 @@ export const fetchLibrary = async (projectId?: string | null): Promise<LibraryDa
 };
 
 export const fetchProjects = async (): Promise<UserProject[]> => {
-  try {
-    const headers = await getAuthHeaders();
-    const response = await fetch(`${API_URL}/projects`, { headers });
-    if (!response.ok) return [];
-    const data = (await response.json()) as ProjectsData;
-    return data.projects || [];
-  } catch (error) {
-    console.warn('Error fetching projects:', error);
-    return [];
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_URL}/projects`, { headers });
+  if (!response.ok) {
+    throw new Error(`Backend Error: ${response.statusText}`);
   }
+  const data = (await response.json()) as ProjectsData;
+  return data.projects || [];
 };
 
 export const createProject = async (
@@ -634,15 +631,13 @@ const readResponseError = async (response: Response, fallback: string): Promise<
   return `${fallback} (${response.status})`;
 };
 
-export const fetchUsage = async (): Promise<UsageInfo | null> => {
-  try {
-    const headers = await getAuthHeaders();
-    const response = await fetch(`${API_URL}/usage`, { headers });
-    if (!response.ok) return null;
-    return await response.json();
-  } catch {
-    return null;
+export const fetchUsage = async (): Promise<UsageInfo> => {
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_URL}/usage`, { headers });
+  if (!response.ok) {
+    throw new Error(`Backend Error: ${response.statusText}`);
   }
+  return await response.json();
 };
 
 export const fetchBillingStatus = async (): Promise<BillingStatus | null> => {
@@ -771,18 +766,13 @@ export const revokeMcpToken = async (tokenId: string): Promise<boolean> => {
 };
 
 export const fetchIngestionJobs = async (): Promise<IngestionJob[]> => {
-  try {
-    const { headers, cacheScope } = await getAuthContext();
-    const response = await fetch(`${API_URL}/ingestion-jobs`, { headers });
-    if (!response.ok) throw new Error(`Backend Error: ${response.statusText}`);
-    const data = await response.json();
-    const jobs = data.jobs || [];
-    writeJsonCache(cacheKey('ingestion-jobs'), cacheScope, jobs);
-    return jobs;
-  } catch (error) {
-    console.warn('Error fetching ingestion jobs:', error);
-    return [];
-  }
+  const { headers, cacheScope } = await getAuthContext();
+  const response = await fetch(`${API_URL}/ingestion-jobs`, { headers });
+  if (!response.ok) throw new Error(`Backend Error: ${response.statusText}`);
+  const data = await response.json();
+  const jobs = data.jobs || [];
+  writeJsonCache(cacheKey('ingestion-jobs'), cacheScope, jobs);
+  return jobs;
 };
 
 export const fetchIngestionJob = async (jobId: string): Promise<IngestionJob | null> => {
@@ -815,16 +805,13 @@ export const clearIngestionJobHistory = async (): Promise<number> => {
 };
 
 export const fetchCaptureSources = async (): Promise<CaptureSource[]> => {
-  try {
-    const headers = await getAuthHeaders();
-    const response = await fetch(`${API_URL}/capture/sources`, { headers });
-    if (!response.ok) return [];
-    const data = await response.json();
-    return data.captureSources || [];
-  } catch (error) {
-    console.warn('Error fetching capture sources:', error);
-    return [];
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_URL}/capture/sources`, { headers });
+  if (!response.ok) {
+    throw new Error(`Backend Error: ${response.statusText}`);
   }
+  const data = await response.json();
+  return data.captureSources || [];
 };
 
 export const createCaptureSource = async (
@@ -926,15 +913,12 @@ const disconnectedYoutubeStatus = (): YoutubeOAuthStatus => ({
 });
 
 export const fetchYoutubeOAuthStatus = async (): Promise<YoutubeOAuthStatus> => {
-  try {
-    const headers = await getAuthHeaders();
-    const response = await fetch(`${API_URL}/youtube/oauth/status`, { headers });
-    if (!response.ok) return disconnectedYoutubeStatus();
-    return await response.json();
-  } catch (error) {
-    console.warn('Error fetching YouTube connection status:', error);
-    return disconnectedYoutubeStatus();
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${API_URL}/youtube/oauth/status`, { headers });
+  if (!response.ok) {
+    throw new Error(`Backend Error: ${response.statusText}`);
   }
+  return await response.json();
 };
 
 export const saveYoutubeOAuthConnection = async (
@@ -1049,6 +1033,26 @@ export const approveMcpOAuthAuthorization = async (
     return await response.json();
   } catch (error) {
     console.warn('Error approving MCP OAuth request:', error);
+    return null;
+  }
+};
+
+export interface McpOAuthClientInfo {
+  clientName: string;
+  redirectHosts: string[];
+}
+
+export const fetchMcpOAuthClientInfo = async (
+  clientId: string,
+): Promise<McpOAuthClientInfo | null> => {
+  try {
+    const response = await fetch(
+      `${API_URL}/mcp/oauth/client-info?client_id=${encodeURIComponent(clientId)}`,
+    );
+    if (!response.ok) return null;
+    return await response.json();
+  } catch (error) {
+    console.warn('Error fetching MCP OAuth client info:', error);
     return null;
   }
 };
