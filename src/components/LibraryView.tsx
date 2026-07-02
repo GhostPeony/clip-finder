@@ -315,8 +315,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
       <ProjectScopePanel
         projects={projects}
         selectedProjectId={selectedProjectId}
-        selectedProject={selectedProject}
-        allVideos={allLatestVideos}
         visibleVideoCount={latestVideos.length}
         totalVideoCount={totalVideoCount}
         heading={isProjectsSurface ? 'Manage projects' : 'Project scope'}
@@ -335,15 +333,14 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
       {isProjectsSurface ? (
         <ProjectsOverview
-          projects={projects}
           selectedProject={selectedProject}
-          selectedProjectId={selectedProjectId}
+          allVideos={allLatestVideos}
           totalVideoCount={totalVideoCount}
-          onSelectProject={setSelectedProjectId}
+          onNotice={setProjectNotice}
+          onProjectChanged={handleProjectChanged}
           onViewProjectVideos={() =>
             onOpenLibrary ? onOpenLibrary(selectedProjectId) : setLibrarySurface('videos')
           }
-          onIndexMore={onIndexMore}
         />
       ) : (
         <div className="grid gap-5 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
