@@ -36,7 +36,11 @@ except ImportError:
 env_path = os.path.join(os.path.dirname(__file__), "..", ".env.local")
 load_dotenv(env_path)
 
-RETRIEVAL_MODES = {"hybrid", "semantic", "keyword"}
+RETRIEVAL_MODES = {"auto", "hybrid", "semantic", "keyword"}
+
+# "auto" routes on query shape: an explicit quoted phrase is a strong signal the
+# user wants literal matching, everything else gets hybrid retrieval.
+_QUOTED_PHRASE_PATTERN = re.compile(r'"[^"]{2,}"|“[^”]{2,}”')
 KEYWORD_FALLBACK_STOPWORDS = {
     "about",
     "after",
@@ -91,8 +95,18 @@ def _access_metadata(row: dict) -> dict:
 def _normalize_retrieval_mode(mode: str | None) -> str:
     normalized = str(mode or "hybrid").strip().lower()
     if normalized not in RETRIEVAL_MODES:
-        raise ValueError("retrieval_mode must be one of: hybrid, semantic, keyword")
+        raise ValueError("retrieval_mode must be one of: auto, hybrid, semantic, keyword")
     return normalized
+
+
+def resolve_retrieval_mode(query: str, mode: str | None) -> str:
+    """Return the effective retrieval mode, routing 'auto' on query shape."""
+    normalized = _normalize_retrieval_mode(mode)
+    if normalized != "auto":
+        return normalized
+    if _QUOTED_PHRASE_PATTERN.search(query or ""):
+        return "keyword"
+    return "hybrid"
 
 
 def _project_scope_response(scope: dict | None) -> dict:
@@ -155,7 +169,7 @@ def search_pg(
     Returns:
         SearchResult dict with 'answer' (empty string) and 'relevantClips'.
     """
-    normalized_mode = _normalize_retrieval_mode(retrieval_mode)
+    normalized_mode = resolve_retrieval_mode(query, retrieval_mode)
     supabase = get_supabase()
     project_scope = resolve_project_scope(supabase, user_id, project_id, project_slug)
     scoped_youtube_video_id = _clean_video_scope(youtube_video_id)
