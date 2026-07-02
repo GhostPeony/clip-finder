@@ -26,9 +26,7 @@ def test_migration_directories_contain_same_files():
     assert not missing_from_backend, (
         f"Migrations missing from backend/supabase/migrations: {missing_from_backend}"
     )
-    assert not missing_from_cli, (
-        f"Migrations missing from supabase/migrations: {missing_from_cli}"
-    )
+    assert not missing_from_cli, f"Migrations missing from supabase/migrations: {missing_from_cli}"
 
 
 def test_mirrored_migrations_have_identical_content():
@@ -39,8 +37,7 @@ def test_mirrored_migrations_have_identical_content():
         name
         for name, cli_path in cli_files.items()
         if name in backend_files
-        and cli_path.read_text(encoding="utf-8")
-        != backend_files[name].read_text(encoding="utf-8")
+        and cli_path.read_text(encoding="utf-8") != backend_files[name].read_text(encoding="utf-8")
     ]
 
     assert not diverged, f"Migration content differs between directories: {diverged}"
