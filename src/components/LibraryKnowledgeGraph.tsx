@@ -1,18 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { LibraryGraphNode, LibrarySourceGraphData, LibraryVideo, VideoClip } from '../types';
-import {
-  fetchLibraryArtifact,
-  fetchLibraryGraph,
-  getCachedLibraryGraph,
-  saveSearchToHistory,
-  searchVideoClips,
-} from '../services/api';
+import { LibraryGraphNode, LibrarySourceGraphData, LibraryVideo } from '../types';
+import { fetchLibraryArtifact, fetchLibraryGraph, getCachedLibraryGraph } from '../services/api';
 import { buildVideoKnowledge, flattenGuides, flattenIdeas } from '../lib/videoKnowledge';
 import { BrandLoader } from './BrandLoader';
 import { Notice } from './ui/Notice';
 import { GuideModal } from './library/GuideModal';
 import { GuidesLibraryPanel } from './library/GuidesLibraryPanel';
-import { LibrarySearchMode, LibrarySearchPanel } from './library/LibrarySearchPanel';
 import { TopicsPanel } from './library/TopicsPanel';
 import { VideoLibraryPanel } from './library/VideoLibraryPanel';
 
@@ -21,19 +14,15 @@ interface LibraryKnowledgeGraphProps {
   latestVideos: Array<LibraryVideo & { channelName: string }>;
   onIndexMore: () => void;
   projectId?: string | null;
-  projectName?: string;
   /** Total saved videos in the current scope; defaults to the visible list length. */
   totalVideoCount?: number;
 }
-
-const LIBRARY_SEARCH_RESULT_LIMIT = 5;
 
 export const LibraryKnowledgeGraph: React.FC<LibraryKnowledgeGraphProps> = ({
   activeView,
   latestVideos,
   onIndexMore,
   projectId,
-  projectName,
   totalVideoCount = latestVideos.length,
 }) => {
   const [graphData, setGraphData] = useState<LibrarySourceGraphData | null>(null);
@@ -44,12 +33,6 @@ export const LibraryKnowledgeGraph: React.FC<LibraryKnowledgeGraphProps> = ({
   const [selectedGuideLoading, setSelectedGuideLoading] = useState(false);
   const [selectedGuideError, setSelectedGuideError] = useState('');
   const [videoFilter, setVideoFilter] = useState('');
-  const [searchMode, setSearchMode] = useState<LibrarySearchMode>('hybrid');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searching, setSearching] = useState(false);
-  const [searchAnswer, setSearchAnswer] = useState('');
-  const [searchResults, setSearchResults] = useState<VideoClip[]>([]);
-  const [searchError, setSearchError] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -81,9 +64,6 @@ export const LibraryKnowledgeGraph: React.FC<LibraryKnowledgeGraphProps> = ({
   useEffect(() => {
     setSelectedVideoKey(null);
     setSelectedGuide(null);
-    setSearchAnswer('');
-    setSearchResults([]);
-    setSearchError('');
   }, [projectId]);
 
   const videoKnowledge = useMemo(
@@ -137,38 +117,6 @@ export const LibraryKnowledgeGraph: React.FC<LibraryKnowledgeGraphProps> = ({
   // Stable identity so GuideModal's keyboard/focus effects do not re-subscribe every render.
   const handleCloseGuide = useCallback(() => setSelectedGuide(null), []);
 
-  const handleSearch = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const trimmedQuery = searchQuery.trim();
-    if (!trimmedQuery) return;
-
-    setSearching(true);
-    setSearchError('');
-    setSearchAnswer('');
-    setSearchResults([]);
-    try {
-      const { answer, relevantClips } = projectId
-        ? await searchVideoClips(
-            trimmedQuery,
-            LIBRARY_SEARCH_RESULT_LIMIT,
-            undefined,
-            searchMode,
-            projectId,
-          )
-        : await searchVideoClips(trimmedQuery, LIBRARY_SEARCH_RESULT_LIMIT, undefined, searchMode);
-      const clips = relevantClips.filter((clip) => clip.videoId);
-      setSearchAnswer(answer || '');
-      setSearchResults(clips);
-      if (clips.length > 0) {
-        saveSearchToHistory(trimmedQuery, clips);
-      }
-    } catch (error) {
-      setSearchError(error instanceof Error ? error.message : 'Search failed');
-    } finally {
-      setSearching(false);
-    }
-  };
-
   if (loadingGraph) {
     return (
       <div className="card p-8">
@@ -216,19 +164,6 @@ export const LibraryKnowledgeGraph: React.FC<LibraryKnowledgeGraphProps> = ({
 
   return (
     <div className="space-y-4 md:space-y-5">
-      <LibrarySearchPanel
-        mode={searchMode}
-        query={searchQuery}
-        searching={searching}
-        answer={searchAnswer}
-        results={searchResults}
-        error={searchError}
-        onModeChange={setSearchMode}
-        onQueryChange={setSearchQuery}
-        onSubmit={handleSearch}
-        projectName={projectName}
-      />
-
       {totalVideoCount > graphVideoLimit ? (
         <Notice tone="info">
           Reports and topics cover your {graphVideoLimit} most recent videos. All {totalVideoCount}{' '}

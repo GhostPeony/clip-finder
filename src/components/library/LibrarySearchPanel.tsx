@@ -7,7 +7,7 @@ import { BrandLoader } from '../BrandLoader';
 import { Notice } from '../ui/Notice';
 import { SelectableTile } from '../ui/SelectableTile';
 
-export type LibrarySearchMode = 'hybrid' | 'semantic' | 'keyword';
+export type LibrarySearchMode = 'auto' | 'semantic' | 'keyword';
 
 const searchModeOptions: Array<{
   id: LibrarySearchMode;
@@ -15,16 +15,20 @@ const searchModeOptions: Array<{
   helper: string;
 }> = [
   {
-    id: 'hybrid',
-    label: 'Smart',
-    helper: 'Best first search across meaning, titles, and exact terms.',
+    id: 'auto',
+    label: 'Auto',
+    helper: 'Memexai picks the best match strategy for each query.',
   },
   {
     id: 'semantic',
-    label: 'Meaning',
-    helper: 'Use when you remember the idea but not the wording.',
+    label: 'By meaning',
+    helper: 'For when you remember the idea but not the wording.',
   },
-  { id: 'keyword', label: 'Exact', helper: 'Use for names, quotes, acronyms, and product terms.' },
+  {
+    id: 'keyword',
+    label: 'Exact words',
+    helper: 'For names, quotes, acronyms, and product terms.',
+  },
 ];
 
 export function LibrarySearchPanel({
@@ -50,34 +54,19 @@ export function LibrarySearchPanel({
   onSubmit: (event: React.FormEvent) => void;
   projectName?: string;
 }) {
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const selectedMode = searchModeOptions.find((option) => option.id === mode);
 
   return (
     <section className="card p-4 sm:p-5">
       <form onSubmit={onSubmit} className="space-y-4">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <h2 className="font-serif text-2xl font-medium text-ink">Search saved videos</h2>
-            <p className="mt-1 max-w-2xl text-sm leading-6 text-bark">
-              {projectName
-                ? `Searching project: ${projectName}.`
-                : 'Find the video, idea, or moment you saved without pasting the link into an agent again.'}
-            </p>
-          </div>
-          <div className="inline-flex rounded-2xl border border-ink/10 bg-cream p-1">
-            {searchModeOptions.map((option) => (
-              <SelectableTile
-                key={option.id}
-                onClick={() => onModeChange(option.id)}
-                aria-pressed={mode === option.id}
-                selected={mode === option.id}
-                unselectedClassName="text-bark hover:text-ink"
-                className="rounded-xl px-3 py-2 text-sm font-semibold transition-all"
-              >
-                {option.label}
-              </SelectableTile>
-            ))}
-          </div>
+        <div>
+          <h2 className="font-serif text-2xl font-medium text-ink">Search saved videos</h2>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-bark">
+            {projectName
+              ? `Searching project: ${projectName}.`
+              : 'Find the video, idea, or moment you saved without pasting the link into an agent again.'}
+          </p>
         </div>
 
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
@@ -101,9 +90,41 @@ export function LibrarySearchPanel({
           </button>
         </div>
 
-        {selectedMode ? (
-          <p className="text-xs font-medium text-muted">{selectedMode.helper}</p>
-        ) : null}
+        <div>
+          <button
+            type="button"
+            onClick={() => setOptionsOpen((open) => !open)}
+            aria-expanded={optionsOpen}
+            aria-controls="library-search-options"
+            className="link-quiet text-sm"
+          >
+            {mode === 'auto' ? 'Search options' : `Search options · ${selectedMode?.label}`}
+          </button>
+
+          {optionsOpen ? (
+            <div
+              id="library-search-options"
+              role="radiogroup"
+              aria-label="How to match your search"
+              className="mt-3 grid gap-2 rounded-xl bg-cream p-3 sm:grid-cols-3"
+            >
+              {searchModeOptions.map((option) => (
+                <SelectableTile
+                  key={option.id}
+                  role="radio"
+                  aria-checked={mode === option.id}
+                  onClick={() => onModeChange(option.id)}
+                  selected={mode === option.id}
+                  unselectedClassName="bg-surface/60 text-bark hover:bg-surface hover:text-ink"
+                  className="rounded-xl px-3 py-3 text-left transition-colors"
+                >
+                  <span className="block text-sm font-semibold">{option.label}</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted">{option.helper}</span>
+                </SelectableTile>
+              ))}
+            </div>
+          ) : null}
+        </div>
       </form>
 
       <LibrarySearchResults answer={answer} results={results} error={error} searching={searching} />

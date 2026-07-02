@@ -538,7 +538,7 @@ export const searchVideoClips = async (
   query: string,
   limit: number = 5,
   categoryFilters?: Record<string, string | string[]>,
-  retrievalMode: 'hybrid' | 'semantic' | 'keyword' = 'hybrid',
+  retrievalMode: 'auto' | 'hybrid' | 'semantic' | 'keyword' = 'auto',
   projectId?: string | null,
 ): Promise<{ answer: string; relevantClips: VideoClip[] }> => {
   const headers = await getAuthHeaders();

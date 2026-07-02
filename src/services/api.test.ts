@@ -133,7 +133,7 @@ describe('api client', () => {
             task_fit: ['product spec'],
             tool: 'MCP',
           },
-          retrieval_mode: 'hybrid',
+          retrieval_mode: 'auto',
         }),
       }),
     );

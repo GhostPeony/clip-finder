@@ -17,6 +17,7 @@ import { NoticeState } from './ui/Notice';
 import { SelectableTile } from './ui/SelectableTile';
 import { HistoryView } from './library/HistoryView';
 import { LibraryImportRow } from './library/LibraryImportRow';
+import { LibrarySearchSection } from './library/LibrarySearchSection';
 import { ProjectScopePanel } from './library/ProjectScopePanel';
 import { ProjectsOverview } from './library/ProjectsOverview';
 
@@ -312,97 +313,133 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </button>
       </div>
 
-      <ProjectScopePanel
-        projects={projects}
-        selectedProjectId={selectedProjectId}
-        visibleVideoCount={latestVideos.length}
-        totalVideoCount={totalVideoCount}
-        heading={isProjectsSurface ? 'Manage projects' : 'Project scope'}
-        description={
-          isProjectsSurface
-            ? 'Search projects, create new workstreams, assign saved videos, and link YouTube playlists.'
-            : 'Pick a project to narrow videos, reports, topics, and agent-facing search.'
-        }
-        variant={isProjectsSurface ? 'manage' : 'scope'}
-        notice={projectNotice}
-        onNotice={setProjectNotice}
-        onSelectProject={setSelectedProjectId}
-        onProjectChanged={handleProjectChanged}
-        onManageProjects={onManageProjects}
-      />
-
       {isProjectsSurface ? (
-        <ProjectsOverview
-          selectedProject={selectedProject}
-          allVideos={allLatestVideos}
-          totalVideoCount={totalVideoCount}
-          onNotice={setProjectNotice}
-          onProjectChanged={handleProjectChanged}
-          onViewProjectVideos={() =>
-            onOpenLibrary ? onOpenLibrary(selectedProjectId) : setLibrarySurface('videos')
-          }
-        />
+        <>
+          <ProjectScopePanel
+            projects={projects}
+            selectedProjectId={selectedProjectId}
+            visibleVideoCount={latestVideos.length}
+            totalVideoCount={totalVideoCount}
+            heading="Manage projects"
+            description="Search projects, create new workstreams, assign saved videos, and link YouTube playlists."
+            notice={projectNotice}
+            onNotice={setProjectNotice}
+            onSelectProject={setSelectedProjectId}
+            onProjectChanged={handleProjectChanged}
+          />
+          <ProjectsOverview
+            selectedProject={selectedProject}
+            allVideos={allLatestVideos}
+            totalVideoCount={totalVideoCount}
+            onNotice={setProjectNotice}
+            onProjectChanged={handleProjectChanged}
+            onViewProjectVideos={() =>
+              onOpenLibrary ? onOpenLibrary(selectedProjectId) : setLibrarySurface('videos')
+            }
+          />
+        </>
       ) : (
-        <div className="grid gap-5 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
-          <aside className="card min-w-0 p-3 lg:sticky lg:top-24">
-            <p
-              id="library-menu-label"
-              className="px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-muted"
-            >
-              Library menu
-            </p>
-            <nav
-              aria-labelledby="library-menu-label"
-              className="grid grid-cols-2 gap-2 lg:grid-cols-1"
-            >
-              {librarySurfaceOptions.map((option) => (
-                <SelectableTile
-                  key={option.id}
-                  aria-label={option.label}
-                  onClick={() => setLibrarySurface(option.id)}
-                  aria-current={librarySurface === option.id ? 'page' : undefined}
-                  selected={librarySurface === option.id}
-                  className="rounded-xl px-3 py-3 text-left transition-all"
-                >
-                  <span className="block text-sm font-semibold">
-                    <span className="sm:hidden">{option.mobileLabel}</span>
-                    <span className="hidden sm:inline">{option.label}</span>
-                  </span>
-                  <span className="mt-1 hidden text-xs leading-5 text-muted sm:block">
-                    {option.description}
-                  </span>
-                </SelectableTile>
-              ))}
-            </nav>
-          </aside>
+        <>
+          <LibrarySearchSection
+            projectId={selectedProjectId || undefined}
+            projectName={selectedProject?.name}
+          />
 
-          <div className="min-w-0">
-            {librarySurface !== 'history' ? (
-              <Suspense
-                fallback={
-                  <div className="card p-6">
-                    <BrandLoader compact label="Opening library browser" />
-                  </div>
-                }
+          <div className="grid gap-5 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
+            <aside className="card min-w-0 p-3 lg:sticky lg:top-24">
+              <p
+                id="library-menu-label"
+                className="px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-muted"
               >
-                <LibraryKnowledgeGraph
-                  activeView={librarySurface}
-                  latestVideos={latestVideos}
-                  onIndexMore={onIndexMore}
-                  projectId={selectedProjectId || undefined}
-                  projectName={selectedProject?.name}
-                  totalVideoCount={displayLibrary.totalVideos || 0}
+                Library menu
+              </p>
+              <nav
+                aria-labelledby="library-menu-label"
+                className="grid grid-cols-2 gap-2 lg:grid-cols-1"
+              >
+                {librarySurfaceOptions.map((option) => (
+                  <SelectableTile
+                    key={option.id}
+                    aria-label={option.label}
+                    onClick={() => setLibrarySurface(option.id)}
+                    aria-current={librarySurface === option.id ? 'page' : undefined}
+                    selected={librarySurface === option.id}
+                    className="rounded-xl px-3 py-3 text-left transition-all"
+                  >
+                    <span className="block text-sm font-semibold">
+                      <span className="sm:hidden">{option.mobileLabel}</span>
+                      <span className="hidden sm:inline">{option.label}</span>
+                    </span>
+                    <span className="mt-1 hidden text-xs leading-5 text-muted sm:block">
+                      {option.description}
+                    </span>
+                  </SelectableTile>
+                ))}
+              </nav>
+
+              <div className="mt-3 border-t border-ink/10 px-2 pb-1 pt-3">
+                <label
+                  htmlFor="library-project-scope"
+                  className="text-xs font-semibold uppercase tracking-wide text-muted"
+                >
+                  Project scope
+                </label>
+                <select
+                  id="library-project-scope"
+                  value={selectedProjectId}
+                  onChange={(event) => setSelectedProjectId(event.target.value)}
+                  className="input mt-2 w-full px-3 py-2 text-sm"
+                >
+                  <option value="">All library</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-2 text-xs leading-5 text-muted">
+                  {latestVideos.length} shown of {totalVideoCount} saved video
+                  {totalVideoCount === 1 ? '' : 's'}
+                </p>
+                {onManageProjects ? (
+                  <button
+                    type="button"
+                    onClick={onManageProjects}
+                    className="link-quiet mt-2 text-xs"
+                  >
+                    Manage projects
+                  </button>
+                ) : null}
+              </div>
+            </aside>
+
+            <div className="min-w-0">
+              {librarySurface !== 'history' ? (
+                <Suspense
+                  fallback={
+                    <div className="card p-6">
+                      <BrandLoader compact label="Opening library browser" />
+                    </div>
+                  }
+                >
+                  <LibraryKnowledgeGraph
+                    activeView={librarySurface}
+                    latestVideos={latestVideos}
+                    onIndexMore={onIndexMore}
+                    projectId={selectedProjectId || undefined}
+                    totalVideoCount={displayLibrary.totalVideos || 0}
+                  />
+                </Suspense>
+              ) : (
+                <HistoryView
+                  entries={searchHistory}
+                  onClear={() => setClearHistoryDialogOpen(true)}
+                  onDeleteEntry={handleDeleteHistoryEntry}
                 />
-              </Suspense>
-            ) : (
-              <HistoryView
-                entries={searchHistory}
-                onClear={() => setClearHistoryDialogOpen(true)}
-                onDeleteEntry={handleDeleteHistoryEntry}
-              />
-            )}
+              )}
+            </div>
           </div>
-        </div>
+        </>
       )}
       {clearHistoryDialogOpen ? (
         <ConfirmDialog

@@ -260,7 +260,7 @@ describe('LibraryKnowledgeGraph', () => {
       />,
     );
 
-    expect((await screen.findAllByText('Search saved videos')).length).toBeGreaterThan(0);
+    expect(await screen.findByText('Saved videos')).toBeInTheDocument();
     expect(screen.getByText('TLDR and source reports')).toBeInTheDocument();
     expect(screen.getByText('Timestamped topics')).toBeInTheDocument();
     expect(screen.getAllByText(/Indexed Jun 20, 2026/).length).toBeGreaterThan(0);
@@ -295,16 +295,9 @@ describe('LibraryKnowledgeGraph', () => {
     expect(screen.queryByText('## Compiled Truth')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Close report' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Exact' }));
-    fireEvent.change(screen.getByLabelText('Search saved videos'), {
-      target: { value: 'harness loop' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-
     await waitFor(() => {
-      expect(searchVideoClips).toHaveBeenCalledWith('harness loop', 5, undefined, 'keyword');
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
-    expect(saveSearchToHistory).toHaveBeenCalled();
   });
 
   it('locks scroll and manages focus while a report modal is open', async () => {
@@ -316,7 +309,7 @@ describe('LibraryKnowledgeGraph', () => {
       />,
     );
 
-    await screen.findAllByText('Search saved videos');
+    await screen.findByText('Saved videos');
     fireEvent.click(screen.getByRole('button', { name: 'Read report' }));
 
     const closeButton = screen.getByRole('button', { name: 'Close report' });
@@ -328,60 +321,6 @@ describe('LibraryKnowledgeGraph', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
     expect(document.body.style.overflow).toBe('');
-  });
-
-  it('renders a cited answer for library search and scrolls to the matching result card', async () => {
-    render(
-      <LibraryKnowledgeGraph
-        activeView="videos"
-        latestVideos={latestVideos}
-        onIndexMore={() => undefined}
-      />,
-    );
-
-    await screen.findAllByText('Search saved videos');
-    fireEvent.change(screen.getByLabelText('Search saved videos'), {
-      target: { value: 'harness loop' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-
-    expect(await screen.findByText('Answer')).toBeInTheDocument();
-    expect(
-      screen.getByText(/Harness loops help teams evaluate whether agent systems/),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/\[\[clip_0\]\]/)).not.toBeInTheDocument();
-
-    const resultCard = document.getElementById('library-clip-clip_0');
-    expect(resultCard).not.toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: /0:30/ }));
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
-    expect(resultCard?.className).toContain('ring-2');
-  });
-
-  it('keeps smart library search within the free result cap', async () => {
-    render(
-      <LibraryKnowledgeGraph
-        activeView="videos"
-        latestVideos={latestVideos}
-        onIndexMore={() => undefined}
-      />,
-    );
-
-    await screen.findAllByText('Search saved videos');
-    fireEvent.change(screen.getByLabelText('Search saved videos'), {
-      target: { value: 'Why use synthetic data?' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
-
-    await waitFor(() => {
-      expect(searchVideoClips).toHaveBeenCalledWith(
-        'Why use synthetic data?',
-        5,
-        undefined,
-        'hybrid',
-      );
-    });
   });
 
   it('does not show an empty-library message when indexed videos exist but graph is unavailable', async () => {
@@ -414,7 +353,7 @@ describe('LibraryKnowledgeGraph', () => {
       />,
     );
 
-    expect((await screen.findAllByText('Search saved videos')).length).toBeGreaterThan(0);
+    expect(await screen.findByText('Saved videos')).toBeInTheDocument();
     expect(screen.getByText('0 reports · 0 timestamped topics')).toBeInTheDocument();
     expect(screen.queryByText('No saved videos ready')).not.toBeInTheDocument();
   });

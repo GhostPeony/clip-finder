@@ -4,8 +4,6 @@ import { createCaptureSource, createProject } from '../../services/api';
 import { Notice, NoticeState } from '../ui/Notice';
 import { SelectableTile } from '../ui/SelectableTile';
 
-export type ProjectScopePanelVariant = 'manage' | 'scope';
-
 export function ProjectScopePanel({
   projects,
   selectedProjectId,
@@ -13,12 +11,10 @@ export function ProjectScopePanel({
   totalVideoCount,
   heading,
   description,
-  variant = 'manage',
   notice,
   onNotice,
   onSelectProject,
   onProjectChanged,
-  onManageProjects,
 }: {
   projects: UserProject[];
   selectedProjectId: string;
@@ -26,13 +22,10 @@ export function ProjectScopePanel({
   totalVideoCount: number;
   heading: string;
   description: string;
-  /** `manage` shows the create form; `scope` is the slim picker for browsing surfaces. */
-  variant?: ProjectScopePanelVariant;
   notice: NoticeState | null;
   onNotice: (notice: NoticeState | null) => void;
   onSelectProject: (projectId: string) => void;
   onProjectChanged: () => Promise<void>;
-  onManageProjects?: () => void;
 }) {
   const [projectName, setProjectName] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
@@ -91,18 +84,11 @@ export function ProjectScopePanel({
           <h2 className="font-serif text-2xl font-medium text-ink">{heading}</h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-bark">{description}</p>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
-          {variant === 'scope' && onManageProjects ? (
-            <button type="button" onClick={onManageProjects} className="link-quiet text-sm">
-              Manage projects
-            </button>
-          ) : null}
-          <div className="rounded-xl border border-ink/10 bg-cream px-3 py-2 text-sm text-bark">
-            <span className="font-semibold text-ink">{visibleVideoCount}</span>
-            <span> shown of </span>
-            <span className="font-semibold text-ink">{totalVideoCount}</span>
-            <span> saved videos</span>
-          </div>
+        <div className="shrink-0 rounded-xl border border-ink/10 bg-cream px-3 py-2 text-sm text-bark">
+          <span className="font-semibold text-ink">{visibleVideoCount}</span>
+          <span> shown of </span>
+          <span className="font-semibold text-ink">{totalVideoCount}</span>
+          <span> saved videos</span>
         </div>
       </div>
 
@@ -151,55 +137,53 @@ export function ProjectScopePanel({
         </div>
       </div>
 
-      {variant === 'manage' ? (
-        <form
-          onSubmit={(event) => void handleCreateProject(event)}
-          className="min-w-0 rounded-xl bg-cream p-4"
-        >
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-                New project
-              </span>
-              <input
-                value={projectName}
-                onChange={(event) => setProjectName(event.target.value)}
-                className="input mt-1 w-full"
-                placeholder="Agent harness research"
-              />
-            </label>
-            <label className="block">
-              <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-                Optional playlist
-              </span>
-              <input
-                value={projectPlaylistUrl}
-                onChange={(event) => setProjectPlaylistUrl(event.target.value)}
-                className="input mt-1 w-full"
-                placeholder="https://youtube.com/playlist?list=..."
-              />
-            </label>
-          </div>
-          <label className="mt-3 block">
+      <form
+        onSubmit={(event) => void handleCreateProject(event)}
+        className="min-w-0 rounded-xl bg-cream p-4"
+      >
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <label className="block">
             <span className="text-xs font-semibold uppercase tracking-wide text-muted">
-              Description
+              New project
             </span>
             <input
-              value={projectDescription}
-              onChange={(event) => setProjectDescription(event.target.value)}
+              value={projectName}
+              onChange={(event) => setProjectName(event.target.value)}
               className="input mt-1 w-full"
-              placeholder="What this project is trying to learn or build"
+              placeholder="Agent harness research"
             />
           </label>
-          <button
-            type="submit"
-            disabled={working || !projectName.trim()}
-            className="btn btn-primary mt-3 w-full sm:w-auto"
-          >
-            Create project
-          </button>
-        </form>
-      ) : null}
+          <label className="block">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Optional playlist
+            </span>
+            <input
+              value={projectPlaylistUrl}
+              onChange={(event) => setProjectPlaylistUrl(event.target.value)}
+              className="input mt-1 w-full"
+              placeholder="https://youtube.com/playlist?list=..."
+            />
+          </label>
+        </div>
+        <label className="mt-3 block">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+            Description
+          </span>
+          <input
+            value={projectDescription}
+            onChange={(event) => setProjectDescription(event.target.value)}
+            className="input mt-1 w-full"
+            placeholder="What this project is trying to learn or build"
+          />
+        </label>
+        <button
+          type="submit"
+          disabled={working || !projectName.trim()}
+          className="btn btn-primary mt-3 w-full sm:w-auto"
+        >
+          Create project
+        </button>
+      </form>
 
       {notice ? <Notice tone={notice.tone}>{notice.message}</Notice> : null}
     </section>

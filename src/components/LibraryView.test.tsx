@@ -254,13 +254,25 @@ describe('LibraryView', () => {
     });
     vi.mocked(fetchIngestionJobs).mockResolvedValue([]);
 
-    render(<LibraryView initialProjectId="project-1" onIndexMore={() => undefined} />);
+    const { unmount } = render(
+      <LibraryView initialProjectId="project-1" onIndexMore={() => undefined} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId('library-graph')).toHaveTextContent('videos:project-1');
     });
+    expect(screen.getByLabelText('Project scope')).toHaveValue('project-1');
 
-    fireEvent.change(screen.getByPlaceholderText('Search projects'), {
+    unmount();
+    render(
+      <LibraryView
+        initialSurface="projects"
+        initialProjectId="project-1"
+        onIndexMore={() => undefined}
+      />,
+    );
+
+    fireEvent.change(await screen.findByPlaceholderText('Search projects'), {
       target: { value: 'synthetic' },
     });
     expect(screen.getByRole('button', { name: /Synthetic data/i })).toBeInTheDocument();
