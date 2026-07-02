@@ -341,6 +341,10 @@ const App: React.FC = () => {
               initialSurface="projects"
               initialProjectId={initialLibraryProjectId}
               onIndexMore={() => setMode('unified')}
+              onOpenLibrary={(projectId) => {
+                setInitialLibraryProjectId(projectId);
+                setMode('library');
+              }}
             />
           </div>
         ) : mode === 'jobs' ? (

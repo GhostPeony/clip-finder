@@ -31,20 +31,18 @@ interface LibraryViewProps {
   initialSurface?: LibrarySurface;
   onIndexMore: () => void;
   onManageProjects?: () => void;
+  /** Navigate to the Library page scoped to a project (keeps top-nav state truthful). */
+  onOpenLibrary?: (projectId: string) => void;
 }
 
+// The Projects surface is reached from the top nav, not this menu — listing it
+// here too created two competing "you are here" indicators (F-002).
 const librarySurfaceOptions: Array<{
   id: LibrarySurface;
   label: string;
   mobileLabel: string;
   description: string;
 }> = [
-  {
-    id: 'projects',
-    label: 'Projects',
-    mobileLabel: 'Projects',
-    description: 'Create, search, assign videos, and link playlists to project scopes.',
-  },
   {
     id: 'videos',
     label: 'Videos',
@@ -76,6 +74,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   initialSurface = 'videos',
   onIndexMore,
   onManageProjects,
+  onOpenLibrary,
 }) => {
   const [library, setLibrary] = useState<LibraryData | null>(null);
   const [allLibrary, setAllLibrary] = useState<LibraryData | null>(null);
@@ -334,74 +333,80 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         onManageProjects={onManageProjects}
       />
 
-      <div className="grid gap-5 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
-        <aside className="card min-w-0 p-3 lg:sticky lg:top-24">
-          <p className="px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-            Library menu
-          </p>
-          <nav aria-label="Library sections" className="grid grid-cols-2 gap-2 lg:grid-cols-1">
-            {librarySurfaceOptions.map((option) => (
-              <SelectableTile
-                key={option.id}
-                aria-label={option.label}
-                onClick={() => setLibrarySurface(option.id)}
-                aria-current={librarySurface === option.id ? 'page' : undefined}
-                selected={librarySurface === option.id}
-                className="rounded-xl px-3 py-3 text-left transition-all"
-              >
-                <span className="block text-sm font-semibold">
-                  <span className="sm:hidden">{option.mobileLabel}</span>
-                  <span className="hidden sm:inline">{option.label}</span>
-                </span>
-                <span className="mt-1 hidden text-xs leading-5 text-muted sm:block">
-                  {option.description}
-                </span>
-              </SelectableTile>
-            ))}
-          </nav>
-        </aside>
-
-        <div className="min-w-0">
-          {librarySurface !== 'history' && librarySurface !== 'projects' ? (
-            <Suspense
-              fallback={
-                <div className="card p-6">
-                  <BrandLoader compact label="Opening library browser" />
-                </div>
-              }
+      {isProjectsSurface ? (
+        <ProjectsOverview
+          projects={projects}
+          selectedProject={selectedProject}
+          selectedProjectId={selectedProjectId}
+          totalVideoCount={totalVideoCount}
+          onSelectProject={setSelectedProjectId}
+          onViewProjectVideos={() =>
+            onOpenLibrary ? onOpenLibrary(selectedProjectId) : setLibrarySurface('videos')
+          }
+          onIndexMore={onIndexMore}
+        />
+      ) : (
+        <div className="grid gap-5 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
+          <aside className="card min-w-0 p-3 lg:sticky lg:top-24">
+            <p
+              id="library-menu-label"
+              className="px-2 pb-2 text-xs font-semibold uppercase tracking-wide text-muted"
             >
-              <LibraryKnowledgeGraph
-                activeView={librarySurface}
-                latestVideos={latestVideos}
-                onIndexMore={onIndexMore}
-                projectId={selectedProjectId || undefined}
-                projectName={selectedProject?.name}
-                totalVideoCount={displayLibrary.totalVideos || 0}
+              Library menu
+            </p>
+            <nav
+              aria-labelledby="library-menu-label"
+              className="grid grid-cols-2 gap-2 lg:grid-cols-1"
+            >
+              {librarySurfaceOptions.map((option) => (
+                <SelectableTile
+                  key={option.id}
+                  aria-label={option.label}
+                  onClick={() => setLibrarySurface(option.id)}
+                  aria-current={librarySurface === option.id ? 'page' : undefined}
+                  selected={librarySurface === option.id}
+                  className="rounded-xl px-3 py-3 text-left transition-all"
+                >
+                  <span className="block text-sm font-semibold">
+                    <span className="sm:hidden">{option.mobileLabel}</span>
+                    <span className="hidden sm:inline">{option.label}</span>
+                  </span>
+                  <span className="mt-1 hidden text-xs leading-5 text-muted sm:block">
+                    {option.description}
+                  </span>
+                </SelectableTile>
+              ))}
+            </nav>
+          </aside>
+
+          <div className="min-w-0">
+            {librarySurface !== 'history' ? (
+              <Suspense
+                fallback={
+                  <div className="card p-6">
+                    <BrandLoader compact label="Opening library browser" />
+                  </div>
+                }
+              >
+                <LibraryKnowledgeGraph
+                  activeView={librarySurface}
+                  latestVideos={latestVideos}
+                  onIndexMore={onIndexMore}
+                  projectId={selectedProjectId || undefined}
+                  projectName={selectedProject?.name}
+                  totalVideoCount={displayLibrary.totalVideos || 0}
+                />
+              </Suspense>
+            ) : (
+              <HistoryView
+                entries={searchHistory}
+                onClear={() => setClearHistoryDialogOpen(true)}
+                onDeleteEntry={handleDeleteHistoryEntry}
               />
-            </Suspense>
-          ) : null}
-
-          {librarySurface === 'projects' ? (
-            <ProjectsOverview
-              projects={projects}
-              selectedProject={selectedProject}
-              selectedProjectId={selectedProjectId}
-              totalVideoCount={totalVideoCount}
-              onSelectProject={setSelectedProjectId}
-              onViewProjectVideos={() => setLibrarySurface('videos')}
-              onIndexMore={onIndexMore}
-            />
-          ) : null}
-
-          {librarySurface === 'history' ? (
-            <HistoryView
-              entries={searchHistory}
-              onClear={() => setClearHistoryDialogOpen(true)}
-              onDeleteEntry={handleDeleteHistoryEntry}
-            />
-          ) : null}
+            )}
+          </div>
         </div>
-      </div>
+      )}
       {clearHistoryDialogOpen ? (
         <ConfirmDialog
           eyebrow="Recent searches"
