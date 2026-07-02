@@ -49,3 +49,4 @@ eval/results/
 
 # Local debug/screenshot artifacts
 artifacts/
+.gstack/
