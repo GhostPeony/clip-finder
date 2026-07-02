@@ -3,6 +3,7 @@ import { LibraryGraphNode, LibraryGraphVideo } from '../../types';
 import { ReportContent } from '../../lib/reportMarkdown';
 import { artifactKind, cleanDisplayTitle, getVideoUrl } from '../../lib/videoKnowledge';
 import { BrandLoader } from '../BrandLoader';
+import { Notice } from '../ui/Notice';
 
 export function GuideModal({
   guide,
@@ -107,9 +108,9 @@ export function GuideModal({
             <BrandLoader compact label="Loading full report" />
           </div>
         ) : error ? (
-          <p className="mt-5 rounded-xl bg-rose/10 p-4 text-sm font-medium text-rose-deep">
+          <Notice tone="error" className="mt-5 rounded-xl p-4 text-sm">
             {error}
-          </p>
+          </Notice>
         ) : guide.content || guide.summary ? (
           <ReportContent
             content={guide.content || guide.summary || ''}

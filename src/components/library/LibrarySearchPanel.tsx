@@ -4,6 +4,7 @@ import { formatTimestampLabel } from '../../lib/time';
 import { buildTimestampUrl } from '../../lib/videoKnowledge';
 import { AnswerSection } from '../AnswerSection';
 import { BrandLoader } from '../BrandLoader';
+import { Notice } from '../ui/Notice';
 import { SelectableTile } from '../ui/SelectableTile';
 
 export type LibrarySearchMode = 'hybrid' | 'semantic' | 'keyword';
@@ -156,7 +157,9 @@ function LibrarySearchResults({
 
   if (error) {
     return (
-      <p className="mt-4 rounded-xl bg-rose/10 p-4 text-sm font-medium text-rose-deep">{error}</p>
+      <Notice tone="error" className="mt-4 rounded-xl p-4 text-sm">
+        {error}
+      </Notice>
     );
   }
 
