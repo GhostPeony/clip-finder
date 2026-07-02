@@ -45,7 +45,7 @@ export function TopicCard({
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center rounded-lg bg-surface px-2 py-1 font-mono text-xs font-semibold text-rose-deep shadow-soft transition-colors hover:bg-petal"
+          className="relative inline-flex items-center rounded-lg bg-surface px-2 py-1 font-mono text-xs font-semibold text-rose-deep shadow-soft transition-colors after:absolute after:-inset-2 after:content-[''] hover:bg-petal"
         >
           Open at {formatTimestampLabel(seconds)}
         </a>

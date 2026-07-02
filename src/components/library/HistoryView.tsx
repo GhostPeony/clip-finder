@@ -68,7 +68,7 @@ const SearchHistoryCard: React.FC<SearchHistoryCardProps> = ({ entry, onDelete }
             event.stopPropagation();
             onDelete();
           }}
-          className="rounded-full p-1 text-muted opacity-0 transition-opacity hover:text-rose-deep group-hover:opacity-100 focus-visible:opacity-100"
+          className="relative rounded-full p-1 text-muted opacity-0 transition-opacity after:absolute after:-inset-2.5 after:content-[''] hover:text-rose-deep group-hover:opacity-100 focus-visible:opacity-100"
           title="Remove from history"
           aria-label="Remove from history"
         >

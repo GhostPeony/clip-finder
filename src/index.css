@@ -213,11 +213,20 @@ body {
   .link-quiet {
     color: var(--peony-ink);
     font-weight: 500;
+    position: relative;
     text-decoration: underline;
     text-decoration-color: var(--peony-rose);
     text-decoration-thickness: 1.5px;
     text-underline-offset: 4px;
     transition: text-decoration-color 0.15s ease;
+  }
+
+  /* Invisible hit-area extension: quiet links render ~20px tall, below the
+     44px touch floor. Kept at -8px so adjacent row actions cannot overlap. */
+  .link-quiet::after {
+    content: '';
+    inset: -8px;
+    position: absolute;
   }
 
   .link-quiet:hover {
