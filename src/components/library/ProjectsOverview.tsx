@@ -75,7 +75,7 @@ export function ProjectsOverview({
     >
       {selectedProject ? (
         <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
-          <div className="min-w-0 rounded-2xl border border-ink/10 bg-cream p-4">
+          <div className="min-w-0 rounded-xl bg-cream p-4">
             <div className="space-y-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -89,7 +89,7 @@ export function ProjectsOverview({
                 ) : null}
               </div>
               <dl className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-xl bg-surface px-3 py-2">
+                <div className="rounded-lg bg-surface px-3 py-2">
                   <dt className="text-xs font-semibold uppercase tracking-wide text-muted">
                     Videos
                   </dt>
@@ -97,7 +97,7 @@ export function ProjectsOverview({
                     {selectedProject.videoCount ?? 0}
                   </dd>
                 </div>
-                <div className="rounded-xl bg-surface px-3 py-2">
+                <div className="rounded-lg bg-surface px-3 py-2">
                   <dt className="text-xs font-semibold uppercase tracking-wide text-muted">
                     Playlists
                   </dt>
@@ -112,7 +112,7 @@ export function ProjectsOverview({
             </div>
           </div>
 
-          <div className="min-w-0 rounded-2xl border border-ink/10 bg-cream p-4">
+          <div className="min-w-0 rounded-xl bg-cream p-4">
             <div className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted">
                 Grow this project
@@ -167,7 +167,7 @@ export function ProjectsOverview({
           </div>
         </div>
       ) : (
-        <div className="min-w-0 rounded-2xl border border-ink/10 bg-cream p-4">
+        <div className="min-w-0 rounded-xl bg-cream p-4">
           <div className="flex min-h-40 flex-col justify-center">
             <p className="text-sm font-semibold text-ink">No project selected</p>
             <p className="mt-2 max-w-xl text-sm leading-6 text-bark">

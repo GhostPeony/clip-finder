@@ -154,7 +154,7 @@ export function ProjectScopePanel({
       {variant === 'manage' ? (
         <form
           onSubmit={(event) => void handleCreateProject(event)}
-          className="min-w-0 rounded-2xl border border-ink/10 bg-cream p-3"
+          className="min-w-0 rounded-xl bg-cream p-4"
         >
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <label className="block">
