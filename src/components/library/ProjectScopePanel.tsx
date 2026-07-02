@@ -5,6 +5,8 @@ import { VideoWithChannel } from '../../lib/videoKnowledge';
 import { Notice, NoticeState } from '../ui/Notice';
 import { SelectableTile } from '../ui/SelectableTile';
 
+export type ProjectScopePanelVariant = 'manage' | 'scope';
+
 export function ProjectScopePanel({
   projects,
   selectedProjectId,
@@ -14,10 +16,12 @@ export function ProjectScopePanel({
   totalVideoCount,
   heading,
   description,
+  variant = 'manage',
   notice,
   onNotice,
   onSelectProject,
   onProjectChanged,
+  onManageProjects,
 }: {
   projects: UserProject[];
   selectedProjectId: string;
@@ -27,10 +31,13 @@ export function ProjectScopePanel({
   totalVideoCount: number;
   heading: string;
   description: string;
+  /** `manage` shows create/assign/link admin; `scope` is the slim picker for browsing surfaces. */
+  variant?: ProjectScopePanelVariant;
   notice: NoticeState | null;
   onNotice: (notice: NoticeState | null) => void;
   onSelectProject: (projectId: string) => void;
   onProjectChanged: () => Promise<void>;
+  onManageProjects?: () => void;
 }) {
   const [projectName, setProjectName] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
@@ -134,11 +141,18 @@ export function ProjectScopePanel({
           <h2 className="font-serif text-2xl font-medium text-ink">{heading}</h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-bark">{description}</p>
         </div>
-        <div className="shrink-0 rounded-xl border border-ink/10 bg-cream px-3 py-2 text-sm text-bark">
-          <span className="font-semibold text-ink">{visibleVideoCount}</span>
-          <span> shown of </span>
-          <span className="font-semibold text-ink">{totalVideoCount}</span>
-          <span> saved videos</span>
+        <div className="flex shrink-0 items-center gap-3">
+          {variant === 'scope' && onManageProjects ? (
+            <button type="button" onClick={onManageProjects} className="link-quiet text-sm">
+              Manage projects
+            </button>
+          ) : null}
+          <div className="rounded-xl border border-ink/10 bg-cream px-3 py-2 text-sm text-bark">
+            <span className="font-semibold text-ink">{visibleVideoCount}</span>
+            <span> shown of </span>
+            <span className="font-semibold text-ink">{totalVideoCount}</span>
+            <span> saved videos</span>
+          </div>
         </div>
       </div>
 
@@ -187,6 +201,7 @@ export function ProjectScopePanel({
         </div>
       </div>
 
+      {variant === 'manage' ? (
       <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(280px,380px)]">
         <form
           onSubmit={(event) => void handleCreateProject(event)}
@@ -300,6 +315,7 @@ export function ProjectScopePanel({
           )}
         </div>
       </div>
+      ) : null}
 
       {notice ? <Notice tone={notice.tone}>{notice.message}</Notice> : null}
     </section>

@@ -332,6 +332,7 @@ const App: React.FC = () => {
             <LibraryView
               initialProjectId={initialLibraryProjectId}
               onIndexMore={() => setMode('unified')}
+              onManageProjects={() => selectMode('projects')}
             />
           </div>
         ) : mode === 'projects' ? (

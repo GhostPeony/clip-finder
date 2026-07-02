@@ -30,6 +30,7 @@ interface LibraryViewProps {
   initialProjectId?: string;
   initialSurface?: LibrarySurface;
   onIndexMore: () => void;
+  onManageProjects?: () => void;
 }
 
 const librarySurfaceOptions: Array<{
@@ -74,6 +75,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   initialProjectId = '',
   initialSurface = 'videos',
   onIndexMore,
+  onManageProjects,
 }) => {
   const [library, setLibrary] = useState<LibraryData | null>(null);
   const [allLibrary, setAllLibrary] = useState<LibraryData | null>(null);
@@ -318,16 +320,18 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         allVideos={allLatestVideos}
         visibleVideoCount={latestVideos.length}
         totalVideoCount={totalVideoCount}
-        heading={isProjectsSurface ? 'Manage projects' : 'Projects'}
+        heading={isProjectsSurface ? 'Manage projects' : 'Project scope'}
         description={
           isProjectsSurface
             ? 'Search projects, create new workstreams, assign saved videos, and link YouTube playlists.'
-            : 'Scope browsing and agent retrieval to a specific use case without duplicating videos.'
+            : 'Pick a project to narrow videos, reports, topics, and agent-facing search.'
         }
+        variant={isProjectsSurface ? 'manage' : 'scope'}
         notice={projectNotice}
         onNotice={setProjectNotice}
         onSelectProject={setSelectedProjectId}
         onProjectChanged={handleProjectChanged}
+        onManageProjects={onManageProjects}
       />
 
       <div className="grid gap-5 lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start">
